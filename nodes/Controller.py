@@ -42,7 +42,7 @@ class Controller(Node):
         self._loop_thread: Any = None
         self.bridge: HomeKitHubBridge | None = None
 
-        self._init_typed_params()
+        self.init_typed_params()
         poly.subscribe(poly.START, self.handler_start, address)
         poly.subscribe(poly.STOP, self.handler_stop)
         poly.subscribe(poly.POLL, self.handler_poll)
@@ -56,8 +56,9 @@ class Controller(Node):
         poly.ready()
         poly.addNode(self, conn_status="ST")
 
-    def _init_typed_params(self) -> None:
-        """One Custom Typed list: each row is slot (optional) + hap_pin + accessory filters (see CONFIG.md)."""
+    def init_typed_params(self) -> None:
+        """Custom Typed: one isList section for HomeKit pairings (see CONFIG.md). Same idea as udi-poly-notification `init_typed()`."""
+        LOGGER.debug("enter")
         self.TypedParams.load(
             [
                 {
@@ -88,8 +89,10 @@ class Controller(Node):
                         },
                     ],
                 }
-            ]
+            ],
+            True,
         )
+        LOGGER.debug("exit")
 
     def _bridge_get_params(self) -> dict[str, Any]:
         return {k: self.Params[k] for k in self.Params.keys()}
@@ -145,8 +148,10 @@ class Controller(Node):
         self.Data.load(data)
         self.handler_data_st = True
 
-    def handler_typed_params(self, _params):
-        LOGGER.debug("customtypedparams received")
+    def handler_typed_params(self, params):
+        LOGGER.debug("customtypedparams received: %s", params)
+        if params is not None and len(params) > 0:
+            self.TypedParams.load(params)
         self.handler_typedparams_st = True
 
     def handler_typed_data(self, data):

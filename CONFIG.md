@@ -13,7 +13,7 @@ Same pattern as **udi-poly-notification** (e.g. Pushover / Messages lists): one 
 
 ### HomeKit pairing slots (`pairing_slots`)
 
-In the Polyglot UI, open **Custom Typed Configuration Parameters** and use the list **“HomeKit pairing slots”**. **DISCOVER** automatically **adds a row** here for each newly seen **unpaired** accessory (with **Accessory id** and **name** filled in; you add the **HomeKit pairing code** and save). You can still add or remove rows with **+** if you prefer to manage the list by hand.
+In the Polyglot UI, open **Custom Typed Configuration Parameters** and use the list **“HomeKit pairing slots”** (the Node Server registers it at startup; the list supports **add row** / **remove** in the editor). **DISCOVER** automatically **adds a row** for each newly seen **unpaired** accessory (with **Accessory id** and **name** filled in; you add the **HomeKit pairing code** and save). You can also add or remove rows manually in that list.
 
 Each row has a **Slot** (optional) plus the pairing and filter fields:
 
@@ -36,6 +36,12 @@ Pairing keys and session metadata are stored under **`homekit_pairings`** in Pol
 1. Put the accessory in HomeKit pairing mode (unpaired).
 2. Run the **DISCOVER** command on the **HomeKit Hub** controller in the ISY / PG3 admin UI (same as other Node Servers). The hub stores **`last_hap_discover`**, and **appends the Custom Typed** **HomeKit pairing slots** list with a row per new unpaired accessory (id and name set for you; pairing code **empty** until you fill it).
 3. In **Custom Typed** configuration, find the new row and enter the **HomeKit pairing code** (eight digits, often shown as `123-45-678`). The accessory shows it on a label, screen, or in its vendor app while it is in **HomeKit pairing mode**—it is not in Polyglot. **Save** (and restart the Node Server if the admin UI requires it). You only need to edit id/name on that row if you are correcting a **DISCOVER** mistake or disambiguating before pairing; otherwise those fields are already set by **DISCOVER**.
+
+### Manual rows (e.g. vendor app only offers a QR code)
+
+You do **not** have to rely on **DISCOVER** auto-adding rows. **Custom Typed** **HomeKit pairing slots** is the manual configuration: use **add row** in that list, enter **HomeKit pairing code** and (recommended) **Accessory id** / **name** so the hub targets the right device.
+
+Some products (e.g. **Ecobee**) steer you to scan a **QR code** in their app to add the device to **Apple Home**. That is separate from this hub: for **Local** control, the accessory must be pairable by **this** Node Server—usually **not** paired to Apple Home at the same time—and you still need the **numeric** setup code the HomeKit spec uses (often on a sticker or in documentation; a QR is an encoding of that payload, not a substitute typed into Polyglot). Use the hub’s **DISCOVER** on the controller while the device is in **HomeKit pairing mode** to populate **`last_hap_discover`** and to fill **id** / **name** automatically, or type those fields yourself if you already know them.
 
 ## WebSocket protocol
 
