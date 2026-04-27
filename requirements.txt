@@ -1,0 +1,4 @@
+# PG3x Node Server runtime (install on the Polyglot host, not dev sandboxes).
+udi_interface>=3.0.31
+aiohomekit>=3.2.0,<4
+websockets>=12.0
