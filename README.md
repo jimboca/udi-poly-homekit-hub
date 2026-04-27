@@ -6,10 +6,7 @@ The hub supports **multiple simultaneous HomeKit pairings** (each row has an opt
 
 ## Requirements
 
-Install dependencies **on the Polyglot host** (see `requirements.txt`). Do not rely on a dev machine having these packages.
-
-- Python **3.9+**
-- `udi_interface`, `aiohomekit`, `websockets`
+**Polyglot** runs **`install.sh`** on the Node Server host to install **`requirements.txt`**; you do not need to install those packages by hand for a normal install.
 
 ## Layout
 
@@ -30,12 +27,12 @@ From the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:
 
 ```bash
 chmod +x install.sh
-./install.sh              # on the Polyglot machine: install requirements.txt
+./install.sh              # optional: local test install (Polyglot runs this on the host)
 make check                # validate profile XML
 make zip                  # produces HomeKitHub.zip (see zip_exclude.lst)
 ```
 
-Install the zip via the Polyglot dashboard like other Node Servers. The archive includes `requirements.txt` and `install.sh` for the host.
+Install the zip via the Polyglot dashboard like other Node Servers. The archive includes `requirements.txt` and `install.sh` for Polyglot to run on the host.
 
 ## Multiple WebSocket clients
 
