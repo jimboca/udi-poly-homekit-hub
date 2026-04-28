@@ -3,6 +3,7 @@
     <editors />
     <sts>
       <st id="ST" editor="cst" />
+      <st id="ERR" editor="errc" />
     </sts>
     <cmds>
       <sends>

@@ -6,7 +6,7 @@ import html
 import json
 import time
 from threading import Thread
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from udi_interface import LOGGER, Custom, Node
 
@@ -17,6 +17,16 @@ from homekit_hub import (
 )
 
 from nodes import VERSION
+
+# ISY-visible error codes (driver ERR, UOM 25 index + NLS ERRC-*). See README.
+ERR_OK = 0
+ERR_BRIDGE_START = 1
+ERR_DISCOVER_SCAN = 2
+ERR_DISCOVER_UNEXPECTED = 3
+ERR_TYPED_SAVE = 4
+ERR_APPEND_PAIRING = 5
+ERR_BRIDGE_STOP = 6
+ERR_STATUS_UPDATE = 7
 
 
 class Controller(Node):
@@ -137,6 +147,72 @@ class Controller(Node):
     def handler_config_done(self):
         self.handler_config_done_st = True
 
+    def report_error(
+        self,
+        code: int,
+        notice_key: str,
+        title: str,
+        *,
+        exc: Optional[Exception] = None,
+        log_message: str = "",
+        extra_html: str = "",
+        set_st_error: bool = False,
+    ) -> None:
+        """Log (with traceback if ``exc``), post a Polyglot Notice, set **ERR** error code.
+
+        Use **set_st_error** only for hub-fatal faults (sets **ST** = 2 = Error per profile).
+        """
+        lm = log_message or title
+        if exc is not None:
+            LOGGER.exception("%s", lm)
+        else:
+            LOGGER.error("%s", lm)
+
+        parts = [f"<b>{html.escape(title)}</b><br/>"]
+        if exc is not None:
+            parts.append(
+                f"<code>{html.escape(type(exc).__name__)}</code>: "
+                f"{html.escape(str(exc))}<br/>"
+            )
+        if extra_html:
+            parts.append(extra_html)
+        parts.append("See the Node Server log for the full traceback.")
+        self.Notices[notice_key] = "".join(parts)
+
+        try:
+            self.setDriver("ERR", code, report=True, force=True, uom=25)
+            if set_st_error:
+                self.setDriver("ST", 2, report=True, force=True)
+        except Exception as e2:
+            LOGGER.exception("report_error: setDriver failed")
+            try:
+                self.Notices["homekit_meta"] = (
+                    "<b>Could not update error status drivers</b><br/>"
+                    f"{html.escape(str(e2))}"
+                )
+            except Exception:
+                pass
+
+    def clear_hub_error_indicators(self) -> None:
+        """Reset error code and clear hub error notices after a healthy start (not DISCOVER results)."""
+        for key in (
+            "homekit_bridge",
+            "homekit_err_discover",
+            "homekit_err_config",
+            "homekit_meta",
+        ):
+            try:
+                self.Notices.delete(key)
+            except Exception:
+                try:
+                    del self.Notices[key]
+                except Exception:
+                    pass
+        try:
+            self.setDriver("ERR", ERR_OK, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("clear_hub_error_indicators: set ERR")
+
     def handler_log_level(self, level):
         LOGGER.info(f"log level {level}")
 
@@ -211,9 +287,23 @@ class Controller(Node):
         fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)
         try:
             fut.result(timeout=120)
-        except Exception:
-            LOGGER.exception("HomeKit bridge failed to start")
+        except Exception as e:
+            self.ready = False
+            self.report_error(
+                ERR_BRIDGE_START,
+                "homekit_bridge",
+                "HomeKit Hub failed to start",
+                exc=e,
+                log_message="HomeKit bridge failed to start",
+                extra_html=(
+                    "If the error mentions <code>zeroconf</code> or <code>AsyncZeroconf</code>, "
+                    "ensure dependencies are installed and the host can use mDNS.<br/>"
+                ),
+                set_st_error=True,
+            )
+            return
 
+        self.clear_hub_error_indicators()
         self.setDriver("ST", 1)
         self.heartbeat()
         self.ready = True
@@ -226,8 +316,14 @@ class Controller(Node):
             fut = asyncio.run_coroutine_threadsafe(self.bridge.stop(), self.mainloop)
             try:
                 fut.result(timeout=60)
-            except Exception:
-                LOGGER.exception("bridge.stop")
+            except Exception as e:
+                self.report_error(
+                    ERR_BRIDGE_STOP,
+                    "homekit_bridge",
+                    "HomeKit bridge stop failed",
+                    exc=e,
+                    log_message="bridge.stop",
+                )
         if self.mainloop:
             self.mainloop.call_soon_threadsafe(self.mainloop.stop)
         LOGGER.info("HomeKit Hub stopped")
@@ -255,14 +351,26 @@ class Controller(Node):
             )
             try:
                 rows = fut.result(timeout=30)
-            except Exception:
-                LOGGER.exception("HomeKit discover: scan failed")
+            except Exception as e:
+                self.report_error(
+                    ERR_DISCOVER_SCAN,
+                    "homekit_err_discover",
+                    "HomeKit discover scan failed",
+                    exc=e,
+                    log_message="HomeKit discover: scan failed",
+                )
                 return
             n = len(rows) if rows else 0
             LOGGER.info("HomeKit DISCOVER: scan finished, %d accessory(ies) in result", n)
             self._present_hap_discover_results(rows or [])
-        except Exception:
-            LOGGER.exception("HomeKit DISCOVER: unexpected error")
+        except Exception as e:
+            self.report_error(
+                ERR_DISCOVER_UNEXPECTED,
+                "homekit_err_discover",
+                "HomeKit discover failed",
+                exc=e,
+                log_message="HomeKit DISCOVER: unexpected error",
+            )
 
     def _typed_data_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -319,8 +427,14 @@ class Controller(Node):
             td = self._typed_data_dict()
             td[TYPED_PAIRING_SLOTS_KEY] = current
             self.TypedData.load(td, save=True)
-        except Exception:
-            LOGGER.exception("Failed to save Custom Typed data after discover")
+        except Exception as e:
+            self.report_error(
+                ERR_TYPED_SAVE,
+                "homekit_err_config",
+                "Failed to save Custom Typed data after discover",
+                exc=e,
+                log_message="Failed to save Custom Typed data after discover",
+            )
             return 0
         if self.ready:
             self._maybe_restart_on_config_change()
@@ -337,8 +451,14 @@ class Controller(Node):
         n_typed = 0
         try:
             n_typed = self._append_pairing_rows_for_discover(rows)
-        except Exception:
-            LOGGER.exception("append_pairing_rows_for_discover")
+        except Exception as e:
+            self.report_error(
+                ERR_APPEND_PAIRING,
+                "homekit_err_config",
+                "Failed to update pairing rows after discover",
+                exc=e,
+                log_message="append_pairing_rows_for_discover",
+            )
 
         if not rows:
             self.Notices["hap_discover"] = (
@@ -390,7 +510,6 @@ class Controller(Node):
             self.hb = 0
 
     def query(self):
-        self.setDriver("ST", 1)
         self.reportDrivers()
 
     def cmd_discover(self, command=None):
@@ -404,5 +523,6 @@ class Controller(Node):
         "QUERY": query,
     }
     drivers = [
-        {"driver": "ST", "value": 1, "uom": 25, "name": "NodeServer online"},
+        {"driver": "ST", "value": 1, "uom": 25, "name": "Hub status"},
+        {"driver": "ERR", "value": 0, "uom": 25, "name": "Hub error code"},
     ]

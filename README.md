@@ -21,6 +21,33 @@ See **`CONFIG.md`**: **Custom Typed Configuration Parameters** — list **HomeKi
 
 Persisted pairing payloads live in custom data under **`homekit_pairings`**.
 
+## Hub status and errors (ISY / eisy)
+
+The controller node exposes **ST** (hub run state) and **ERR** (last reported error code). **ERR** uses ISY **UOM 25** (*index*) with profile NLS **`ERRC-*`** labels. Polyglot **Notices** carry human-readable titles and exception text for the same events.
+
+| Driver | Meaning |
+|--------|---------|
+| **ST** `0` | Stopped |
+| **ST** `1` | Running (bridge started successfully) |
+| **ST** `2` | Error — bridge failed to start. Other faults (discover, typed save, etc.) update **ERR** and Notices only; they leave **ST** unchanged. |
+
+**ERR** codes (UOM 25; see profile NLS `ERRC-*`):
+
+| Code | Label |
+|------|--------|
+| 0 | No error |
+| 1 | Bridge start failed |
+| 2 | Discover scan failed |
+| 3 | Discover unexpected error |
+| 4 | Custom typed save failed |
+| 5 | Pairing rows update failed |
+| 6 | Bridge stop failed |
+| 7 | Status update failed |
+
+**`report_error`** (in `nodes/Controller.py`) centralizes failure reporting: it logs with **`LOGGER.exception`** when an exception is passed, otherwise **`LOGGER.error`**; sets a Polyglot Notice under a fixed key (`homekit_bridge`, `homekit_err_discover`, `homekit_err_config`, or `homekit_meta`); and sets **ERR** to the code. Only hub-fatal start failures also set **ST** to 2. After a **successful** bridge start, **`clear_hub_error_indicators`** clears those hub error Notice keys and sets **ERR** back to 0 (it does not clear DISCOVER-related state).
+
+On **Node Server start**, the controller clears **all** Notices before loading.
+
 ## Packaging (zip for Polyglot)
 
 From the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:

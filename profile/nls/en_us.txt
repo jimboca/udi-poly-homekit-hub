@@ -8,3 +8,14 @@ ST-hkctl-ST-NAME = Hub Status
 CST-0 = Stopped
 CST-1 = Running
 CST-2 = Error
+
+ST-hkctl-ERR-NAME = Hub error code
+
+ERRC-0 = No error
+ERRC-1 = Bridge start failed
+ERRC-2 = Discover scan failed
+ERRC-3 = Discover unexpected error
+ERRC-4 = Custom typed save failed
+ERRC-5 = Pairing rows update failed
+ERRC-6 = Bridge stop failed
+ERRC-7 = Status update failed

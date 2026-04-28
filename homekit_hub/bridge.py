@@ -13,6 +13,7 @@ import logging
 from typing import Any, Callable, Optional
 
 import websockets
+from zeroconf.asyncio import AsyncZeroconf
 
 from aiohomekit import Controller as HKController
 from aiohomekit.exceptions import AccessoryNotFoundError
@@ -222,19 +223,50 @@ class HomeKitHubBridge:
         self._set_custom_data = set_custom_data
 
         self._hk: Optional[HKController] = None
+        self._async_zeroconf: Optional[AsyncZeroconf] = None
         self._listeners: dict[str, Callable[[], None]] = {}
         self._clients: set[Any] = set()
         self._ws_server: Any = None
         self._running = False
 
+    async def _abort_start(self) -> None:
+        """Undo partial startup (used when async_start or later steps fail)."""
+        self._running = False
+        if self._ws_server is not None:
+            try:
+                self._ws_server.close()
+                await self._ws_server.wait_closed()
+            except Exception:
+                self.log.exception("closing WebSocket server after failed start")
+            self._ws_server = None
+        if self._hk is not None:
+            try:
+                await self._hk.async_stop()
+            except Exception:
+                self.log.exception("HomeKit controller async_stop after failed start")
+            self._hk = None
+        if self._async_zeroconf is not None:
+            try:
+                await self._async_zeroconf.async_close()
+            except Exception:
+                self.log.exception("AsyncZeroconf.async_close after failed start")
+            self._async_zeroconf = None
+
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self._hk = HKController()
-        await self._hk.async_start()
-        await self._start_websocket_server()
-        await self._sync_pairing_from_params()
+        try:
+            # aiohomekit IP transport requires a real AsyncZeroconf; default HKController()
+            # passes None and IpController.async_start() crashes (no .zeroconf).
+            self._async_zeroconf = AsyncZeroconf()
+            self._hk = HKController(async_zeroconf_instance=self._async_zeroconf)
+            await self._hk.async_start()
+            await self._start_websocket_server()
+            await self._sync_pairing_from_params()
+        except Exception:
+            await self._abort_start()
+            raise
 
     async def stop(self) -> None:
         self._running = False
@@ -247,6 +279,12 @@ class HomeKitHubBridge:
         if self._hk:
             await self._hk.async_stop()
             self._hk = None
+        if self._async_zeroconf is not None:
+            try:
+                await self._async_zeroconf.async_close()
+            except Exception:
+                self.log.exception("AsyncZeroconf.async_close")
+            self._async_zeroconf = None
         self._clients.clear()
 
     async def restart_session(self) -> None:
