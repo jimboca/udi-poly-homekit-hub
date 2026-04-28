@@ -235,7 +235,8 @@ class Controller(Node):
         if data is not None:
             self.TypedData.load(data)
         self.handler_typed_data_st = True
-        self._auto_discover_if_needed_from_typed_update(data)
+        # Use TypedData after load — PG3 may send a partial ``data`` dict without ``pairing_slots``.
+        self._auto_discover_if_needed_from_typed_update()
         self._maybe_restart_on_config_change()
 
     def handler_params(self, params):
@@ -366,7 +367,7 @@ class Controller(Node):
                 return
             n = len(rows) if rows else 0
             LOGGER.info("HomeKit DISCOVER: scan finished, %d accessory(ies) in result", n)
-            self._present_hap_discover_results(rows or [])
+            self._present_hap_discover_results(rows or [], source="manual")
         except Exception as e:
             self.report_error(
                 ERR_DISCOVER_UNEXPECTED,
@@ -385,15 +386,16 @@ class Controller(Node):
             pass
         return out
 
-    def _typed_update_needs_discover(self, data: Any) -> bool:
+    def _typed_update_needs_discover(self) -> bool:
         """Auto-discover only for pairing-oriented edits that need selection help.
 
         Trigger when at least one row has a PIN entered but no id/name filter,
         and we do not have a useful last_hap_discover snapshot yet.
         """
-        if not isinstance(data, dict):
+        try:
+            rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
             return False
-        rows = data.get(TYPED_PAIRING_SLOTS_KEY)
         if not isinstance(rows, list):
             return False
         has_pin_without_filter = False
@@ -418,9 +420,9 @@ class Controller(Node):
             return False
         return True
 
-    def _auto_discover_if_needed_from_typed_update(self, data: Any) -> None:
+    def _auto_discover_if_needed_from_typed_update(self) -> None:
         """Run DISCOVER automatically for select typed-data updates."""
-        if not self._typed_update_needs_discover(data):
+        if not self._typed_update_needs_discover():
             return
         if not (self.ready and self.bridge and self.mainloop):
             LOGGER.info(
@@ -437,7 +439,7 @@ class Controller(Node):
             rows = fut.result(timeout=30)
             n = len(rows) if rows else 0
             LOGGER.info("HomeKit auto-discover: scan finished, %d accessory(ies)", n)
-            self._present_hap_discover_results(rows or [])
+            self._present_hap_discover_results(rows or [], source="auto")
         except Exception as e:
             self.report_error(
                 ERR_DISCOVER_SCAN,
@@ -506,7 +508,21 @@ class Controller(Node):
             self._maybe_restart_on_config_change()
         return added
 
-    def _present_hap_discover_results(self, rows: list) -> None:
+    def _present_hap_discover_results(self, rows: list, *, source: str = "manual") -> None:
+        """Persist discover snapshot and UI notice.
+
+        ``source="auto"`` + empty ``rows``: do not clear ``last_hap_discover`` or replace the
+        DISCOVER notice (PG3 often sends partial typed payloads; an empty auto-scan should not
+        wipe a prior snapshot).
+        """
+        if source == "auto" and not rows:
+            LOGGER.info(
+                "HomeKit auto-discover: no accessories in scan window; leaving "
+                "%s and hap_discover notice unchanged. Run DISCOVER on the controller with the "
+                "accessory in HomeKit pairing mode; check LAN/mDNS (CONFIG.md).",
+                DATA_KEY_LAST_HAP_DISCOVER,
+            )
+            return
         try:
             d = {k: self.Data[k] for k in self.Data.keys()}
         except Exception:

@@ -500,6 +500,11 @@ class HomeKitHubBridge:
             "Discovery window ended: %d unique HAP accessory(ies) in this window",
             len(rows),
         )
+        if not rows:
+            self.log.warning(
+                "No HAP accessories seen — confirm pairing mode, same LAN/VLAN, mDNS not blocked, "
+                "and (BSD/macOS) see CONFIG.md zeroconf env if using unicast."
+            )
         return rows
 
     async def _wait_for_pairing_discovery(
