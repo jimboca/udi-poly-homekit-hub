@@ -20,7 +20,7 @@ from zeroconf._utils.net import InterfaceChoice, IPVersion
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
 
 from aiohomekit import Controller as HKController
-from aiohomekit.exceptions import AccessoryNotFoundError
+from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
 from aiohomekit.model.status_flags import StatusFlags
 from aiohomekit.uuid import normalize_uuid
@@ -32,6 +32,25 @@ DATA_KEY_PAIRINGS = "homekit_pairings"
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
 HAP_TYPE_TCP = "_hap._tcp.local."
 HAP_TYPE_UDP = "_hap._udp.local."
+
+# ISY **ERR** driver codes (must match profile NLS ``ERRC-*``).
+ERR_PAIRING_NO_TARGET = 8
+ERR_PAIRING_FAILED = 9
+
+
+def normalize_hap_pin(raw: Any) -> str:
+    """Return a HomeKit setup code as ``XXX-XX-XXX`` when the value is exactly 8 digits.
+
+    Spaces and existing dashes are ignored for digit extraction; other characters
+    mean we return the stripped original string so pairing can fail visibly.
+    """
+    s = (raw if raw is not None else "").strip()
+    if not s:
+        return ""
+    digits = "".join(c for c in s if c.isdigit())
+    if len(digits) == 8:
+        return f"{digits[:3]}-{digits[3:5]}-{digits[5:8]}"
+    return s
 
 
 def _zeroconf_ctor_kwargs(log: logging.Logger, *, unicast: bool) -> dict[str, Any]:
@@ -173,7 +192,7 @@ def assign_pairing_slot_rows(rows: list, log: logging.Logger) -> list[tuple[int,
 
 
 def _row_pin_and_filters(row: dict[str, Any]) -> tuple[str, str, str]:
-    pin = (row.get("hap_pin") or "").strip()
+    pin = normalize_hap_pin(row.get("hap_pin"))
     acc_id = (row.get("accessory_id") or "").strip().lower()
     acc_name = (row.get("accessory_name") or "").strip()
     return pin, acc_id, acc_name
@@ -292,12 +311,16 @@ class HomeKitHubBridge:
         get_pairing_slot_rows: Callable[[], list],
         get_custom_data: Callable[[], dict[str, Any]],
         set_custom_data: Callable[[dict[str, Any]], None],
+        pairing_notice: Optional[
+            Callable[[int, str, str, Optional[Exception]], None]
+        ] = None,
     ) -> None:
         self.log = logger
         self._get_params = get_params
         self._get_pairing_slot_rows = get_pairing_slot_rows
         self._get_custom_data = get_custom_data
         self._set_custom_data = set_custom_data
+        self._pairing_notice = pairing_notice
 
         self._hk: Optional[HKController] = None
         self._async_zeroconf: Optional[AsyncZeroconf] = None
@@ -924,13 +947,33 @@ class HomeKitHubBridge:
                 accessory_id,
                 accessory_name,
             )
+            if self._pairing_notice:
+                self._pairing_notice(
+                    ERR_PAIRING_NO_TARGET,
+                    "HomeKit pairing: no matching accessory",
+                    f"Slot {slot_num}: no unpaired accessory matched id={accessory_id!r} name={accessory_name!r}. "
+                    "Run DISCOVER with the device in HomeKit pairing mode on the same LAN.",
+                    None,
+                )
             return
 
         try:
             finish = await matched.async_start_pairing(alias)
             pairing = await finish(pin)
-        except Exception:
+        except Exception as e:
             self.log.exception("Slot %s: pairing failed", slot_num)
+            if self._pairing_notice:
+                title = (
+                    "HomeKit pairing code rejected"
+                    if isinstance(e, AuthenticationError)
+                    else "HomeKit pairing failed"
+                )
+                self._pairing_notice(
+                    ERR_PAIRING_FAILED,
+                    title,
+                    f"Slot {slot_num}: pairing error",
+                    e,
+                )
             return
 
         pdata = dict(pairing.pairing_data)

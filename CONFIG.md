@@ -20,7 +20,7 @@ Each row has a **Slot** (optional) plus the pairing and filter fields:
 | Field | Description |
 |-------|-------------|
 | **Slot** (`slot`) | Positive integer **1, 2, 3, …** identifying this row’s pairing in saved data and hub logs. **Optional:** if you leave it empty, the Hub picks the **smallest unused** slot number (reuses a gap if you remove a row). If two rows request the same slot, the first wins and the other is reassigned automatically. |
-| **HomeKit pairing code** (`hap_pin`) | Code shown on the accessory (e.g. `123-45-678`). **Leave empty** on that row to disassociate only that accessory (Hub removes pairing when possible and clears saved data for that slot). |
+| **HomeKit pairing code** (`hap_pin`) | Code shown on the accessory (e.g. `123-45-678`). You may enter **eight digits without dashes** (`12345678`); the hub normalizes to `123-45-678` before pairing. **Leave empty** on that row to disassociate only that accessory (Hub removes pairing when possible and clears saved data for that slot). |
 | **Accessory device id** (`accessory_id`) | **Optional.** If you leave it (and the name) **empty**, the Hub uses the **most recent DISCOVER** snapshot in custom data (`last_hap_discover`) to pick the target — you do not copy ids by hand. If **several** accessories are unpaired at once, set this field (or **name** below) on the row to choose one. |
 | **Substring of accessory name** (`accessory_name`) | **Optional** extra filter (same as id); use when you must disambiguate multiple unpaired devices. |
 

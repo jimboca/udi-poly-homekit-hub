@@ -3,6 +3,6 @@
     <range uom="25" subset="0,1,2" nls="CST"/>
   </editor>
   <editor id="errc">
-    <range uom="25" subset="0-7" nls="ERRC"/>
+    <range uom="25" subset="0-9" nls="ERRC"/>
   </editor>
 </editors>

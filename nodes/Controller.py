@@ -122,6 +122,22 @@ class Controller(Node):
     def _bridge_set_data(self, data: dict[str, Any]) -> None:
         self.Data.load(data)
 
+    def _pairing_notice_callback(
+        self,
+        code: int,
+        title: str,
+        log_message: str,
+        exc: Optional[Exception],
+    ) -> None:
+        """Bridge runs on the asyncio thread; Notices + ERR must be PG3-visible."""
+        self.report_error(
+            code,
+            "homekit_err_config",
+            title,
+            exc=exc,
+            log_message=log_message,
+        )
+
     def _config_restart_snap(self) -> dict[str, Any]:
         snap = {
             "ws_host": self.Params.get("ws_host"),
@@ -284,6 +300,7 @@ class Controller(Node):
             self._bridge_get_pairing_slot_rows,
             self._bridge_get_data,
             self._bridge_set_data,
+            pairing_notice=self._pairing_notice_callback,
         )
         self._config_snap = self._config_restart_snap()
         fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)

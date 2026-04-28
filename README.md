@@ -43,6 +43,8 @@ The controller node exposes **ST** (hub run state) and **ERR** (last reported er
 | 5 | Pairing rows update failed |
 | 6 | Bridge stop failed |
 | 7 | Status update failed |
+| 8 | Pairing: no matching accessory |
+| 9 | Pairing failed |
 
 **`report_error`** (in `nodes/Controller.py`) centralizes failure reporting: it logs with **`LOGGER.exception`** when an exception is passed, otherwise **`LOGGER.error`**; sets a Polyglot Notice under a fixed key (`homekit_bridge`, `homekit_err_discover`, `homekit_err_config`, or `homekit_meta`); and sets **ERR** to the code. Only hub-fatal start failures also set **ST** to 2. After a **successful** bridge start, **`clear_hub_error_indicators`** clears those hub error Notice keys and sets **ERR** back to 0 (it does not clear DISCOVER-related state).
 

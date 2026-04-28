@@ -19,3 +19,5 @@ ERRC-4 = Custom typed save failed
 ERRC-5 = Pairing rows update failed
 ERRC-6 = Bridge stop failed
 ERRC-7 = Status update failed
+ERRC-8 = Pairing: no matching accessory
+ERRC-9 = Pairing failed
