@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 import websockets
 
 from aiohomekit import Controller as HKController
+from aiohomekit.exceptions import AccessoryNotFoundError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
 from aiohomekit.model.status_flags import StatusFlags
 from aiohomekit.uuid import normalize_uuid
@@ -277,61 +278,152 @@ class HomeKitHubBridge:
                 except Exception:
                     self.log.exception("pairing close for %s", alias)
 
+    def _iter_transport_discoveries(self):
+        """Yield discovery objects from all aiohomekit transports (IP, COAP, BLE)."""
+        if not self._hk:
+            return
+        transports = getattr(self._hk, "transports", None)
+        if not transports:
+            return
+        for transport in transports.values():
+            discoveries = getattr(transport, "discoveries", None) or {}
+            yield from discoveries.values()
+
+    def _row_from_discovery(self, discovery: Any) -> dict[str, Any] | None:
+        d = discovery.description
+        if not d or not getattr(d, "id", None):
+            return None
+        addrs = getattr(d, "addresses", None)
+        if isinstance(addrs, (list, tuple)) and addrs:
+            host = str(addrs[0])
+        else:
+            host = str(getattr(d, "address", "") or "")
+        try:
+            port = int(d.port)
+        except (TypeError, ValueError):
+            port = 0
+        return {
+            "id": d.id,
+            "name": d.name or "",
+            "paired": bool(discovery.paired),
+            "host": host,
+            "port": port,
+        }
+
     async def discover_collect(self, timeout: float = 12.0) -> list[dict[str, Any]]:
         """
-        Run zeroconf HAP discovery; return a list of dicts: id, name, paired, host, port.
-        The async_discover() generator can yield the same device multiple times; de-dupe by (id, host, port).
+        Collect HAP accessories seen via mDNS over a real-time window.
+
+        aiohomekit's ``async_discover()`` only iterates the *current* ``.discoveries``
+        cache once (it is not a long listen). Devices appear as zeroconf callbacks
+        fill ``transport.discoveries`` — we must poll for ``timeout`` seconds.
         """
         if not self._hk:
             return []
-        self.log.info("HomeKit discovery (%.1fs)...", timeout)
+        if not getattr(self._hk, "transports", None):
+            self.log.warning(
+                "aiohomekit Controller has no transports; discovery may be incomplete"
+            )
+        self.log.info(
+            "HomeKit discovery (%.1fs window, mDNS _hap._tcp; devices appear as announced)...",
+            timeout,
+        )
         seen_ids: set[str] = set()
         rows: list[dict[str, Any]] = []
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + float(timeout)
+        interval = 0.5
 
-        async def _scan() -> None:
-            async for discovery in self._hk.async_discover():
-                d = discovery.description
-                if not d or not d.id:
+        while loop.time() < deadline:
+            for discovery in self._iter_transport_discoveries():
+                row = self._row_from_discovery(discovery)
+                if not row:
                     continue
-                did = d.id
+                did = row["id"]
                 if did in seen_ids:
                     continue
                 seen_ids.add(did)
-                addrs = getattr(d, "addresses", None)
-                if isinstance(addrs, (list, tuple)) and addrs:
-                    host = str(addrs[0])
-                else:
-                    host = str(getattr(d, "address", "") or "")
-                try:
-                    port = int(d.port)
-                except (TypeError, ValueError):
-                    port = 0
-                paired = bool(discovery.paired)
-                name = d.name or ""
-                row = {
-                    "id": did,
-                    "name": name,
-                    "paired": paired,
-                    "host": host,
-                    "port": port,
-                }
                 rows.append(row)
                 self.log.info(
                     "HAP accessory: name=%r id=%s paired=%s %s:%s",
-                    name,
+                    row["name"],
                     did,
-                    paired,
-                    host,
-                    port,
+                    row["paired"],
+                    row["host"],
+                    row["port"],
                 )
+            await asyncio.sleep(interval)
 
-        try:
-            await asyncio.wait_for(_scan(), timeout=timeout)
-        except asyncio.TimeoutError:
-            self.log.info("Discovery window ended (%d unique)", len(rows))
-        except Exception:
-            self.log.exception("Discovery failed")
+        self.log.info(
+            "Discovery window ended: %d unique HAP accessory(ies) in this window",
+            len(rows),
+        )
         return rows
+
+    async def _wait_for_pairing_discovery(
+        self,
+        accessory_id: str,
+        accessory_name: str,
+        timeout: float = 30.0,
+    ) -> Any:
+        """
+        Resolve a discovery suitable for SRP pairing: unpaired, optional id/name match.
+        Uses async_find() when id is known; otherwise polls transport.discoveries.
+        """
+        if not self._hk:
+            return None
+        aid = (accessory_id or "").strip().lower()
+        aname = (accessory_name or "").strip()
+
+        if aid:
+            try:
+                discovery = await self._hk.async_find(aid, timeout=timeout)
+            except AccessoryNotFoundError:
+                self.log.error(
+                    "Accessory id %s not found on the network within %.0fs (mDNS / HAP)",
+                    aid,
+                    timeout,
+                )
+                return None
+            except Exception:
+                self.log.exception("async_find failed for id %s", aid)
+                return None
+            d = discovery.description
+            if aname and aname.lower() not in (d.name or "").lower():
+                self.log.error(
+                    "Accessory name did not match filter (id=%s name=%r)",
+                    aid,
+                    d.name,
+                )
+                return None
+            if discovery.paired:
+                self.log.warning(
+                    "Skipping %s (%s): already paired; unpair in HomeKit first",
+                    d.name,
+                    d.id,
+                )
+                return None
+            return discovery
+
+        loop = asyncio.get_event_loop()
+        end = loop.time() + timeout
+        while loop.time() < end:
+            for discovery in self._iter_transport_discoveries():
+                d = discovery.description
+                if not d:
+                    continue
+                if aname and aname.lower() not in (d.name or "").lower():
+                    continue
+                if discovery.paired:
+                    self.log.warning(
+                        "Skipping %s (%s): already paired; unpair in HomeKit first",
+                        d.name,
+                        d.id,
+                    )
+                    continue
+                return discovery
+            await asyncio.sleep(0.5)
+        return None
 
     def _ws_bind(self) -> tuple[str, int]:
         p = self._get_params()
@@ -675,34 +767,12 @@ class HomeKitHubBridge:
         accessory_name: str,
         blob: dict[str, Any],
     ) -> None:
-        async def _find_first() -> Any:
-            async for discovery in self._hk.async_discover():
-                d = discovery.description
-                if not d:
-                    continue
-                if accessory_id and d.id.lower() != accessory_id:
-                    continue
-                if accessory_name and accessory_name.lower() not in (d.name or "").lower():
-                    continue
-                if discovery.paired:
-                    self.log.warning(
-                        "Skipping %s (%s): already paired; unpair in HomeKit first",
-                        d.name,
-                        d.id,
-                    )
-                    continue
-                return discovery
-            return None
-
-        try:
-            matched = await asyncio.wait_for(_find_first(), timeout=30)
-        except asyncio.TimeoutError:
-            self.log.error("Slot %s: pairing discovery timed out", slot_num)
-            return
-
+        matched = await self._wait_for_pairing_discovery(
+            accessory_id, accessory_name, timeout=30.0
+        )
         if not matched:
             self.log.error(
-                "Slot %s: no unpaired accessory matched id=%r name=%r",
+                "Slot %s: no unpaired accessory matched id=%r name=%r (try DISCOVER, pairing mode, same LAN)",
                 slot_num,
                 accessory_id,
                 accessory_name,
