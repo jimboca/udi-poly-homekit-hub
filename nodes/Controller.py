@@ -237,18 +237,32 @@ class Controller(Node):
             self.heartbeat()
 
     def handler_discover(self, _data=None):
-        """Network scan: results are saved and shown in a Polyglot Notice (no log file needed)."""
-        if not (self.bridge and self.mainloop):
-            return
-        fut = asyncio.run_coroutine_threadsafe(
-            self.bridge.discover_collect(12.0), self.mainloop
-        )
+        """Network scan: results are saved and shown in a Polyglot Notice (no log file needed).
+
+        PG3 may invoke this via ``poly.subscribe(DISCOVER)`` (MQTT ``discover``) and/or via
+        ``runCmd``; the latter requires ``commands['DISCOVER']`` (see udi-poly-ecobee / udi-poly-kasa).
+        """
         try:
-            rows = fut.result(timeout=30)
+            LOGGER.info("HomeKit DISCOVER: starting (zeroconf HAP scan)")
+            if not (self.bridge and self.mainloop):
+                LOGGER.warning(
+                    "HomeKit DISCOVER skipped: bridge not ready. Wait until the log shows "
+                    "'HomeKit Hub ready' after the Node Server starts, then try again."
+                )
+                return
+            fut = asyncio.run_coroutine_threadsafe(
+                self.bridge.discover_collect(12.0), self.mainloop
+            )
+            try:
+                rows = fut.result(timeout=30)
+            except Exception:
+                LOGGER.exception("HomeKit discover: scan failed")
+                return
+            n = len(rows) if rows else 0
+            LOGGER.info("HomeKit DISCOVER: scan finished, %d accessory(ies) in result", n)
+            self._present_hap_discover_results(rows or [])
         except Exception:
-            LOGGER.exception("HomeKit discover failed")
-            return
-        self._present_hap_discover_results(rows or [])
+            LOGGER.exception("HomeKit DISCOVER: unexpected error")
 
     def _typed_data_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -378,3 +392,17 @@ class Controller(Node):
     def query(self):
         self.setDriver("ST", 1)
         self.reportDrivers()
+
+    def cmd_discover(self, command=None):
+        """DISCOVER from ISY/PG3 UI (runCmd); same work as ``handler_discover``."""
+        self.handler_discover()
+
+    # Must match profile/nodedefs.xml; runCmd only sees commands listed here.
+    id = "HKHubController"
+    commands = {
+        "DISCOVER": cmd_discover,
+        "QUERY": query,
+    }
+    drivers = [
+        {"driver": "ST", "value": 1, "uom": 25, "name": "NodeServer online"},
+    ]
