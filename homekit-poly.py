@@ -13,6 +13,9 @@ def main() -> None:
     if sys.version_info < (3, 9):
         LOGGER.error("Python 3.9+ is required, not %s.%s", sys.version_info[0], sys.version_info[1])
         sys.exit(1)
+    # Default to zeroconf unicast mode on hosts where mDNS port 5353 is owned
+    # by another stack; external environment config still overrides this.
+    os.environ.setdefault("HOMEKIT_HUB_ZEROCONF_UNICAST", "1")
     try:
         polyglot = Interface([Controller])
         polyglot.start(VERSION)
