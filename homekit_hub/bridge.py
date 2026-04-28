@@ -12,9 +12,11 @@ import errno
 import json
 import logging
 import os
+import sys
 from typing import Any, Callable, Optional
 
 import websockets
+from zeroconf._utils.net import InterfaceChoice, IPVersion
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
 
 from aiohomekit import Controller as HKController
@@ -32,6 +34,43 @@ HAP_TYPE_TCP = "_hap._tcp.local."
 HAP_TYPE_UDP = "_hap._udp.local."
 
 
+def _zeroconf_ctor_kwargs(log: logging.Logger, *, unicast: bool) -> dict[str, Any]:
+    """Optional ``AsyncZeroconf`` constructor kwargs from env and host quirks.
+
+    On **BSD / macOS**, unicast mode can log ``sendto`` **EADDRNOTAVAIL** (errno 49) when python-zeroconf
+    tries to answer queries via a socket bound to a real LAN address toward **127.0.0.1**.
+    Using **Default** interfaces + **IPv4-only** avoids the worst of that for typical HomeKit LANs.
+
+    Override with:
+    - ``HOMEKIT_HUB_ZEROCONF_INTERFACES`` — ``default`` | ``all`` (omit or empty = library default for multicast; for unicast on BSD see auto-below)
+    - ``HOMEKIT_HUB_ZEROCONF_IP_VERSION`` — ``v4`` | ``v6`` | ``all``
+    """
+    out: dict[str, Any] = {}
+    ic = os.environ.get("HOMEKIT_HUB_ZEROCONF_INTERFACES", "").strip().lower()
+    if ic == "default":
+        out["interfaces"] = InterfaceChoice.Default
+    elif ic == "all":
+        out["interfaces"] = InterfaceChoice.All
+
+    ipv = os.environ.get("HOMEKIT_HUB_ZEROCONF_IP_VERSION", "").strip().lower()
+    if ipv in ("4", "v4", "ipv4"):
+        out["ip_version"] = IPVersion.V4Only
+    elif ipv in ("6", "v6", "ipv6"):
+        out["ip_version"] = IPVersion.V6Only
+    elif ipv in ("all", "dual"):
+        out["ip_version"] = IPVersion.All
+
+    bsdish = sys.platform.startswith(("freebsd", "darwin"))
+    if unicast and bsdish:
+        if "interfaces" not in out and ic not in ("all",):
+            out["interfaces"] = InterfaceChoice.Default
+            log.debug("zeroconf unicast: using InterfaceChoice.Default on %s", sys.platform)
+        if "ip_version" not in out:
+            out["ip_version"] = IPVersion.V4Only
+            log.debug("zeroconf unicast: using IPVersion.V4Only on %s", sys.platform)
+    return out
+
+
 def _async_zeroconf_for_hub(log: logging.Logger) -> tuple[AsyncZeroconf, bool]:
     """Create ``AsyncZeroconf``. If mDNS port **5353** is already bound (Avahi, mDNSResponder, …),
     fall back to **unicast** mode so python-zeroconf does not need a second multicast listener.
@@ -43,9 +82,11 @@ def _async_zeroconf_for_hub(log: logging.Logger) -> tuple[AsyncZeroconf, bool]:
         "yes",
     ):
         log.info("HOMEKIT_HUB_ZEROCONF_UNICAST set: using zeroconf unicast mode")
-        return AsyncZeroconf(unicast=True), True
+        kw = _zeroconf_ctor_kwargs(log, unicast=True)
+        return AsyncZeroconf(unicast=True, **kw), True
+    kw_m = _zeroconf_ctor_kwargs(log, unicast=False)
     try:
-        return AsyncZeroconf(), False
+        return AsyncZeroconf(**kw_m), False
     except OSError as e:
         if e.errno != errno.EADDRINUSE:
             raise
@@ -55,7 +96,8 @@ def _async_zeroconf_for_hub(log: logging.Logger) -> tuple[AsyncZeroconf, bool]:
             "HOMEKIT_HUB_ZEROCONF_UNICAST=1)."
         )
         try:
-            return AsyncZeroconf(unicast=True), True
+            kw_u = _zeroconf_ctor_kwargs(log, unicast=True)
+            return AsyncZeroconf(unicast=True, **kw_u), True
         except TypeError:
             log.error(
                 "unicast mode is not supported by this python-zeroconf; free UDP 5353 or upgrade zeroconf"

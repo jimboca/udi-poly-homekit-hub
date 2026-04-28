@@ -50,3 +50,13 @@ See `PROTOCOL.md`. All messages require `"version": "1"`. Events for all paired 
 ## Security
 
 The WebSocket server binds to `127.0.0.1` by default so only local clients can connect.
+
+## Environment (optional)
+
+These apply to the Node Server process (see `homekit-poly.py` for defaults such as unicast zeroconf):
+
+| Variable | Values | Purpose |
+|----------|--------|---------|
+| `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` | Use python-zeroconf unicast mode (avoids binding UDP 5353 when another mDNS stack owns it). |
+| `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Narrow or widen interface selection for zeroconf (BSD/macOS unicast may need `default` to reduce `sendto` errno 49 warnings). |
+| `HOMEKIT_HUB_ZEROCONF_IP_VERSION` | `v4` / `v6` / `all` | Force IP stack for zeroconf; on BSD/macOS in unicast mode the hub may default to IPv4-only unless you set `all`. |
