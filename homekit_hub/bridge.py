@@ -15,7 +15,7 @@ import os
 from typing import Any, Callable, Optional
 
 import websockets
-from zeroconf.asyncio import AsyncZeroconf
+from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
 
 from aiohomekit import Controller as HKController
 from aiohomekit.exceptions import AccessoryNotFoundError
@@ -28,9 +28,10 @@ TYPED_PAIRING_SLOTS_KEY = "pairing_slots"
 DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
+HAP_TYPE_TCP = "_hap._tcp.local."
 
 
-def _async_zeroconf_for_hub(log: logging.Logger) -> AsyncZeroconf:
+def _async_zeroconf_for_hub(log: logging.Logger) -> tuple[AsyncZeroconf, bool]:
     """Create ``AsyncZeroconf``. If mDNS port **5353** is already bound (Avahi, mDNSResponder, …),
     fall back to **unicast** mode so python-zeroconf does not need a second multicast listener.
     Set env ``HOMEKIT_HUB_ZEROCONF_UNICAST=1`` to skip multicast and use unicast only.
@@ -41,19 +42,19 @@ def _async_zeroconf_for_hub(log: logging.Logger) -> AsyncZeroconf:
         "yes",
     ):
         log.info("HOMEKIT_HUB_ZEROCONF_UNICAST set: using zeroconf unicast mode")
-        return AsyncZeroconf(unicast=True)
+        return AsyncZeroconf(unicast=True), True
     try:
-        return AsyncZeroconf()
+        return AsyncZeroconf(), False
     except OSError as e:
         if e.errno != errno.EADDRINUSE:
             raise
         log.warning(
             "mDNS port 5353 is already in use on this host; retrying zeroconf in unicast mode "
-            "(discovery still works; if problems persist, set Avahi disallow-other-stacks=no or "
-            "set HOMEKIT_HUB_ZEROCONF_UNICAST=1)."
+            "(if problems persist, set Avahi disallow-other-stacks=no or set "
+            "HOMEKIT_HUB_ZEROCONF_UNICAST=1)."
         )
         try:
-            return AsyncZeroconf(unicast=True)
+            return AsyncZeroconf(unicast=True), True
         except TypeError:
             log.error(
                 "unicast mode is not supported by this python-zeroconf; free UDP 5353 or upgrade zeroconf"
@@ -257,6 +258,7 @@ class HomeKitHubBridge:
 
         self._hk: Optional[HKController] = None
         self._async_zeroconf: Optional[AsyncZeroconf] = None
+        self._zc_hap_browser: Optional[AsyncServiceBrowser] = None
         self._listeners: dict[str, Callable[[], None]] = {}
         self._clients: set[Any] = set()
         self._ws_server: Any = None
@@ -279,6 +281,12 @@ class HomeKitHubBridge:
                 self.log.exception("HomeKit controller async_stop after failed start")
             self._hk = None
         if self._async_zeroconf is not None:
+            if self._zc_hap_browser is not None:
+                try:
+                    await self._zc_hap_browser.async_cancel()
+                except Exception:
+                    self.log.exception("AsyncServiceBrowser.async_cancel after failed start")
+                self._zc_hap_browser = None
             try:
                 await self._async_zeroconf.async_close()
             except Exception:
@@ -292,7 +300,15 @@ class HomeKitHubBridge:
         try:
             # aiohomekit IP transport requires a real AsyncZeroconf; default HKController()
             # passes None and IpController.async_start() crashes (no .zeroconf).
-            self._async_zeroconf = _async_zeroconf_for_hub(self.log)
+            self._async_zeroconf, using_unicast = _async_zeroconf_for_hub(self.log)
+            if using_unicast:
+                # aiohomekit looks up an existing AsyncServiceBrowser on the zeroconf
+                # instance during startup; in unicast mode we must create one explicitly.
+                self._zc_hap_browser = AsyncServiceBrowser(
+                    self._async_zeroconf.zeroconf,
+                    HAP_TYPE_TCP,
+                    handlers=[lambda **_: None],
+                )
             self._hk = HKController(async_zeroconf_instance=self._async_zeroconf)
             await self._hk.async_start()
             await self._start_websocket_server()
@@ -312,6 +328,12 @@ class HomeKitHubBridge:
         if self._hk:
             await self._hk.async_stop()
             self._hk = None
+        if self._zc_hap_browser is not None:
+            try:
+                await self._zc_hap_browser.async_cancel()
+            except Exception:
+                self.log.exception("AsyncServiceBrowser.async_cancel")
+            self._zc_hap_browser = None
         if self._async_zeroconf is not None:
             try:
                 await self._async_zeroconf.async_close()

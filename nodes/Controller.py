@@ -297,7 +297,7 @@ class Controller(Node):
                 log_message="HomeKit bridge failed to start",
                 extra_html=(
                     "If the error mentions <code>zeroconf</code> / port <b>5353</b>, another mDNS stack "
-                    "may own that port. The hub retries in unicast mode automatically; you can also set "
+                    "may own that port. The hub retries in a compatible unicast mode automatically; you can also set "
                     "env <code>HOMEKIT_HUB_ZEROCONF_UNICAST=1</code> for the Node Server process, or on Linux "
                     "with Avahi set <code>disallow-other-stacks=no</code> in <code>avahi-daemon.conf</code>.<br/>"
                 ),
