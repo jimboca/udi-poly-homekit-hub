@@ -8,8 +8,10 @@ Supports multiple simultaneous pairings; each row has a slot id (explicit or aut
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
+import os
 from typing import Any, Callable, Optional
 
 import websockets
@@ -26,6 +28,37 @@ TYPED_PAIRING_SLOTS_KEY = "pairing_slots"
 DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
+
+
+def _async_zeroconf_for_hub(log: logging.Logger) -> AsyncZeroconf:
+    """Create ``AsyncZeroconf``. If mDNS port **5353** is already bound (Avahi, mDNSResponder, …),
+    fall back to **unicast** mode so python-zeroconf does not need a second multicast listener.
+    Set env ``HOMEKIT_HUB_ZEROCONF_UNICAST=1`` to skip multicast and use unicast only.
+    """
+    if os.environ.get("HOMEKIT_HUB_ZEROCONF_UNICAST", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        log.info("HOMEKIT_HUB_ZEROCONF_UNICAST set: using zeroconf unicast mode")
+        return AsyncZeroconf(unicast=True)
+    try:
+        return AsyncZeroconf()
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        log.warning(
+            "mDNS port 5353 is already in use on this host; retrying zeroconf in unicast mode "
+            "(discovery still works; if problems persist, set Avahi disallow-other-stacks=no or "
+            "set HOMEKIT_HUB_ZEROCONF_UNICAST=1)."
+        )
+        try:
+            return AsyncZeroconf(unicast=True)
+        except TypeError:
+            log.error(
+                "unicast mode is not supported by this python-zeroconf; free UDP 5353 or upgrade zeroconf"
+            )
+            raise e
 
 
 def slot_alias(slot_num: int) -> str:
@@ -259,7 +292,7 @@ class HomeKitHubBridge:
         try:
             # aiohomekit IP transport requires a real AsyncZeroconf; default HKController()
             # passes None and IpController.async_start() crashes (no .zeroconf).
-            self._async_zeroconf = AsyncZeroconf()
+            self._async_zeroconf = _async_zeroconf_for_hub(self.log)
             self._hk = HKController(async_zeroconf_instance=self._async_zeroconf)
             await self._hk.async_start()
             await self._start_websocket_server()
