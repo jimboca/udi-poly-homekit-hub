@@ -3,6 +3,7 @@ ND-HKHubController-NAME = HomeKit Hub
 ND-HKHubController-ICON = GenericCtl
 CMD-hkctl-QUERY-NAME = Query
 CMD-hkctl-DISCOVER-NAME = Discover
+CMD-hkctl-BONJOUR_COMPARE-NAME = Compare PG3 Bonjour vs Zeroconf
 ST-hkctl-ST-NAME = Hub Status
 
 CST-0 = Stopped

@@ -50,6 +50,22 @@ The controller node exposes **ST** (hub run state) and **ERR** (last reported er
 
 On **Node Server start**, the controller clears **all** Notices before loading.
 
+## Diagnostics: BONJOUR vs Zeroconf compare
+
+The controller exposes a `BONJOUR_COMPARE` admin runCmd that captures three discovery sources side-by-side:
+
+1. **PG3 BONJOUR** — `polyglot.bonjour("_hap", None, "tcp"|"udp")` — what PG3's mDNS gateway returns (raw payload).
+2. **aiohomekit** — what `bridge.discover_collect()` (the production DISCOVER path) sees, normalized through `aiohomekit`.
+3. **Raw zeroconf** — what `bridge.discover_collect_raw_zc()` sees on the same `AsyncZeroconf` (full TXT keys, no aiohomekit filter).
+
+Output:
+
+- `logs/bonjour_compare_<utc-timestamp>.json` — full raw payloads + normalized diff.
+- `Custom('compare')['bonjour_compare_last']` — same content for programmatic access.
+- A Polyglot Notice (key `bonjour_compare`) with per-source counts and overlap.
+
+Use it to evaluate whether `polyglot.bonjour()` could supplement or replace the in-process zeroconf path. See [`BONJOUR_FEASIBILITY.md`](BONJOUR_FEASIBILITY.md) for context.
+
 ## Packaging (zip for Polyglot)
 
 From the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:

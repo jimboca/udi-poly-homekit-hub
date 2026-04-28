@@ -16,8 +16,9 @@ import sys
 from typing import Any, Callable, Optional
 
 import websockets
+from zeroconf import ServiceStateChange
 from zeroconf._utils.net import InterfaceChoice, IPVersion
-from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
+from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
 from aiohomekit import Controller as HKController
 from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
@@ -527,6 +528,83 @@ class HomeKitHubBridge:
             self.log.warning(
                 "No HAP accessories seen — confirm pairing mode, same LAN/VLAN, mDNS not blocked, "
                 "and (BSD/macOS) see CONFIG.md zeroconf env if using unicast."
+            )
+        return rows
+
+    async def discover_collect_raw_zc(
+        self, timeout: float = 12.0
+    ) -> list[dict[str, Any]]:
+        """Raw HAP mDNS sampler used by the ``BONJOUR_COMPARE`` admin runCmd.
+
+        Bypasses ``aiohomekit`` so we can compare what python-zeroconf actually
+        sees on the wire (full TXT keys) against what PG3 ``polyglot.bonjour()``
+        returns. Reuses the bridge's existing ``AsyncZeroconf`` instance so we
+        do not open a second multicast listener.
+        """
+        if not self._async_zeroconf:
+            return []
+        zc = self._async_zeroconf.zeroconf
+        seen: dict[str, dict[str, Any]] = {}
+
+        def _on_state_change(*, zeroconf, service_type, name, state_change):
+            if state_change == ServiceStateChange.Removed:
+                seen.pop(name, None)
+                return
+            seen[name] = {"type": service_type, "name": name}
+
+        browsers: list[AsyncServiceBrowser] = []
+        for hap_type in (HAP_TYPE_TCP, HAP_TYPE_UDP):
+            browsers.append(
+                AsyncServiceBrowser(zc, hap_type, handlers=[_on_state_change])
+            )
+        try:
+            await asyncio.sleep(float(timeout))
+        finally:
+            for b in browsers:
+                try:
+                    await b.async_cancel()
+                except Exception:
+                    self.log.exception("raw-zc browser cancel")
+
+        rows: list[dict[str, Any]] = []
+        for name, meta in seen.items():
+            try:
+                info = AsyncServiceInfo(meta["type"], name)
+                ok = await info.async_request(zc, 3000)
+            except Exception:
+                self.log.exception("raw-zc AsyncServiceInfo for %s", name)
+                continue
+            if not ok:
+                continue
+            try:
+                addrs = [str(ip) for ip in info.ip_addresses_by_version(IPVersion.All)]
+            except Exception:
+                addrs = []
+            try:
+                txt = {
+                    (k or "").lower(): (v.decode("utf-8", "replace") if isinstance(v, (bytes, bytearray)) else v)
+                    for k, v in (info.decoded_properties or {}).items()
+                    if v is not None
+                }
+            except Exception:
+                txt = {}
+            host = (info.server or "").rstrip(".") if info.server else ""
+            sf_raw = txt.get("sf")
+            try:
+                paired_flag = (int(sf_raw) & 0x01) == 0 if sf_raw is not None else None
+            except (TypeError, ValueError):
+                paired_flag = None
+            rows.append(
+                {
+                    "type": meta["type"],
+                    "name": name,
+                    "host": host,
+                    "port": int(info.port) if info.port else 0,
+                    "addresses": addrs,
+                    "txt": txt,
+                    "id": (txt.get("id") or "").lower(),
+                    "paired": paired_flag,
+                }
             )
         return rows
 
