@@ -29,6 +29,7 @@ DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
 HAP_TYPE_TCP = "_hap._tcp.local."
+HAP_TYPE_UDP = "_hap._udp.local."
 
 
 def _async_zeroconf_for_hub(log: logging.Logger) -> tuple[AsyncZeroconf, bool]:
@@ -258,7 +259,7 @@ class HomeKitHubBridge:
 
         self._hk: Optional[HKController] = None
         self._async_zeroconf: Optional[AsyncZeroconf] = None
-        self._zc_hap_browser: Optional[AsyncServiceBrowser] = None
+        self._zc_hap_browsers: list[AsyncServiceBrowser] = []
         self._listeners: dict[str, Callable[[], None]] = {}
         self._clients: set[Any] = set()
         self._ws_server: Any = None
@@ -281,12 +282,13 @@ class HomeKitHubBridge:
                 self.log.exception("HomeKit controller async_stop after failed start")
             self._hk = None
         if self._async_zeroconf is not None:
-            if self._zc_hap_browser is not None:
-                try:
-                    await self._zc_hap_browser.async_cancel()
-                except Exception:
-                    self.log.exception("AsyncServiceBrowser.async_cancel after failed start")
-                self._zc_hap_browser = None
+            if self._zc_hap_browsers:
+                for browser in self._zc_hap_browsers:
+                    try:
+                        await browser.async_cancel()
+                    except Exception:
+                        self.log.exception("AsyncServiceBrowser.async_cancel after failed start")
+                self._zc_hap_browsers = []
             try:
                 await self._async_zeroconf.async_close()
             except Exception:
@@ -303,12 +305,16 @@ class HomeKitHubBridge:
             self._async_zeroconf, using_unicast = _async_zeroconf_for_hub(self.log)
             if using_unicast:
                 # aiohomekit looks up an existing AsyncServiceBrowser on the zeroconf
-                # instance during startup; in unicast mode we must create one explicitly.
-                self._zc_hap_browser = AsyncServiceBrowser(
-                    self._async_zeroconf.zeroconf,
-                    HAP_TYPE_TCP,
-                    handlers=[lambda **_: None],
-                )
+                # instance during startup; in unicast mode we must create one explicitly
+                # for each HAP transport type that may be enabled in aiohomekit.
+                for hap_type in (HAP_TYPE_TCP, HAP_TYPE_UDP):
+                    self._zc_hap_browsers.append(
+                        AsyncServiceBrowser(
+                            self._async_zeroconf.zeroconf,
+                            hap_type,
+                            handlers=[lambda **_: None],
+                        )
+                    )
             self._hk = HKController(async_zeroconf_instance=self._async_zeroconf)
             await self._hk.async_start()
             await self._start_websocket_server()
@@ -328,12 +334,13 @@ class HomeKitHubBridge:
         if self._hk:
             await self._hk.async_stop()
             self._hk = None
-        if self._zc_hap_browser is not None:
-            try:
-                await self._zc_hap_browser.async_cancel()
-            except Exception:
-                self.log.exception("AsyncServiceBrowser.async_cancel")
-            self._zc_hap_browser = None
+        if self._zc_hap_browsers:
+            for browser in self._zc_hap_browsers:
+                try:
+                    await browser.async_cancel()
+                except Exception:
+                    self.log.exception("AsyncServiceBrowser.async_cancel")
+            self._zc_hap_browsers = []
         if self._async_zeroconf is not None:
             try:
                 await self._async_zeroconf.async_close()
