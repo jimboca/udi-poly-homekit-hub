@@ -235,6 +235,7 @@ class Controller(Node):
         if data is not None:
             self.TypedData.load(data)
         self.handler_typed_data_st = True
+        self._auto_discover_if_needed_from_typed_update(data)
         self._maybe_restart_on_config_change()
 
     def handler_params(self, params):
@@ -383,6 +384,68 @@ class Controller(Node):
         except Exception:
             pass
         return out
+
+    def _typed_update_needs_discover(self, data: Any) -> bool:
+        """Auto-discover only for pairing-oriented edits that need selection help.
+
+        Trigger when at least one row has a PIN entered but no id/name filter,
+        and we do not have a useful last_hap_discover snapshot yet.
+        """
+        if not isinstance(data, dict):
+            return False
+        rows = data.get(TYPED_PAIRING_SLOTS_KEY)
+        if not isinstance(rows, list):
+            return False
+        has_pin_without_filter = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            pin = (row.get("hap_pin") or "").strip()
+            if not pin:
+                continue
+            acc_id = (row.get("accessory_id") or "").strip()
+            acc_name = (row.get("accessory_name") or "").strip()
+            if not acc_id and not acc_name:
+                has_pin_without_filter = True
+                break
+        if not has_pin_without_filter:
+            return False
+        try:
+            last = self.Data.get(DATA_KEY_LAST_HAP_DISCOVER)
+        except Exception:
+            last = None
+        if isinstance(last, list) and len(last) > 0:
+            return False
+        return True
+
+    def _auto_discover_if_needed_from_typed_update(self, data: Any) -> None:
+        """Run DISCOVER automatically for select typed-data updates."""
+        if not self._typed_update_needs_discover(data):
+            return
+        if not (self.ready and self.bridge and self.mainloop):
+            LOGGER.info(
+                "Typed update needs discover, but bridge is not ready yet; skipping auto-discover"
+            )
+            return
+        try:
+            LOGGER.info(
+                "Typed update has hap_pin with empty id/name and no cached discover; running auto-discover"
+            )
+            fut = asyncio.run_coroutine_threadsafe(
+                self.bridge.discover_collect(12.0), self.mainloop
+            )
+            rows = fut.result(timeout=30)
+            n = len(rows) if rows else 0
+            LOGGER.info("HomeKit auto-discover: scan finished, %d accessory(ies)", n)
+            self._present_hap_discover_results(rows or [])
+        except Exception as e:
+            self.report_error(
+                ERR_DISCOVER_SCAN,
+                "homekit_err_discover",
+                "HomeKit auto-discover scan failed",
+                exc=e,
+                log_message="HomeKit auto-discover: scan failed",
+            )
 
     def _append_pairing_rows_for_discover(self, discover_rows: list) -> int:
         """
