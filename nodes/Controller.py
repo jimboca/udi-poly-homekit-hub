@@ -35,6 +35,16 @@ ERR_BRIDGE_STOP = 6
 ERR_STATUS_UPDATE = 7
 
 BONJOUR_COMPARE_WINDOW_SECONDS = 12.0
+# Max time to wait for PG3 to deliver a BONJOUR payload after each ``poly.bonjour`` call.
+# Field reports show replies landing ~10s+ after the request; we cap much higher so TCP/UDP
+# diagnostics are not cut off. The loop exits immediately once any new payload arrives.
+BONJOUR_COMPARE_PROTOCOL_MAX_WAIT_SECONDS = 120.0
+# First argument to ``poly.bonjour(type, ...)`` during BONJOUR_COMPARE.
+# ``None`` leaves service type unfiltered.
+BONJOUR_COMPARE_PG3_SERVICE_TYPE: str | None = None
+# ``protocol`` argument(s) for ``poly.bonjour`` during BONJOUR_COMPARE.
+# ``None`` asks PG3 to query all protocols in one request.
+BONJOUR_COMPARE_PG3_PROTOCOLS: tuple[str | None, ...] = (None,)
 
 
 class Controller(Node):
@@ -1102,8 +1112,40 @@ class Controller(Node):
             try:
                 # Same shape as ioxplugin ``searchForDevicesUsingMDNS`` / udi_interface ``bonjour``:
                 # type, subtypes (None = no subtype filter), protocol per query.
-                self.poly.bonjour("_hap", None, "tcp")
-                self.poly.bonjour("_hap", None, "udp")
+                # Send sequentially (tcp first, then udp). After each request, wait until a
+                # BONJOUR event arrives or ``BONJOUR_COMPARE_PROTOCOL_MAX_WAIT_SECONDS`` elapses.
+                # This avoids interleaving when PG3 only handles one outstanding query cleanly.
+                for proto in BONJOUR_COMPARE_PG3_PROTOCOLS:
+                    with self._bonjour_lock:
+                        before = len(self._bonjour_buf)
+                    LOGGER.info(
+                        "BONJOUR_COMPARE: type=%r protocol=%s sending poly.bonjour "
+                        "(max wait %.1fs or first payload)",
+                        BONJOUR_COMPARE_PG3_SERVICE_TYPE,
+                        proto,
+                        BONJOUR_COMPARE_PROTOCOL_MAX_WAIT_SECONDS,
+                    )
+                    self.poly.bonjour(BONJOUR_COMPARE_PG3_SERVICE_TYPE, None, proto)
+                    deadline = time.monotonic() + BONJOUR_COMPARE_PROTOCOL_MAX_WAIT_SECONDS
+                    got_event = False
+                    while time.monotonic() < deadline:
+                        with self._bonjour_lock:
+                            now_n = len(self._bonjour_buf)
+                        if now_n > before:
+                            got_event = True
+                            LOGGER.info(
+                                "BONJOUR_COMPARE: protocol=%s received %d new payload(s); advancing",
+                                proto,
+                                now_n - before,
+                            )
+                            break
+                        time.sleep(0.05)
+                    if not got_event:
+                        LOGGER.warning(
+                            "BONJOUR_COMPARE: protocol=%s had no BONJOUR payload within %.1fs",
+                            proto,
+                            BONJOUR_COMPARE_PROTOCOL_MAX_WAIT_SECONDS,
+                        )
             except Exception as e:
                 LOGGER.exception("polyglot.bonjour() failed")
                 self.report_error(
@@ -1165,6 +1207,7 @@ class Controller(Node):
         result = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "window_seconds": BONJOUR_COMPARE_WINDOW_SECONDS,
+            "bonjour_pg3_service_type": BONJOUR_COMPARE_PG3_SERVICE_TYPE,
             "counts": {
                 "bonjour_payloads": len(bj_payloads),
                 "bonjour_records_normalized": len(bj_records),

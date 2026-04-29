@@ -75,3 +75,11 @@ These apply to the Node Server process (see `homekit-poly.py` for defaults such 
 | `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` | Use python-zeroconf unicast mode (avoids binding UDP 5353 when another mDNS stack owns it). |
 | `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Narrow or widen interface selection for zeroconf (BSD/macOS unicast may need `default` to reduce `sendto` errno 49 warnings). |
 | `HOMEKIT_HUB_ZEROCONF_IP_VERSION` | `v4` / `v6` / `all` | Force IP stack for zeroconf; on BSD/macOS in unicast mode the hub may default to IPv4-only unless you set `all`. |
+
+## PG3 Bonjour vs in-process zeroconf
+
+**Runtime:** Pairing and live HomeKit traffic use **`aiohomekit` with `AsyncZeroconf`** (mDNS listeners and the transport discovery cache). That path is required for stock `aiohomekit`; PG3’s **`polyglot.bonjour()`** results are **not** the same objects the library expects, so Bonjour data is **not** a drop-in replacement for zeroconf without a large custom adapter.
+
+**Diagnostics / UDI:** `polyglot.bonjour()` can still return useful LAN service rows (including HAP) for **comparison, evidence to UDI, or experiments**. What the first argument should be (`"_hap"`, `"hap"`, or `None`) and how `protocol` behaves are **defined by the PG3 server**, not only by `udi_interface`. Broad queries (`type=None`) have been observed to return more complete snapshots than a narrow type on some builds.
+
+**Branches:** **Main** may ship **zeroconf-only** to limit supported code paths. A **side branch** (e.g. Bonjour compare tooling) can keep PG3-specific diagnostics without committing to maintaining them in every release.
