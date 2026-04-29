@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, Dict, List, Optional, Set
 
+import markdown2
 from udi_interface import LOGGER, Custom, Node
 
 from homekit_hub import (
@@ -56,6 +57,8 @@ class Controller(Node):
         self.handler_typed_data_st = None
         self.handler_config_done_st = None
         self._config_snap: dict[str, Any] | None = None
+        self._known_paired_ids: Set[str] = set()
+        self._pair_success_notice_polls_remaining = 0
         self.mainloop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: Any = None
         self.bridge: HomeKitHubBridge | None = None
@@ -290,7 +293,134 @@ class Controller(Node):
             self.handler_data_st = False
             return
         self.Data.load(data)
+        self._maybe_post_pair_success_notice()
+        self._maybe_clear_hap_discover_notice_for_paired()
+        self._maybe_clear_pairing_error_notice_for_success()
         self.handler_data_st = True
+
+    def _current_paired_ids_from_data(self) -> Set[str]:
+        try:
+            pairings = self.Data.get("homekit_pairings")
+        except Exception:
+            return set()
+        if not isinstance(pairings, dict):
+            return set()
+        return {
+            str(v.get("AccessoryPairingID") or "").strip().lower()
+            for v in pairings.values()
+            if isinstance(v, dict) and str(v.get("AccessoryPairingID") or "").strip()
+        }
+
+    def _maybe_post_pair_success_notice(self) -> None:
+        """Post a transient notice when new pairing id(s) appear in customdata."""
+        current_ids = self._current_paired_ids_from_data()
+        new_ids = current_ids - self._known_paired_ids
+        self._known_paired_ids = set(current_ids)
+        if not new_ids:
+            return
+        ids_txt = ", ".join(sorted(new_ids))
+        self.Notices["homekit_pair_success"] = (
+            "<b>HomeKit pairing successful</b><br/>"
+            f"Paired device id(s): <code>{html.escape(ids_txt)}</code><br/>"
+            "This notice clears automatically after two long polls."
+        )
+        self._pair_success_notice_polls_remaining = 2
+        LOGGER.info(
+            "Posted transient pairing success notice for id(s): %s",
+            ids_txt,
+        )
+
+    def _maybe_clear_hap_discover_notice_for_paired(self) -> None:
+        """Clear stale DISCOVER notice when listed device is now paired here."""
+        try:
+            notice_text = self.Notices.get("hap_discover")
+        except Exception:
+            notice_text = None
+        if not notice_text:
+            return
+        try:
+            last = self.Data.get(DATA_KEY_LAST_HAP_DISCOVER)
+        except Exception:
+            last = None
+        if not isinstance(last, list) or not last:
+            return
+        discover_ids = {
+            str(r.get("id") or "").strip().lower()
+            for r in last
+            if isinstance(r, dict) and str(r.get("id") or "").strip()
+        }
+        if not discover_ids:
+            return
+        try:
+            pairings = self.Data.get("homekit_pairings")
+        except Exception:
+            pairings = None
+        if not isinstance(pairings, dict) or not pairings:
+            return
+        paired_ids = {
+            str(v.get("AccessoryPairingID") or "").strip().lower()
+            for v in pairings.values()
+            if isinstance(v, dict) and str(v.get("AccessoryPairingID") or "").strip()
+        }
+        if not paired_ids:
+            return
+        if discover_ids.isdisjoint(paired_ids):
+            return
+        try:
+            self.Notices.delete("hap_discover")
+        except Exception:
+            try:
+                del self.Notices["hap_discover"]
+            except Exception:
+                return
+        LOGGER.info(
+            "Cleared hap_discover notice: discovered device now paired by this plugin (%s)",
+            ", ".join(sorted(discover_ids & paired_ids)),
+        )
+
+    def _maybe_clear_pairing_error_notice_for_success(self) -> None:
+        """Clear stale pairing error notice after a successful saved pairing appears."""
+        try:
+            notice_text = self.Notices.get("homekit_err_config")
+        except Exception:
+            notice_text = None
+        if not notice_text:
+            return
+        text = str(notice_text)
+        if (
+            "HomeKit pairing code rejected" not in text
+            and "HomeKit pairing failed" not in text
+            and "pairing error" not in text
+        ):
+            return
+        try:
+            pairings = self.Data.get("homekit_pairings")
+        except Exception:
+            pairings = None
+        if not isinstance(pairings, dict):
+            return
+        paired_ids = {
+            str(v.get("AccessoryPairingID") or "").strip().lower()
+            for v in pairings.values()
+            if isinstance(v, dict) and str(v.get("AccessoryPairingID") or "").strip()
+        }
+        if not paired_ids:
+            return
+        try:
+            self.Notices.delete("homekit_err_config")
+        except Exception:
+            try:
+                del self.Notices["homekit_err_config"]
+            except Exception:
+                return
+        try:
+            self.setDriver("ERR", ERR_OK, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("Could not reset ERR after clearing pairing error notice")
+        LOGGER.info(
+            "Cleared homekit_err_config pairing error notice after successful pairing (%s)",
+            ", ".join(sorted(paired_ids)),
+        )
 
     def handler_typed_params(self, params):
         LOGGER.debug("customtypedparams received: %s", params)
@@ -317,6 +447,17 @@ class Controller(Node):
     def handler_start(self):
         self.Notices.clear()
         LOGGER.info("HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION)
+        cfg_md = Path(__file__).resolve().parent.parent / "CONFIG.md"
+        if cfg_md.is_file():
+            try:
+                self.poly.setCustomParamsDoc(
+                    markdown2.markdown_path(
+                        str(cfg_md),
+                        extras=["tables", "fenced-code-blocks"],
+                    )
+                )
+            except Exception:
+                LOGGER.exception("Failed to convert/set CONFIG.md as custom params doc")
 
         cnt = 60
         while (
@@ -410,6 +551,17 @@ class Controller(Node):
     def handler_poll(self, polltype):
         if polltype == "longPoll":
             self.heartbeat()
+            if self._pair_success_notice_polls_remaining > 0:
+                self._pair_success_notice_polls_remaining -= 1
+                if self._pair_success_notice_polls_remaining == 0:
+                    try:
+                        self.Notices.delete("homekit_pair_success")
+                    except Exception:
+                        try:
+                            del self.Notices["homekit_pair_success"]
+                        except Exception:
+                            pass
+                    LOGGER.info("Cleared transient pairing success notice after 2 longPolls")
 
     def handler_discover(self, _data=None):
         """Network scan: results are saved and shown in a Polyglot Notice (no log file needed).
@@ -602,13 +754,17 @@ class Controller(Node):
 
     def _append_pairing_rows_for_discover(self, discover_rows: list) -> tuple[int, int, int]:
         """
-        Sync unpaired DISCOVER results into **Custom Typed** ``pairing_slots``:
+        Sync DISCOVER results into **Custom Typed** ``pairing_slots``:
 
         - **Merge**: existing row with same ``accessory_id`` gets missing ``accessory_name``
           and ``discover_endpoint`` refreshed from the scan.
         - **Fill**: empty placeholder rows (no PIN, no id, no name — slot-only is ok)
-          consume unpaired devices not yet listed.
-        - **Append**: remaining unpaired devices get new rows.
+          consume discover devices not yet listed.
+        - **Append**: remaining discover devices get new rows.
+
+        Preferred source is unpaired devices. If none are unpaired, we still seed rows
+        from paired discoveries so users who deleted a row can re-create it via DISCOVER
+        without manually typing accessory id/name.
 
         Each row is pre-filled with ``accessory_id``, ``accessory_name``, optional
         ``discover_endpoint``, and an unused **slot** number; user adds ``hap_pin`` and saves.
@@ -618,7 +774,9 @@ class Controller(Node):
         if not discover_rows:
             return (0, 0, 0)
         unpaired = [r for r in discover_rows if isinstance(r, dict) and not r.get("paired")]
-        if not unpaired:
+        paired = [r for r in discover_rows if isinstance(r, dict) and r.get("paired")]
+        candidates = unpaired if unpaired else paired
+        if not candidates:
             return (0, 0, 0)
         try:
             raw = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
@@ -632,7 +790,7 @@ class Controller(Node):
         used_slots = self._used_pairing_slots_from_rows(current)
 
         by_id: dict[str, dict[str, Any]] = {}
-        for r in unpaired:
+        for r in candidates:
             pid = (str(r.get("id") or "")).strip().lower()
             if pid:
                 by_id[pid] = r
@@ -779,14 +937,22 @@ class Controller(Node):
 
         unpaired = [r for r in rows if not r.get("paired")]
         paired = [r for r in rows if r.get("paired")]
+        n_typed_total = n_appended + n_filled + n_merged
+        if n_typed_total:
+            typed_blurb = (
+                "<b>Custom Typed &gt; HomeKit pairing slots</b> is updated with "
+                "<b>slot</b>, <b>accessory id</b>, <b>name</b>, and <b>LAN host:port</b> (informational) "
+                "where needed."
+            )
+        else:
+            typed_blurb = (
+                "<b>Custom Typed &gt; HomeKit pairing slots</b> was checked, with no row changes in this scan."
+            )
         parts = [
             "<b>HomeKit discover</b> — <code>last_hap_discover</code> is saved and "
-            "<b>Custom Typed &gt; HomeKit pairing slots</b> is updated with "
-            "<b>slot</b>, <b>accessory id</b>, <b>name</b>, and <b>LAN host:port</b> (informational) "
-            "where needed. <b>Enter only the HomeKit pairing code</b> on each target row, then save.<br/>"
+            f"{typed_blurb} <b>Enter only the HomeKit pairing code</b> on each target row, then save.<br/>"
             f"(Snapshot: <code>{html.escape(DATA_KEY_LAST_HAP_DISCOVER)}</code>.)<br/>",
         ]
-        n_typed_total = n_appended + n_filled + n_merged
         if n_appended:
             parts.append(f"Added <b>{n_appended}</b> new row(s) for unpaired accessories.<br/>")
         if n_filled:

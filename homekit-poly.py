@@ -2,7 +2,6 @@
 """Polyglot PG3x HomeKit Hub Node Server entry point."""
 import os
 import sys
-from threading import Thread
 
 from udi_interface import Interface, LOGGER
 
@@ -20,10 +19,6 @@ def main() -> None:
         polyglot = Interface([Controller])
         polyglot.start(VERSION)
         polyglot.updateProfile()
-        _cfg = os.path.join(os.path.dirname(__file__), "CONFIG.md")
-        if os.path.isfile(_cfg):
-            with open(_cfg, encoding="utf-8") as _fp:
-                polyglot.setCustomParamsDoc(_fp.read())
         Controller(polyglot, "controller", "controller", "HomeKit Hub")
         polyglot.runForever()
     except (KeyboardInterrupt, SystemExit):

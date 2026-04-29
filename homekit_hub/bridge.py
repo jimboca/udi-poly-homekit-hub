@@ -16,14 +16,12 @@ import sys
 from typing import Any, Callable, Optional
 
 import websockets
-from zeroconf import ServiceStateChange
-from zeroconf._utils.net import InterfaceChoice, IPVersion
+from zeroconf import InterfaceChoice, IPVersion, ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
 from aiohomekit import Controller as HKController
 from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
-from aiohomekit.model.status_flags import StatusFlags
 from aiohomekit.uuid import normalize_uuid
 
 PROTOCOL_VERSION = "1"
@@ -519,7 +517,7 @@ class HomeKitHubBridge:
         )
         seen_ids: set[str] = set()
         rows: list[dict[str, Any]] = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + float(timeout)
         interval = 0.5
 
@@ -676,7 +674,7 @@ class HomeKitHubBridge:
                 return None
             return discovery
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         while loop.time() < end:
             for discovery in self._iter_transport_discoveries():
@@ -1293,16 +1291,24 @@ class HomeKitHubBridge:
         except Exception as e:
             self.log.exception("Slot %s: pairing failed", slot_num)
             if self._pairing_notice:
-                title = (
-                    "HomeKit pairing code rejected"
-                    if isinstance(e, AuthenticationError)
-                    else "HomeKit pairing failed"
-                )
+                if isinstance(e, AuthenticationError):
+                    title = "HomeKit pairing code rejected"
+                    detail = (
+                        f"Slot {slot_num}: accessory rejected the pairing code. "
+                        "Re-enter the HomeKit setup code exactly as shown on the device and try again."
+                    )
+                    # AuthenticationError string payloads can contain low-level bytearray details
+                    # that are confusing in PG3 notices; keep traceback in logs, show clean guidance in UI.
+                    notice_exc: Optional[Exception] = None
+                else:
+                    title = "HomeKit pairing failed"
+                    detail = f"Slot {slot_num}: pairing error"
+                    notice_exc = e
                 self._pairing_notice(
                     ERR_PAIRING_FAILED,
                     title,
-                    f"Slot {slot_num}: pairing error",
-                    e,
+                    detail,
+                    notice_exc,
                 )
             return
 
