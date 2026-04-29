@@ -17,7 +17,9 @@ from homekit_hub import (
     DATA_KEY_LAST_HAP_DISCOVER,
     TYPED_PAIRING_SLOTS_KEY,
     HomeKitHubBridge,
+    normalize_hap_pin,
 )
+from homekit_hub.bridge import _parse_slot_value
 
 from nodes import VERSION
 
@@ -107,6 +109,11 @@ class Controller(Node):
                             "title": "Name substring (optional; same as id — only needed to disambiguate multiple devices)",
                             "isRequired": False,
                         },
+                        {
+                            "name": "discover_endpoint",
+                            "title": "LAN host:port from last DISCOVER (informational; optional)",
+                            "isRequired": False,
+                        },
                     ],
                 }
             ],
@@ -127,10 +134,38 @@ class Controller(Node):
         return rows
 
     def _bridge_get_data(self) -> dict[str, Any]:
-        return {k: self.Data[k] for k in self.Data.keys()}
+        data = {k: self.Data[k] for k in self.Data.keys()}
+        try:
+            raw_pairings = data.get("homekit_pairings")
+            if isinstance(raw_pairings, dict):
+                pairing_slots = sorted(str(k) for k in raw_pairings.keys())
+            else:
+                pairing_slots = []
+            raw_discover = data.get(DATA_KEY_LAST_HAP_DISCOVER)
+            discover_count = len(raw_discover) if isinstance(raw_discover, list) else 0
+            LOGGER.debug(
+                "bridge_get_data snapshot: keys=%s homekit_pairings_slots=%s last_hap_discover_count=%d",
+                sorted(list(data.keys())),
+                pairing_slots,
+                discover_count,
+            )
+        except Exception:
+            LOGGER.debug("bridge_get_data snapshot logging failed")
+        return data
 
     def _bridge_set_data(self, data: dict[str, Any]) -> None:
-        self.Data.load(data)
+        # Persist bridge-written custom data (homekit_pairings / last_hap_discover)
+        # so slots and discovery snapshots survive restart.
+        self.Data.load(data, save=True)
+        try:
+            LOGGER.debug(
+                "customdata saved by bridge: keys=%s has_pairings=%s has_last_hap_discover=%s",
+                sorted(list(data.keys())),
+                "homekit_pairings" in data,
+                DATA_KEY_LAST_HAP_DISCOVER in data,
+            )
+        except Exception:
+            LOGGER.debug("customdata saved by bridge (key introspection failed)")
 
     def _pairing_notice_callback(
         self,
@@ -140,12 +175,16 @@ class Controller(Node):
         exc: Optional[Exception],
     ) -> None:
         """Bridge runs on the asyncio thread; Notices + ERR must be PG3-visible."""
+        extra_html = ""
+        if log_message:
+            extra_html = f"{html.escape(log_message)}<br/>"
         self.report_error(
             code,
             "homekit_err_config",
             title,
             exc=exc,
             log_message=log_message,
+            extra_html=extra_html,
         )
 
     def _config_restart_snap(self) -> dict[str, Any]:
@@ -219,14 +258,17 @@ class Controller(Node):
             except Exception:
                 pass
 
-    def clear_hub_error_indicators(self) -> None:
-        """Reset error code and clear hub error notices after a healthy start (not DISCOVER results)."""
-        for key in (
-            "homekit_bridge",
-            "homekit_err_discover",
-            "homekit_err_config",
-            "homekit_meta",
-        ):
+    def clear_hub_error_indicators(self, *, keep_config_notice: bool = False) -> None:
+        """Reset error code and clear hub error notices after a healthy start.
+
+        ``keep_config_notice=True`` preserves ``homekit_err_config`` notices emitted
+        during startup (for example, PIN-only rows with missing customdata) so the
+        user can see guidance in the PG3 UI.
+        """
+        keys = ["homekit_bridge", "homekit_err_discover", "homekit_meta"]
+        if not keep_config_notice:
+            keys.append("homekit_err_config")
+        for key in keys:
             try:
                 self.Notices.delete(key)
             except Exception:
@@ -262,6 +304,7 @@ class Controller(Node):
             self.TypedData.load(data)
         self.handler_typed_data_st = True
         # Use TypedData after load — PG3 may send a partial ``data`` dict without ``pairing_slots``.
+        self._normalize_and_persist_typed_pairing_pins()
         self._auto_discover_if_needed_from_typed_update()
         self._maybe_restart_on_config_change()
 
@@ -293,6 +336,9 @@ class Controller(Node):
             cnt -= 1
         if cnt == 0:
             LOGGER.error("Timeout waiting for custom params/data/typed config")
+
+        # One-shot migration: dashed PIN in UI for codes stored without dashes.
+        self._normalize_and_persist_typed_pairing_pins()
 
         self.mainloop = asyncio.new_event_loop()
 
@@ -335,7 +381,8 @@ class Controller(Node):
             )
             return
 
-        self.clear_hub_error_indicators()
+        # Keep startup config guidance notices from bridge.start() visible in UI.
+        self.clear_hub_error_indicators(keep_config_notice=True)
         self.setDriver("ST", 1)
         self.heartbeat()
         self.ready = True
@@ -413,6 +460,45 @@ class Controller(Node):
             pass
         return out
 
+    def _normalize_and_persist_typed_pairing_pins(self) -> bool:
+        """Persist ``hap_pin`` in Custom Typed pairing rows as ``XXX-XX-XXX`` when it is 8 digits.
+
+        Applies to newly entered undashed codes and upgrades existing stored values.
+        """
+        try:
+            raw = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return False
+        if not isinstance(raw, list):
+            return False
+        new_rows: List[Any] = []
+        changed = False
+        for item in raw:
+            if not isinstance(item, dict):
+                new_rows.append(item)
+                continue
+            row = dict(item)
+            pin_raw = row.get("hap_pin")
+            pin_in = "" if pin_raw is None else str(pin_raw).strip()
+            norm = normalize_hap_pin(pin_in)
+            if norm != pin_in:
+                row["hap_pin"] = norm
+                changed = True
+            new_rows.append(row)
+        if not changed:
+            return False
+        try:
+            td = self._typed_data_dict()
+            td[TYPED_PAIRING_SLOTS_KEY] = new_rows
+            self.TypedData.load(td, save=True)
+        except Exception:
+            LOGGER.exception(
+                "Failed to persist normalized HomeKit pairing PINs to Custom Typed data"
+            )
+            return False
+        LOGGER.info("Updated Custom Typed pairing slot PIN(s) to dashed XXX-XX-XXX form")
+        return True
+
     def _typed_update_needs_discover(self) -> bool:
         """Auto-discover only for pairing-oriented edits that need selection help.
 
@@ -476,48 +562,156 @@ class Controller(Node):
                 log_message="HomeKit auto-discover: scan failed",
             )
 
-    def _append_pairing_rows_for_discover(self, discover_rows: list) -> int:
+    @staticmethod
+    def _discover_endpoint_str(r: dict[str, Any]) -> str:
+        h = (str(r.get("host") or "")).strip()
+        p = r.get("port")
+        if h and p is not None and str(p).strip() != "":
+            return f"{h}:{p}"
+        return ""
+
+    @staticmethod
+    def _pairing_row_needs_discover_fill(row: dict[str, Any]) -> bool:
+        """True if row has no PIN and no id/name — safe to fill from DISCOVER."""
+        if (row.get("hap_pin") or "").strip():
+            return False
+        if (row.get("accessory_id") or "").strip():
+            return False
+        if (row.get("accessory_name") or "").strip():
+            return False
+        return True
+
+    @staticmethod
+    def _take_next_free_slot(used: Set[int]) -> int:
+        """Smallest positive integer not in ``used``; adds it to ``used``."""
+        n = 1
+        while n in used:
+            n += 1
+        used.add(n)
+        return n
+
+    def _used_pairing_slots_from_rows(self, rows: List[dict[str, Any]]) -> Set[int]:
+        out: Set[int] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sn = _parse_slot_value(row.get("slot"))
+            if sn is not None:
+                out.add(sn)
+        return out
+
+    def _append_pairing_rows_for_discover(self, discover_rows: list) -> tuple[int, int, int]:
         """
-        For each unpaired accessory in the discover result, add a HomeKit pairing slots
-        row (accessory_id / accessory_name filled, hap_pin empty) if that id is not
-        already present. Persists custom typed data via udi_interface Custom.load(..., save=True).
+        Sync unpaired DISCOVER results into **Custom Typed** ``pairing_slots``:
+
+        - **Merge**: existing row with same ``accessory_id`` gets missing ``accessory_name``
+          and ``discover_endpoint`` refreshed from the scan.
+        - **Fill**: empty placeholder rows (no PIN, no id, no name — slot-only is ok)
+          consume unpaired devices not yet listed.
+        - **Append**: remaining unpaired devices get new rows.
+
+        Each row is pre-filled with ``accessory_id``, ``accessory_name``, optional
+        ``discover_endpoint``, and an unused **slot** number; user adds ``hap_pin`` and saves.
+
+        Returns ``(n_appended, n_filled_blanks, n_merged)``.
         """
         if not discover_rows:
-            return 0
+            return (0, 0, 0)
         unpaired = [r for r in discover_rows if isinstance(r, dict) and not r.get("paired")]
         if not unpaired:
-            return 0
+            return (0, 0, 0)
         try:
             raw = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
         except Exception:
             raw = None
         if not isinstance(raw, list):
-            current: List[Dict[str, Any]] = []
+            current = []
         else:
             current = [dict(x) for x in raw if isinstance(x, dict)]
+
+        used_slots = self._used_pairing_slots_from_rows(current)
+
+        by_id: dict[str, dict[str, Any]] = {}
+        for r in unpaired:
+            pid = (str(r.get("id") or "")).strip().lower()
+            if pid:
+                by_id[pid] = r
+
         seen: Set[str] = set()
         for row in current:
             aid = (row.get("accessory_id") or "").strip().lower()
             if aid:
                 seen.add(aid)
-        added = 0
+
+        n_merged = 0
+        for row in current:
+            if not isinstance(row, dict):
+                continue
+            pid = (row.get("accessory_id") or "").strip().lower()
+            if not pid or pid not in by_id:
+                continue
+            r = by_id[pid]
+            changed = False
+            pname = (str(r.get("name") or "")).strip()
+            if pname and not (row.get("accessory_name") or "").strip():
+                row["accessory_name"] = pname
+                changed = True
+            ep = self._discover_endpoint_str(r)
+            if ep and (row.get("discover_endpoint") or "").strip() != ep:
+                row["discover_endpoint"] = ep
+                changed = True
+            if _parse_slot_value(row.get("slot")) is None:
+                row["slot"] = str(self._take_next_free_slot(used_slots))
+                changed = True
+            if changed:
+                n_merged += 1
+
+        blank_idxs = [i for i, row in enumerate(current) if isinstance(row, dict) and self._pairing_row_needs_discover_fill(row)]
+        bi = 0
+        n_filled = 0
+        for r in unpaired:
+            pid = (str(r.get("id") or "")).strip().lower()
+            if not pid or pid in seen:
+                continue
+            if bi >= len(blank_idxs):
+                break
+            idx = blank_idxs[bi]
+            bi += 1
+            row = current[idx]
+            pname = (str(r.get("name") or "")).strip()
+            row["accessory_id"] = pid
+            if pname:
+                row["accessory_name"] = pname
+            ep = self._discover_endpoint_str(r)
+            if ep:
+                row["discover_endpoint"] = ep
+            row.setdefault("hap_pin", "")
+            if _parse_slot_value(row.get("slot")) is None:
+                row["slot"] = str(self._take_next_free_slot(used_slots))
+            seen.add(pid)
+            n_filled += 1
+
+        n_appended = 0
         for r in unpaired:
             pid = (str(r.get("id") or "")).strip().lower()
             if not pid or pid in seen:
                 continue
             pname = (str(r.get("name") or "")).strip()
-            current.append(
-                {
-                    "slot": "",
-                    "hap_pin": "",
-                    "accessory_id": pid,
-                    "accessory_name": pname,
-                }
-            )
+            ep = self._discover_endpoint_str(r)
+            new_row: Dict[str, Any] = {
+                "slot": str(self._take_next_free_slot(used_slots)),
+                "hap_pin": "",
+                "accessory_id": pid,
+                "accessory_name": pname,
+            }
+            if ep:
+                new_row["discover_endpoint"] = ep
+            current.append(new_row)
             seen.add(pid)
-            added += 1
-        if added == 0:
-            return 0
+            n_appended += 1
+
+        if n_appended == 0 and n_filled == 0 and n_merged == 0:
+            return (0, 0, 0)
         try:
             td = self._typed_data_dict()
             td[TYPED_PAIRING_SLOTS_KEY] = current
@@ -530,10 +724,10 @@ class Controller(Node):
                 exc=e,
                 log_message="Failed to save Custom Typed data after discover",
             )
-            return 0
+            return (0, 0, 0)
         if self.ready:
             self._maybe_restart_on_config_change()
-        return added
+        return (n_appended, n_filled, n_merged)
 
     def _present_hap_discover_results(self, rows: list, *, source: str = "manual") -> None:
         """Persist discover snapshot and UI notice.
@@ -555,11 +749,19 @@ class Controller(Node):
         except Exception:
             d = {}
         d[DATA_KEY_LAST_HAP_DISCOVER] = list(rows) if rows else []
-        self.Data.load(d)
-
-        n_typed = 0
+        self.Data.load(d, save=True)
         try:
-            n_typed = self._append_pairing_rows_for_discover(rows)
+            LOGGER.debug(
+                "customdata saved after discover: rows=%d keys=%s",
+                len(rows) if rows else 0,
+                sorted(list(d.keys())),
+            )
+        except Exception:
+            LOGGER.debug("customdata saved after discover (key introspection failed)")
+
+        n_appended = n_filled = n_merged = 0
+        try:
+            n_appended, n_filled, n_merged = self._append_pairing_rows_for_discover(rows)
         except Exception as e:
             self.report_error(
                 ERR_APPEND_PAIRING,
@@ -578,14 +780,32 @@ class Controller(Node):
         unpaired = [r for r in rows if not r.get("paired")]
         paired = [r for r in rows if r.get("paired")]
         parts = [
-            "<b>HomeKit discover</b> — <code>last_hap_discover</code> and "
-            f"<b>Custom Typed &gt; HomeKit pairing slots</b> are updated. "
-            f"Enter the HomeKit pairing code on the new row(s) and save."
-            f" (Snapshot: <code>{html.escape(DATA_KEY_LAST_HAP_DISCOVER)}</code>.)<br/>",
+            "<b>HomeKit discover</b> — <code>last_hap_discover</code> is saved and "
+            "<b>Custom Typed &gt; HomeKit pairing slots</b> is updated with "
+            "<b>slot</b>, <b>accessory id</b>, <b>name</b>, and <b>LAN host:port</b> (informational) "
+            "where needed. <b>Enter only the HomeKit pairing code</b> on each target row, then save.<br/>"
+            f"(Snapshot: <code>{html.escape(DATA_KEY_LAST_HAP_DISCOVER)}</code>.)<br/>",
         ]
-        if n_typed:
+        n_typed_total = n_appended + n_filled + n_merged
+        if n_appended:
+            parts.append(f"Added <b>{n_appended}</b> new row(s) for unpaired accessories.<br/>")
+        if n_filled:
             parts.append(
-                f"Added <b>{n_typed}</b> new row(s) for unpaired accessories (existing rows unchanged).<br/>"
+                f"Filled <b>{n_filled}</b> empty row(s) (no PIN / id / name yet) with discover details.<br/>"
+            )
+        if n_merged:
+            parts.append(
+                f"Refreshed <b>{n_merged}</b> existing row(s) with the latest discover name or address.<br/>"
+            )
+        if not n_typed_total:
+            parts.append(
+                "No changes to <b>HomeKit pairing slots</b> (every unpaired device already had a row, "
+                "or none were unpaired).<br/>"
+            )
+        if n_typed_total:
+            parts.append(
+                "<b>Refresh</b> the node server <b>configuration</b> page (reload the editor) "
+                "to see updated rows under <b>Custom Typed</b> &gt; <b>HomeKit pairing slots</b>.<br/>"
             )
         if unpaired:
             parts.append("<b>Unpaired (ready to pair with this hub):</b><ul>")
@@ -613,9 +833,15 @@ class Controller(Node):
     def _on_bonjour_event(self, payload: Any) -> None:
         """Capture BONJOUR responses while a comparison is active.
 
-        PG3's BONJOUR payload schema is undocumented; we keep the raw payload
-        verbatim so the comparison file shows exactly what PG3 sent.
+        Matches the IoX / ``ioxplugin`` pattern: Polyglot delivers the same dict
+        ``__bonjourHandler`` sees — typically ``command``, ``mdns``, ``success``.
+        We keep the raw payload verbatim in the compare JSON.
         """
+        if isinstance(payload, dict):
+            cmd = payload.get("command")
+            if cmd is not None and cmd != "bonjour":
+                LOGGER.debug("BONJOUR event ignored during compare (unexpected command=%r)", cmd)
+                return
         with self._bonjour_lock:
             if not self._bonjour_active:
                 return
@@ -650,7 +876,8 @@ class Controller(Node):
                 continue
             if not isinstance(payload, dict):
                 continue
-            for key in ("services", "records", "mdns", "results", "bonjour"):
+            # IoX template uses message["mdns"] (see iox_controller_template.__bonjourHandler).
+            for key in ("mdns", "services", "records", "results", "bonjour"):
                 if isinstance(payload.get(key), list):
                     for item in payload[key]:
                         _push(item)
@@ -681,6 +908,11 @@ class Controller(Node):
         ``logs/bonjour_compare_<timestamp>.json`` and to
         ``Custom('compare')['bonjour_compare_last']``. Posts a Notice with
         per-source counts and overlap. See ``BONJOUR_FEASIBILITY.md``.
+
+        The heavy work runs on a background thread so the Polyglot **Command**
+        thread can dequeue incoming ``bonjour`` MQTT replies and deliver
+        ``BONJOUR`` events. Blocking this thread on ``Future.result()`` would
+        otherwise stall those responses (empty ``_bonjour_buf``).
         """
         if not (self.bridge and self.mainloop):
             self.report_error(
@@ -690,13 +922,20 @@ class Controller(Node):
                 log_message="cmd_bonjour_compare: bridge not ready",
             )
             return
+        LOGGER.info("BONJOUR_COMPARE: starting background worker (Command thread returns immediately)")
+        Thread(target=self._bonjour_compare_worker, name="bonjour_compare", daemon=True).start()
 
+    def _bonjour_compare_worker(self) -> None:
+        """Run BONJOUR compare off the Command thread (see ``cmd_bonjour_compare``)."""
+        bj_payloads: list[Any] = []
         with self._bonjour_lock:
             self._bonjour_buf = []
             self._bonjour_active = True
 
         try:
             try:
+                # Same shape as ioxplugin ``searchForDevicesUsingMDNS`` / udi_interface ``bonjour``:
+                # type, subtypes (None = no subtype filter), protocol per query.
                 self.poly.bonjour("_hap", None, "tcp")
                 self.poly.bonjour("_hap", None, "udp")
             except Exception as e:
@@ -739,6 +978,10 @@ class Controller(Node):
                     "Raw zeroconf scan failed during BONJOUR compare",
                     exc=e,
                 )
+
+            # Let the Command thread finish dequeuing BONJOUR for any replies
+            # that land immediately after the asyncio window.
+            time.sleep(0.25)
 
             with self._bonjour_lock:
                 bj_payloads = list(self._bonjour_buf)
@@ -791,7 +1034,7 @@ class Controller(Node):
         try:
             with out_path.open("w", encoding="utf-8") as fh:
                 json.dump(result, fh, indent=2, default=str)
-            LOGGER.info("BONJOUR_COMPARE: wrote %s", out_path)
+            LOGGER.info("BONJOUR_COMPARE: worker wrote %s", out_path)
         except Exception:
             LOGGER.exception("write %s", out_path)
 

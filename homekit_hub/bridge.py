@@ -302,6 +302,26 @@ def _subscribable_characteristics(pairing) -> list[tuple[int, int]]:
     return out
 
 
+def _readable_characteristics(pairing) -> list[tuple[int, int, str]]:
+    """Return (aid, iid, characteristic_label) for readable characteristics."""
+    out: list[tuple[int, int, str]] = []
+    if not pairing.accessories:
+        return out
+    read_tokens = {
+        str(getattr(CharacteristicPermissions, "paired_read", "paired_read")),
+        str(getattr(CharacteristicPermissions, "read", "read")),
+        "pr",
+    }
+    for acc in pairing.accessories:
+        aid = acc.aid
+        for svc in acc.services:
+            for ch in svc.characteristics:
+                perms = {str(p) for p in (getattr(ch, "perms", None) or [])}
+                if perms & read_tokens:
+                    out.append((aid, ch.iid, characteristic_label(ch.type)))
+    return out
+
+
 class HomeKitHubBridge:
     """Multi-pairing HomeKit hub: WebSocket server + fan-out events."""
 
@@ -383,8 +403,11 @@ class HomeKitHubBridge:
                     )
             self._hk = HKController(async_zeroconf_instance=self._async_zeroconf)
             await self._hk.async_start()
-            await self._start_websocket_server()
+            # Load pairings before accepting WebSocket clients; otherwise an immediate
+            # ``list_devices`` runs while ``self._hk.pairings`` is still empty (events
+            # appear only after ``_sync_pairing_from_params`` finishes).
             await self._sync_pairing_from_params()
+            await self._start_websocket_server()
         except Exception:
             await self._abort_start()
             raise
@@ -745,6 +768,12 @@ class HomeKitHubBridge:
         if action == "command":
             await self._handle_command(ws, msg)
             return
+        if action == "snapshot":
+            await self._handle_snapshot(ws, msg)
+            return
+        if action == "list_devices":
+            await self._handle_list_devices(ws, msg)
+            return
         await self._send_ws(
             ws,
             {
@@ -753,6 +782,36 @@ class HomeKitHubBridge:
                 "message": f"unknown action {action!r}",
             },
         )
+
+    def _active_pairing_device_ids(self) -> list[str]:
+        """Sorted AccessoryPairingID values for aiohomekit pairings in memory.
+
+        Union of ``Controller.pairings`` keys and ``pairing.id`` from ``aliases`` so
+        ``list_devices`` stays consistent with event ``device_id`` even if one map is
+        briefly empty during startup or transport quirks.
+        """
+        hk = self._hk
+        if not hk:
+            return []
+        ids: set[str] = set()
+        pr = getattr(hk, "pairings", None)
+        if isinstance(pr, dict):
+            for k in pr.keys():
+                s = str(k).strip().lower()
+                if s:
+                    ids.add(s)
+        al = getattr(hk, "aliases", None)
+        if isinstance(al, dict):
+            for pairing in al.values():
+                if pairing is None:
+                    continue
+                pid = getattr(pairing, "id", None)
+                if pid is None:
+                    continue
+                s = str(pid).strip().lower()
+                if s:
+                    ids.add(s)
+        return sorted(ids)
 
     def _pairing_for_device_id(self, device_id: str):
         if not self._hk:
@@ -827,6 +886,99 @@ class HomeKitHubBridge:
         await self._send_ws(
             ws,
             {"version": PROTOCOL_VERSION, "action": "ack", "for": "command"},
+        )
+
+    async def _handle_snapshot(self, ws: Any, msg: dict) -> None:
+        device_id = (msg.get("device_id") or "").strip().lower()
+        pairing = self._pairing_for_device_id(device_id) if device_id else None
+        if not pairing:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "snapshot",
+                    "message": "unknown device_id or no active pairing",
+                },
+            )
+            return
+
+        readable = _readable_characteristics(pairing)
+        if not readable:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "snapshot",
+                    "device_id": device_id,
+                    "values": [],
+                },
+            )
+            return
+
+        pairs = [(aid, iid) for aid, iid, _ in readable]
+        labels = {(aid, iid): label for aid, iid, label in readable}
+        try:
+            result = await pairing.get_characteristics(pairs)
+        except Exception as ex:
+            self.log.exception("get_characteristics failed")
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "snapshot",
+                    "message": str(ex),
+                },
+            )
+            return
+
+        values: list[dict[str, Any]] = []
+        for aid, iid in pairs:
+            payload = result.get((aid, iid), {})
+            if not isinstance(payload, dict):
+                payload = {}
+            item: dict[str, Any] = {
+                "aid": aid,
+                "iid": iid,
+                "characteristic": labels.get((aid, iid), f"{aid}.{iid}"),
+            }
+            if "value" in payload:
+                item["value"] = payload.get("value")
+            if "status" in payload:
+                item["status"] = payload.get("status")
+            values.append(item)
+
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "snapshot",
+                "device_id": device_id,
+                "values": values,
+            },
+        )
+
+    async def _handle_list_devices(self, ws: Any, msg: dict) -> None:
+        del msg  # currently unused; kept for future request options
+        if not self._hk:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "list_devices",
+                    "devices": [],
+                },
+            )
+            return
+        device_ids = self._active_pairing_device_ids()
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "list_devices",
+                "devices": [{"device_id": did} for did in device_ids],
+            },
         )
 
     async def _send_ws(self, ws: Any, obj: dict) -> None:
@@ -914,6 +1066,7 @@ class HomeKitHubBridge:
         assigned = assign_pairing_slot_rows(rows, self.log)
         configured_slots = {n for n, _ in assigned}
         blob = self._get_pairings_blob()
+        consumed_saved_slot_keys: set[str] = set()
 
         # Orphan slots: saved in homekit_pairings but no typed row for that slot anymore
         for sk in list(blob.keys()):
@@ -953,6 +1106,8 @@ class HomeKitHubBridge:
             saved = blob.get(slot_key)
             if isinstance(saved, dict) and not saved.get("AccessoryPairingID"):
                 saved = None
+            if saved:
+                consumed_saved_slot_keys.add(slot_key)
 
             if not pin:
                 if saved and self._hk:
@@ -971,6 +1126,83 @@ class HomeKitHubBridge:
                     self._set_pairings_blob(blob)
                 await self._close_alias_if_present(alias)
                 continue
+
+            # Startup guard: PIN-only row with no saved customdata and no discover
+            # snapshot cannot be restored or targeted, and attempting fresh pairing
+            # just spams "already paired" warnings while scanning.
+            if (
+                not saved
+                and not acc_id
+                and not acc_name
+            ):
+                raw = self._get_custom_data()
+                last = raw.get(DATA_KEY_LAST_HAP_DISCOVER) if isinstance(raw, dict) else None
+                has_last_discover = isinstance(last, list) and len(last) > 0
+                has_any_saved_pairings = any(
+                    isinstance(v, dict) and v.get("AccessoryPairingID")
+                    for v in blob.values()
+                )
+                if not has_last_discover and not has_any_saved_pairings:
+                    self.log.warning(
+                        "Slot %s: skipping auto-pair for PIN-only row; customdata has no saved pairings "
+                        "and no %s snapshot. Run DISCOVER (or set accessory_id/name) before pairing.",
+                        slot_num,
+                        DATA_KEY_LAST_HAP_DISCOVER,
+                    )
+                    if self._pairing_notice:
+                        self._pairing_notice(
+                            ERR_PAIRING_NO_TARGET,
+                            "HomeKit pairing skipped: missing saved data",
+                            f"Slot {slot_num}: PIN-only row cannot be restored because customdata has no "
+                            f"saved pairings and no {DATA_KEY_LAST_HAP_DISCOVER} snapshot. Run DISCOVER, "
+                            "then enter/save the pairing code on the correct row.",
+                            None,
+                        )
+                    continue
+
+            # Resilience path for older configs: if this row has no id/name filter and
+            # no blob at its current slot, try a unique unclaimed saved pairing blob.
+            # This helps recover when slot numbering changed but pairing data still exists.
+            if (
+                not saved
+                and not acc_id
+                and not acc_name
+            ):
+                candidates: list[tuple[str, dict[str, Any]]] = []
+                for bkey, bval in blob.items():
+                    if bkey in consumed_saved_slot_keys:
+                        continue
+                    if not isinstance(bval, dict):
+                        continue
+                    if not bval.get("AccessoryPairingID"):
+                        continue
+                    candidates.append((bkey, bval))
+                if len(candidates) == 1:
+                    from_key, from_saved = candidates[0]
+                    saved = from_saved
+                    consumed_saved_slot_keys.add(from_key)
+                    self.log.info(
+                        "Slot %s: recovering saved pairing from prior slot %s for PIN-only row",
+                        slot_num,
+                        from_key,
+                    )
+                    if from_key != slot_key:
+                        blob[slot_key] = from_saved
+                        del blob[from_key]
+                        self._set_pairings_blob(blob)
+                        self.log.info(
+                            "Slot %s: moved recovered pairing blob from slot %s to %s",
+                            slot_num,
+                            from_key,
+                            slot_key,
+                        )
+                elif len(candidates) > 1:
+                    self.log.warning(
+                        "Slot %s: multiple saved pairings exist (%d); cannot auto-select for PIN-only row. "
+                        "Set slot explicitly or fill accessory_id/accessory_name.",
+                        slot_num,
+                        len(candidates),
+                    )
 
             if saved:
                 try:
@@ -1019,6 +1251,15 @@ class HomeKitHubBridge:
             accessory_id, accessory_name, timeout=30.0
         )
         if not matched:
+            paired_seen = False
+            if not accessory_id and not accessory_name:
+                try:
+                    for discovery in self._iter_transport_discoveries():
+                        if getattr(discovery, "paired", False):
+                            paired_seen = True
+                            break
+                except Exception:
+                    paired_seen = False
             self.log.error(
                 "Slot %s: no unpaired accessory matched id=%r name=%r (try DISCOVER, pairing mode, same LAN)",
                 slot_num,
@@ -1026,11 +1267,22 @@ class HomeKitHubBridge:
                 accessory_name,
             )
             if self._pairing_notice:
+                if paired_seen:
+                    detail = (
+                        f"Slot {slot_num}: no unpaired accessory matched id={accessory_id!r} name={accessory_name!r}. "
+                        "A paired HomeKit accessory was seen on the network; if this was previously paired to this "
+                        "plugin, its saved pairing keys are missing from custom data. Unpair/reset the accessory "
+                        "from the other controller (or factory reset if needed), then run DISCOVER and pair again."
+                    )
+                else:
+                    detail = (
+                        f"Slot {slot_num}: no unpaired accessory matched id={accessory_id!r} name={accessory_name!r}. "
+                        "Run DISCOVER with the device in HomeKit pairing mode on the same LAN."
+                    )
                 self._pairing_notice(
                     ERR_PAIRING_NO_TARGET,
                     "HomeKit pairing: no matching accessory",
-                    f"Slot {slot_num}: no unpaired accessory matched id={accessory_id!r} name={accessory_name!r}. "
-                    "Run DISCOVER with the device in HomeKit pairing mode on the same LAN.",
+                    detail,
                     None,
                 )
             return

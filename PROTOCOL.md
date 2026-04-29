@@ -76,3 +76,75 @@ Failure:
 ```
 
 Mismatch or unknown `version` may result in `error` and connection close.
+
+## Client → Hub (`snapshot`)
+
+Request current readable values for a paired accessory (use at client startup to initialize state).
+
+```json
+{
+  "version": "1",
+  "action": "snapshot",
+  "device_id": "<AccessoryPairingID lowercase>"
+}
+```
+
+## Hub → Client (`snapshot` / `error` for snapshot)
+
+Success:
+
+```json
+{
+  "version": "1",
+  "action": "snapshot",
+  "device_id": "<AccessoryPairingID lowercase>",
+  "values": [
+    {
+      "characteristic": "CurrentTemperature",
+      "aid": 1,
+      "iid": 10,
+      "value": 21.5
+    }
+  ]
+}
+```
+
+Each `values[]` item may also include `status` when HomeKit returns an error/status for that characteristic read.
+
+Failure:
+
+```json
+{
+  "version": "1",
+  "action": "error",
+  "for": "snapshot",
+  "message": "reason"
+}
+```
+
+## Client → Hub (`list_devices`)
+
+Request the set of currently active paired accessories.
+
+```json
+{
+  "version": "1",
+  "action": "list_devices"
+}
+```
+
+## Hub → Client (`list_devices`)
+
+```json
+{
+  "version": "1",
+  "action": "list_devices",
+  "devices": [
+    {
+      "device_id": "<AccessoryPairingID lowercase>"
+    }
+  ]
+}
+```
+
+Use `list_devices` + one `snapshot` request per `device_id` to initialize a client with all active devices.
