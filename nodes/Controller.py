@@ -4,9 +4,7 @@
 import asyncio
 import html
 import json
-import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from threading import Thread
 from typing import Any, Dict, List, Optional, Set
@@ -34,7 +32,6 @@ ERR_APPEND_PAIRING = 5
 ERR_BRIDGE_STOP = 6
 ERR_STATUS_UPDATE = 7
 
-BONJOUR_COMPARE_WINDOW_SECONDS = 12.0
 
 
 class Controller(Node):
@@ -50,7 +47,6 @@ class Controller(Node):
         self.Params = Custom(poly, "customparams")
         self.TypedParams = Custom(poly, "customtypedparams")
         self.TypedData = Custom(poly, "customtypeddata")
-        self.CompareData = Custom(poly, "compare")
         self.handler_params_st = None
         self.handler_data_st = None
         self.handler_typedparams_st = None
@@ -62,9 +58,6 @@ class Controller(Node):
         self.mainloop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: Any = None
         self.bridge: HomeKitHubBridge | None = None
-        self._bonjour_lock = threading.Lock()
-        self._bonjour_active = False
-        self._bonjour_buf: list[Any] = []
 
         self.init_typed_params()
         poly.subscribe(poly.START, self.handler_start, address)
@@ -77,7 +70,6 @@ class Controller(Node):
         poly.subscribe(poly.CUSTOMTYPEDDATA, self.handler_typed_data)
         poly.subscribe(poly.CONFIGDONE, self.handler_config_done)
         poly.subscribe(poly.LOGLEVEL, self.handler_log_level)
-        poly.subscribe(poly.BONJOUR, self._on_bonjour_event)
         poly.ready()
         poly.addNode(self, conn_status="ST")
 
@@ -996,229 +988,6 @@ class Controller(Node):
             parts.append("</ul>")
         self.Notices["hap_discover"] = "".join(parts)
 
-    def _on_bonjour_event(self, payload: Any) -> None:
-        """Capture BONJOUR responses while a comparison is active.
-
-        Matches the IoX / ``ioxplugin`` pattern: Polyglot delivers the same dict
-        ``__bonjourHandler`` sees — typically ``command``, ``mdns``, ``success``.
-        We keep the raw payload verbatim in the compare JSON.
-        """
-        if isinstance(payload, dict):
-            cmd = payload.get("command")
-            if cmd is not None and cmd != "bonjour":
-                LOGGER.debug("BONJOUR event ignored during compare (unexpected command=%r)", cmd)
-                return
-        with self._bonjour_lock:
-            if not self._bonjour_active:
-                return
-            try:
-                self._bonjour_buf.append(payload)
-            except Exception:
-                LOGGER.exception("BONJOUR buffer append failed")
-        try:
-            LOGGER.debug("BONJOUR payload received during compare: %s", json.dumps(payload, default=str)[:2000])
-        except Exception:
-            LOGGER.debug("BONJOUR payload received during compare (non-serializable): %r", payload)
-
-    @staticmethod
-    def _normalize_bj_records(payload_list: list[Any]) -> list[dict[str, Any]]:
-        """Best-effort flattening of PG3 BONJOUR payloads into row dicts.
-
-        The PG3 server payload schema is not publicly documented. This handles
-        the common shapes: dict with a list under ``services``/``records``/``mdns``,
-        a top-level list of records, and individual records.
-        """
-        rows: list[dict[str, Any]] = []
-
-        def _push(rec: Any) -> None:
-            if not isinstance(rec, dict):
-                return
-            rows.append(rec)
-
-        for payload in payload_list or []:
-            if isinstance(payload, list):
-                for item in payload:
-                    _push(item)
-                continue
-            if not isinstance(payload, dict):
-                continue
-            # IoX template uses message["mdns"] (see iox_controller_template.__bonjourHandler).
-            for key in ("mdns", "services", "records", "results", "bonjour"):
-                if isinstance(payload.get(key), list):
-                    for item in payload[key]:
-                        _push(item)
-                    break
-            else:
-                _push(payload)
-        return rows
-
-    @staticmethod
-    def _bj_extract_id(rec: dict[str, Any]) -> str:
-        for key_path in (("txt", "id"), ("properties", "id"), ("TXT", "id"), ("id",)):
-            cur: Any = rec
-            ok = True
-            for k in key_path:
-                if isinstance(cur, dict) and k in cur:
-                    cur = cur[k]
-                else:
-                    ok = False
-                    break
-            if ok and isinstance(cur, str) and cur:
-                return cur.lower()
-        return ""
-
-    def cmd_bonjour_compare(self, _cmd=None) -> None:
-        """Capture PG3 BONJOUR + raw zeroconf + aiohomekit-normalized samples.
-
-        Writes both the raw payloads and a normalized diff to
-        ``logs/bonjour_compare_<timestamp>.json`` and to
-        ``Custom('compare')['bonjour_compare_last']``. Posts a Notice with
-        per-source counts and overlap. See ``BONJOUR_FEASIBILITY.md``.
-
-        The heavy work runs on a background thread so the Polyglot **Command**
-        thread can dequeue incoming ``bonjour`` MQTT replies and deliver
-        ``BONJOUR`` events. Blocking this thread on ``Future.result()`` would
-        otherwise stall those responses (empty ``_bonjour_buf``).
-        """
-        if not (self.bridge and self.mainloop):
-            self.report_error(
-                ERR_DISCOVER_UNEXPECTED,
-                "homekit_err_discover",
-                "BONJOUR compare skipped: bridge not ready",
-                log_message="cmd_bonjour_compare: bridge not ready",
-            )
-            return
-        LOGGER.info("BONJOUR_COMPARE: starting background worker (Command thread returns immediately)")
-        Thread(target=self._bonjour_compare_worker, name="bonjour_compare", daemon=True).start()
-
-    def _bonjour_compare_worker(self) -> None:
-        """Run BONJOUR compare off the Command thread (see ``cmd_bonjour_compare``)."""
-        bj_payloads: list[Any] = []
-        with self._bonjour_lock:
-            self._bonjour_buf = []
-            self._bonjour_active = True
-
-        try:
-            try:
-                # Same shape as ioxplugin ``searchForDevicesUsingMDNS`` / udi_interface ``bonjour``:
-                # type, subtypes (None = no subtype filter), protocol per query.
-                self.poly.bonjour("_hap", None, "tcp")
-                self.poly.bonjour("_hap", None, "udp")
-            except Exception as e:
-                LOGGER.exception("polyglot.bonjour() failed")
-                self.report_error(
-                    ERR_DISCOVER_UNEXPECTED,
-                    "homekit_err_discover",
-                    "polyglot.bonjour() call failed",
-                    exc=e,
-                )
-
-            zc_fut = asyncio.run_coroutine_threadsafe(
-                self.bridge.discover_collect(BONJOUR_COMPARE_WINDOW_SECONDS),
-                self.mainloop,
-            )
-            raw_fut = asyncio.run_coroutine_threadsafe(
-                self.bridge.discover_collect_raw_zc(BONJOUR_COMPARE_WINDOW_SECONDS),
-                self.mainloop,
-            )
-            wait_timeout = BONJOUR_COMPARE_WINDOW_SECONDS + 10.0
-            try:
-                ahk_rows = zc_fut.result(timeout=wait_timeout)
-            except Exception as e:
-                LOGGER.exception("aiohomekit discover_collect failed during compare")
-                ahk_rows = []
-                self.report_error(
-                    ERR_DISCOVER_SCAN,
-                    "homekit_err_discover",
-                    "aiohomekit scan failed during BONJOUR compare",
-                    exc=e,
-                )
-            try:
-                raw_rows = raw_fut.result(timeout=wait_timeout)
-            except Exception as e:
-                LOGGER.exception("raw zeroconf scan failed during compare")
-                raw_rows = []
-                self.report_error(
-                    ERR_DISCOVER_SCAN,
-                    "homekit_err_discover",
-                    "Raw zeroconf scan failed during BONJOUR compare",
-                    exc=e,
-                )
-
-            # Let the Command thread finish dequeuing BONJOUR for any replies
-            # that land immediately after the asyncio window.
-            time.sleep(0.25)
-
-            with self._bonjour_lock:
-                bj_payloads = list(self._bonjour_buf)
-                self._bonjour_active = False
-                self._bonjour_buf = []
-        finally:
-            with self._bonjour_lock:
-                self._bonjour_active = False
-
-        bj_records = self._normalize_bj_records(bj_payloads)
-        ids_bj = {self._bj_extract_id(r) for r in bj_records if self._bj_extract_id(r)}
-        ids_ahk = {(r.get("id") or "").lower() for r in ahk_rows if r.get("id")}
-        ids_zc = {(r.get("id") or "").lower() for r in raw_rows if r.get("id")}
-
-        result = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "window_seconds": BONJOUR_COMPARE_WINDOW_SECONDS,
-            "counts": {
-                "bonjour_payloads": len(bj_payloads),
-                "bonjour_records_normalized": len(bj_records),
-                "aiohomekit_rows": len(ahk_rows),
-                "raw_zeroconf_rows": len(raw_rows),
-            },
-            "ids": {
-                "bonjour": sorted(ids_bj),
-                "aiohomekit": sorted(ids_ahk),
-                "raw_zeroconf": sorted(ids_zc),
-                "in_bonjour_only": sorted(ids_bj - ids_ahk - ids_zc),
-                "in_zeroconf_only": sorted((ids_ahk | ids_zc) - ids_bj),
-                "overlap_all_three": sorted(ids_bj & ids_ahk & ids_zc),
-            },
-            "raw_bonjour_payloads": bj_payloads,
-            "bonjour_records_normalized": bj_records,
-            "aiohomekit_rows": ahk_rows,
-            "raw_zeroconf_rows": raw_rows,
-        }
-
-        try:
-            self.CompareData["bonjour_compare_last"] = result
-        except Exception:
-            LOGGER.exception("save bonjour_compare_last to Custom('compare')")
-
-        log_dir = Path(__file__).resolve().parent.parent / "logs"
-        try:
-            log_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            LOGGER.exception("create logs/ directory for compare output")
-        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        out_path = log_dir / f"bonjour_compare_{ts}.json"
-        try:
-            with out_path.open("w", encoding="utf-8") as fh:
-                json.dump(result, fh, indent=2, default=str)
-            LOGGER.info("BONJOUR_COMPARE: worker wrote %s", out_path)
-        except Exception:
-            LOGGER.exception("write %s", out_path)
-
-        notice_parts = [
-            "<b>BONJOUR vs Zeroconf compare</b><br/>",
-            f"PG3 BONJOUR: {len(bj_records)} record(s) "
-            f"(from {len(bj_payloads)} payload(s)).<br/>",
-            f"aiohomekit (filtered): {len(ahk_rows)} accessory(ies).<br/>",
-            f"Raw zeroconf TXT: {len(raw_rows)} record(s).<br/>",
-            f"Overlap (all three): <b>{len(ids_bj & ids_ahk & ids_zc)}</b>. "
-            f"BONJOUR-only: {len(ids_bj - ids_ahk - ids_zc)}. "
-            f"Zeroconf-only: {len((ids_ahk | ids_zc) - ids_bj)}.<br/>",
-            f"Saved to <code>{html.escape(str(out_path))}</code> and "
-            "<code>Custom('compare')['bonjour_compare_last']</code>. See "
-            "<code>BONJOUR_FEASIBILITY.md</code> for context.",
-        ]
-        self.Notices["bonjour_compare"] = "".join(notice_parts)
-
     def heartbeat(self):
         if self.hb == 0:
             self.reportCmd("DON", 2)
@@ -1239,7 +1008,6 @@ class Controller(Node):
     commands = {
         "DISCOVER": cmd_discover,
         "QUERY": query,
-        "BONJOUR_COMPARE": cmd_bonjour_compare,
     }
     drivers = [
         {"driver": "ST", "value": 1, "uom": 25, "name": "Hub status"},

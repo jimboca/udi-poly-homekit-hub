@@ -13,7 +13,6 @@
       <accepts>
         <cmd id="QUERY" />
         <cmd id="DISCOVER" />
-        <cmd id="BONJOUR_COMPARE" />
       </accepts>
     </cmds>
   </nodeDef>

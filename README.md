@@ -8,6 +8,15 @@ The hub supports **multiple simultaneous HomeKit pairings** (each row has an opt
 
 **Polyglot** runs **`install.sh`** on the Node Server host to install **`requirements.txt`**; you do not need to install those packages by hand for a normal install.
 
+## Development
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q
+```
+
+Lint is checked in **GitHub Actions** with [Ruff](https://docs.astral.sh/ruff/) (pinned in the workflow). Locally: `pip install ruff==0.8.6 && ruff check .` (optional).
+
 ## Layout
 
 - `homekit-poly.py` — entry point
@@ -50,22 +59,6 @@ The controller node exposes **ST** (hub run state) and **ERR** (last reported er
 
 On **Node Server start**, the controller clears **all** Notices before loading.
 
-## Diagnostics: BONJOUR vs Zeroconf compare
-
-The controller exposes a `BONJOUR_COMPARE` admin runCmd that captures three discovery sources side-by-side:
-
-1. **PG3 BONJOUR** — `polyglot.bonjour("_hap", None, "tcp"|"udp")` — what PG3's mDNS gateway returns (raw payload).
-2. **aiohomekit** — what `bridge.discover_collect()` (the production DISCOVER path) sees, normalized through `aiohomekit`.
-3. **Raw zeroconf** — what `bridge.discover_collect_raw_zc()` sees on the same `AsyncZeroconf` (full TXT keys, no aiohomekit filter).
-
-Output:
-
-- `logs/bonjour_compare_<utc-timestamp>.json` — full raw payloads + normalized diff.
-- `Custom('compare')['bonjour_compare_last']` — same content for programmatic access.
-- A Polyglot Notice (key `bonjour_compare`) with per-source counts and overlap.
-
-Use it to evaluate whether `polyglot.bonjour()` could supplement or replace the in-process zeroconf path. See [`BONJOUR_FEASIBILITY.md`](BONJOUR_FEASIBILITY.md) for context.
-
 ## Packaging (zip for Polyglot)
 
 From the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:
@@ -78,6 +71,10 @@ make zip                  # produces HomeKitHub.zip (see zip_exclude.lst)
 ```
 
 Install the zip via the Polyglot dashboard like other Node Servers. The archive includes `requirements.txt` and `install.sh` for Polyglot to run on the host.
+
+## Logs
+
+Runtime logs under `logs/` are **local-only**: the directory is listed in `.gitignore` and is not part of the published zip unless you add files there manually.
 
 ## Multiple WebSocket clients
 
