@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-04-29
+
+### Changed
+
+- **START** no longer blocks the PG3 thread on ``time.sleep`` while waiting for custom config. The asyncio hub starts from **CONFIGDONE** (with short delayed retries if CUSTOM* handlers are still finishing), plus a **75s fallback** if CONFIGDONE is missing. **STOP** clears ``mainloop`` / ``bridge`` / ``_loop_thread`` so a restart can bootstrap again.
+
 ## [0.1.11] - 2026-04-29
 
 ### Fixed

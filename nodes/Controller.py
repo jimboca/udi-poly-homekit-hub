@@ -4,9 +4,8 @@
 import asyncio
 import html
 import json
-import time
 from pathlib import Path
-from threading import Thread
+from threading import Thread, Timer
 from typing import Any, Dict, List, Optional, Set
 
 import markdown2
@@ -44,6 +43,12 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     "zeroconf_ip_version": "",
 }
 
+# After CONFIGDONE, PG3 may still be delivering CUSTOM* events on other threads; retry briefly.
+_HUB_BOOTSTRAP_AFTER_CONFIG_MAX_ATTEMPTS = 120
+_HUB_BOOTSTRAP_AFTER_CONFIG_RETRY_SEC = 0.1
+# If CONFIGDONE never arrives (misbehaving client), still try once custom handlers have run.
+_HUB_BOOTSTRAP_FALLBACK_SEC = 75.0
+
 
 class Controller(Node):
     """HomeKit Hub Node Server controller node."""
@@ -70,6 +75,8 @@ class Controller(Node):
         self._loop_thread: Any = None
         self._async_loop_death_reported = False
         self.bridge: HomeKitHubBridge | None = None
+        self._pending_hub_bootstrap = False
+        self._hub_bootstrap_generation = 0
 
         self.init_typed_params()
         poly.subscribe(poly.START, self.handler_start, address)
@@ -270,6 +277,110 @@ class Controller(Node):
 
     def handler_config_done(self):
         self.handler_config_done_st = True
+        self._try_finish_hub_bootstrap(attempt=0, reason="CONFIGDONE")
+
+    def _custom_handlers_have_run(self) -> bool:
+        """True once each CUSTOM* handler has been invoked at least once (value may be False for data)."""
+        return (
+            self.handler_params_st is not None
+            and self.handler_data_st is not None
+            and self.handler_typedparams_st is not None
+            and self.handler_typed_data_st is not None
+        )
+
+    def _try_finish_hub_bootstrap(self, attempt: int = 0, *, reason: str = "") -> None:
+        """Start asyncio hub after Polyglot config is loaded (CONFIGDONE + custom handlers).
+
+        ``udi_interface`` publishes CONFIGDONE after ``getAll``; CUSTOM* handlers may still be
+        finishing on other threads, so we retry with short delays instead of blocking with
+        ``time.sleep`` in ``handler_start``.
+        """
+        if not self._pending_hub_bootstrap:
+            return
+        if self.mainloop is not None:
+            return
+        if not self._custom_handlers_have_run():
+            if attempt >= _HUB_BOOTSTRAP_AFTER_CONFIG_MAX_ATTEMPTS:
+                LOGGER.error(
+                    "Timeout waiting for custom params/data/typed after %s (last attempt %d)",
+                    reason or "bootstrap",
+                    attempt,
+                )
+                self._pending_hub_bootstrap = False
+                return
+            if attempt == 0:
+                LOGGER.warning(
+                    "Hub bootstrap (%s): custom config not ready yet; retrying without blocking START",
+                    reason or "pending",
+                )
+            Timer(
+                _HUB_BOOTSTRAP_AFTER_CONFIG_RETRY_SEC,
+                lambda: self._try_finish_hub_bootstrap(attempt + 1, reason=reason),
+            ).start()
+            return
+
+        self._pending_hub_bootstrap = False
+        self._run_hub_bootstrap()
+
+    def _run_hub_bootstrap(self) -> None:
+        """Create asyncio loop thread, bridge, and start listening (PG3 thread)."""
+        # One-shot migration: dashed PIN in UI for codes stored without dashes.
+        self._normalize_and_persist_typed_pairing_pins()
+
+        self.mainloop = asyncio.new_event_loop()
+
+        def _run_loop():
+            asyncio.set_event_loop(self.mainloop)
+            self.mainloop.run_forever()
+
+        self._loop_thread = Thread(target=_run_loop, daemon=True)
+        self._loop_thread.start()
+        try:
+            self.setDriver("ST", 1, report=True, force=True, uom=25)
+            self.setDriver("GV0", 0, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver ST/GV0 before bridge start")
+
+        self._config_snap = None
+        self.bridge = HomeKitHubBridge(
+            LOGGER,
+            self._bridge_get_params,
+            self._bridge_get_pairing_slot_rows,
+            self._bridge_get_data,
+            self._bridge_set_data,
+            pairing_notice=self._pairing_notice_callback,
+        )
+        self._config_snap = self._config_restart_snap()
+        fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)
+        try:
+            fut.result(timeout=120)
+        except Exception as e:
+            self.ready = False
+            self.report_error(
+                ERR_BRIDGE_START,
+                "homekit_bridge",
+                "HomeKit Hub failed to start",
+                exc=e,
+                log_message="HomeKit bridge failed to start",
+                extra_html=(
+                    "If the error mentions <code>zeroconf</code> / port <b>5353</b>, another mDNS stack "
+                    "may own that port. See <b>CONFIG.md</b> — Custom Params "
+                    "<code>zeroconf_*</code> (default keeps unicast-friendly behavior on shared mDNS hosts); "
+                    "environment variables override those when set. On Linux with Avahi, "
+                    "<code>disallow-other-stacks=no</code> in <code>avahi-daemon.conf</code> can help.<br/>"
+                ),
+                set_st_error=True,
+            )
+            return
+
+        self.clear_hub_error_indicators(keep_config_notice=True)
+        try:
+            self.setDriver("GV0", 1, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver GV0 after bridge start")
+        self.heartbeat()
+        self.ready = True
+        LOGGER.info("HomeKit Hub ready")
 
     def report_error(
         self,
@@ -530,6 +641,8 @@ class Controller(Node):
 
     def handler_start(self):
         self._async_loop_death_reported = False
+        self._hub_bootstrap_generation += 1
+        bootstrap_gen = self._hub_bootstrap_generation
         self.Notices.clear()
         LOGGER.info("HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION)
         cfg_md = Path(__file__).resolve().parent.parent / "CONFIG.md"
@@ -544,83 +657,30 @@ class Controller(Node):
             except Exception:
                 LOGGER.exception("Failed to convert/set CONFIG.md as custom params doc")
 
-        cnt = 60
-        while (
-            self.handler_params_st is None
-            or self.handler_data_st is None
-            or self.handler_typedparams_st is None
-            or self.handler_typed_data_st is None
-        ) and cnt > 0:
-            LOGGER.warning(
-                "Waiting for params/data/typed: params=%s data=%s typedparams=%s typeddata=%s",
-                self.handler_params_st,
-                self.handler_data_st,
-                self.handler_typedparams_st,
-                self.handler_typed_data_st,
-            )
-            time.sleep(1)
-            cnt -= 1
-        if cnt == 0:
-            LOGGER.error("Timeout waiting for custom params/data/typed config")
-
-        # One-shot migration: dashed PIN in UI for codes stored without dashes.
-        self._normalize_and_persist_typed_pairing_pins()
-
-        self.mainloop = asyncio.new_event_loop()
-
-        def _run_loop():
-            asyncio.set_event_loop(self.mainloop)
-            self.mainloop.run_forever()
-
-        self._loop_thread = Thread(target=_run_loop, daemon=True)
-        self._loop_thread.start()
-        try:
-            self.setDriver("ST", 1, report=True, force=True, uom=25)
-            self.setDriver("GV0", 0, report=True, force=True, uom=25)
-        except Exception:
-            LOGGER.exception("setDriver ST/GV0 before bridge start")
-
-        self._config_snap = None
-        self.bridge = HomeKitHubBridge(
-            LOGGER,
-            self._bridge_get_params,
-            self._bridge_get_pairing_slot_rows,
-            self._bridge_get_data,
-            self._bridge_set_data,
-            pairing_notice=self._pairing_notice_callback,
+        self._pending_hub_bootstrap = True
+        LOGGER.info(
+            "Hub bootstrap deferred until CONFIGDONE and custom params/data/typed are loaded "
+            "(no blocking wait in START)"
         )
-        self._config_snap = self._config_restart_snap()
-        fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)
-        try:
-            fut.result(timeout=120)
-        except Exception as e:
-            self.ready = False
-            self.report_error(
-                ERR_BRIDGE_START,
-                "homekit_bridge",
-                "HomeKit Hub failed to start",
-                exc=e,
-                log_message="HomeKit bridge failed to start",
-                extra_html=(
-                    "If the error mentions <code>zeroconf</code> / port <b>5353</b>, another mDNS stack "
-                    "may own that port. See <b>CONFIG.md</b> — Custom Params "
-                    "<code>zeroconf_*</code> (default keeps unicast-friendly behavior on shared mDNS hosts); "
-                    "environment variables override those when set. On Linux with Avahi, "
-                    "<code>disallow-other-stacks=no</code> in <code>avahi-daemon.conf</code> can help.<br/>"
-                ),
-                set_st_error=True,
-            )
-            return
 
-        # Keep startup config guidance notices from bridge.start() visible in UI.
-        self.clear_hub_error_indicators(keep_config_notice=True)
-        try:
-            self.setDriver("GV0", 1, report=True, force=True, uom=25)
-        except Exception:
-            LOGGER.exception("setDriver GV0 after bridge start")
-        self.heartbeat()
-        self.ready = True
-        LOGGER.info("HomeKit Hub ready")
+        def _fallback_bootstrap() -> None:
+            if self._hub_bootstrap_generation != bootstrap_gen:
+                return
+            if not self._pending_hub_bootstrap or self.mainloop is not None:
+                return
+            LOGGER.warning(
+                "CONFIGDONE not received within %.0fs; attempting hub bootstrap if custom config is ready",
+                _HUB_BOOTSTRAP_FALLBACK_SEC,
+            )
+            self._try_finish_hub_bootstrap(attempt=0, reason="CONFIGDONE fallback timer")
+
+        Timer(_HUB_BOOTSTRAP_FALLBACK_SEC, _fallback_bootstrap).start()
+
+        if self.handler_config_done_st:
+            LOGGER.info(
+                "CONFIGDONE already received before START; will bootstrap when custom config is ready"
+            )
+            self._try_finish_hub_bootstrap(attempt=0, reason="START after CONFIGDONE")
 
     def handler_stop(self):
         LOGGER.info("Stopping HomeKit Hub")
@@ -644,6 +704,10 @@ class Controller(Node):
                 )
         if self.mainloop:
             self.mainloop.call_soon_threadsafe(self.mainloop.stop)
+        self._pending_hub_bootstrap = False
+        self._loop_thread = None
+        self.mainloop = None
+        self.bridge = None
         LOGGER.info("HomeKit Hub stopped")
 
     def handler_poll(self, polltype):

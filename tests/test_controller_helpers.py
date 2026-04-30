@@ -42,7 +42,21 @@ def _bare_controller():
     c._maybe_restart_on_config_change = MagicMock()
     c.ready = False
     c.setDriver = MagicMock()
+    c.handler_params_st = None
+    c.handler_data_st = None
+    c.handler_typedparams_st = None
+    c.handler_typed_data_st = None
     return c
+
+
+def test_custom_handlers_have_run_false_until_all_set():
+    c = _bare_controller()
+    assert c._custom_handlers_have_run() is False
+    c.handler_params_st = True
+    c.handler_data_st = False
+    c.handler_typedparams_st = True
+    c.handler_typed_data_st = True
+    assert c._custom_handlers_have_run() is True
 
 
 def test_typed_update_needs_discover_false_when_no_pin():
