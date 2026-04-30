@@ -4,6 +4,18 @@ Async HomeKit controller + WebSocket bridge for PG3x.
 Runs on a dedicated asyncio loop (see nodes.Controller). No udi_interface imports.
 
 Supports multiple simultaneous pairings; each row has a slot id (explicit or auto).
+
+Zeroconf / mDNS constraints:
+
+- **UDP 5353**: python-zeroconf normally binds the mDNS port. If another stack already
+  owns it, multicast ``AsyncZeroconf()`` can raise ``EADDRINUSE``. Use **unicast** or
+  **auto** (try multicast, then fall back).
+- **aiohomekit**: startup expects existing ``AsyncServiceBrowser`` instances for
+  ``_hap._tcp.local.`` and ``_hap._udp.local.``; we always register both before
+  ``HKController.async_start()``.
+- **BSD / macOS errno 49**: unicast with broad interface / dual-stack choices can cause
+  ``sendto`` failures; unicast on BSD-like hosts defaults to narrower interface and
+  IPv4 unless overridden (Custom Params or env; env wins).
 """
 from __future__ import annotations
 
@@ -12,6 +24,7 @@ import errno
 import json
 import logging
 import os
+import socket
 import sys
 from typing import Any, Callable, Optional
 
@@ -37,6 +50,34 @@ ERR_PAIRING_NO_TARGET = 8
 ERR_PAIRING_FAILED = 9
 
 
+def _package_version(dist_name: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return str(version(dist_name))
+    except Exception:
+        return ""
+
+
+def probe_mdns_port_5353() -> str:
+    """Best-effort: whether this process can bind UDP 5353 (multicast zeroconf path)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.bind(("0.0.0.0", 5353))
+        except OSError as e:
+            return f"bind_udp_5353_failed errno={e.errno} {e!s}"
+        finally:
+            s.close()
+    except OSError as e:
+        return f"socket_error {e!s}"
+    return "udp_5353_bind_ok"
+
+
+def _hap_service_browser_noop(*_args: Any, **_kwargs: Any) -> None:
+    """No-op HAP browser handler; aiohomekit only requires that the browser exists."""
+
+
 def normalize_hap_pin(raw: Any) -> str:
     """Return a HomeKit setup code as ``XXX-XX-XXX`` when the value is exactly 8 digits.
 
@@ -52,25 +93,32 @@ def normalize_hap_pin(raw: Any) -> str:
     return s
 
 
-def _zeroconf_ctor_kwargs(log: logging.Logger, *, unicast: bool) -> dict[str, Any]:
-    """Optional ``AsyncZeroconf`` constructor kwargs from env and host quirks.
+def _zeroconf_ctor_kwargs(
+    log: logging.Logger,
+    *,
+    unicast: bool,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Optional ``AsyncZeroconf`` kwargs from env (wins), Custom Params, and host quirks.
 
-    On **BSD / macOS**, unicast mode can log ``sendto`` **EADDRNOTAVAIL** (errno 49) when python-zeroconf
-    tries to answer queries via a socket bound to a real LAN address toward **127.0.0.1**.
-    Using **Default** interfaces + **IPv4-only** avoids the worst of that for typical HomeKit LANs.
+    On **BSD / macOS**, unicast can hit **errno 49** when replying via LAN sockets toward
+    ``127.0.0.1``; defaulting to **Default** interfaces + **IPv4-only** mitigates that.
 
-    Override with:
-    - ``HOMEKIT_HUB_ZEROCONF_INTERFACES`` — ``default`` | ``all`` (omit or empty = library default for multicast; for unicast on BSD see auto-below)
-    - ``HOMEKIT_HUB_ZEROCONF_IP_VERSION`` — ``v4`` | ``v6`` | ``all``
+    - ``HOMEKIT_HUB_ZEROCONF_INTERFACES`` or ``zeroconf_interfaces``: ``default`` | ``all``
+    - ``HOMEKIT_HUB_ZEROCONF_IP_VERSION`` or ``zeroconf_ip_version``: ``v4`` | ``v6`` | ``all``
     """
     out: dict[str, Any] = {}
-    ic = os.environ.get("HOMEKIT_HUB_ZEROCONF_INTERFACES", "").strip().lower()
+    ic_env = os.environ.get("HOMEKIT_HUB_ZEROCONF_INTERFACES", "").strip().lower()
+    ic_param = str((params or {}).get("zeroconf_interfaces") or "").strip().lower()
+    ic = ic_env or ic_param
     if ic == "default":
         out["interfaces"] = InterfaceChoice.Default
     elif ic == "all":
         out["interfaces"] = InterfaceChoice.All
 
-    ipv = os.environ.get("HOMEKIT_HUB_ZEROCONF_IP_VERSION", "").strip().lower()
+    ipv_env = os.environ.get("HOMEKIT_HUB_ZEROCONF_IP_VERSION", "").strip().lower()
+    ipv_param = str((params or {}).get("zeroconf_ip_version") or "").strip().lower()
+    ipv = ipv_env or ipv_param
     if ipv in ("4", "v4", "ipv4"):
         out["ip_version"] = IPVersion.V4Only
     elif ipv in ("6", "v6", "ipv6"):
@@ -82,45 +130,149 @@ def _zeroconf_ctor_kwargs(log: logging.Logger, *, unicast: bool) -> dict[str, An
     if unicast and bsdish:
         if "interfaces" not in out and ic not in ("all",):
             out["interfaces"] = InterfaceChoice.Default
-            log.debug("zeroconf unicast: using InterfaceChoice.Default on %s", sys.platform)
+            log.debug(
+                "zeroconf unicast: InterfaceChoice.Default on %s (reduce errno 49)",
+                sys.platform,
+            )
         if "ip_version" not in out:
             out["ip_version"] = IPVersion.V4Only
-            log.debug("zeroconf unicast: using IPVersion.V4Only on %s", sys.platform)
+            log.debug(
+                "zeroconf unicast: IPVersion.V4Only on %s (reduce errno 49)",
+                sys.platform,
+            )
     return out
 
 
-def _async_zeroconf_for_hub(log: logging.Logger) -> tuple[AsyncZeroconf, bool]:
-    """Create ``AsyncZeroconf``. If mDNS port **5353** is already bound (Avahi, mDNSResponder, …),
-    fall back to **unicast** mode so python-zeroconf does not need a second multicast listener.
-    Set env ``HOMEKIT_HUB_ZEROCONF_UNICAST=1`` to skip multicast and use unicast only.
-    """
-    if os.environ.get("HOMEKIT_HUB_ZEROCONF_UNICAST", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        log.info("HOMEKIT_HUB_ZEROCONF_UNICAST set: using zeroconf unicast mode")
-        kw = _zeroconf_ctor_kwargs(log, unicast=True)
-        return AsyncZeroconf(unicast=True, **kw), True
-    kw_m = _zeroconf_ctor_kwargs(log, unicast=False)
+def _env_unicast_override() -> bool | None:
+    raw = os.environ.get("HOMEKIT_HUB_ZEROCONF_UNICAST", "").strip().lower()
+    if not raw:
+        return None
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def _param_unicast_policy(params: dict[str, Any] | None) -> str:
+    if not params:
+        return "auto"
+    raw = str(params.get("zeroconf_unicast") or "").strip().lower()
+    if raw in ("on", "1", "true", "yes", "unicast"):
+        return "on"
+    if raw in ("off", "0", "false", "no", "multicast"):
+        return "off"
+    return "auto"
+
+
+def _make_azc_unicast(log: logging.Logger, kw: dict[str, Any]) -> AsyncZeroconf:
     try:
-        return AsyncZeroconf(**kw_m), False
-    except OSError as e:
-        if e.errno != errno.EADDRINUSE:
+        return AsyncZeroconf(unicast=True, **kw)
+    except TypeError:
+        log.error(
+            "unicast mode is not supported by this python-zeroconf; "
+            "free UDP 5353 or upgrade zeroconf"
+        )
+        raise
+
+
+def _make_azc_multicast(_log: logging.Logger, kw: dict[str, Any]) -> AsyncZeroconf:
+    return AsyncZeroconf(**kw) if kw else AsyncZeroconf()
+
+
+def create_async_zeroconf(
+    log: logging.Logger,
+    params: dict[str, Any] | None,
+) -> tuple[AsyncZeroconf, bool, str]:
+    """Build ``AsyncZeroconf``; return ``(instance, using_unicast, mode_label)``."""
+    e = _env_unicast_override()
+    pol = _param_unicast_policy(params)
+
+    if e is True:
+        kw = _zeroconf_ctor_kwargs(log, unicast=True, params=params)
+        log.info("zeroconf: HOMEKIT_HUB_ZEROCONF_UNICAST env forces unicast mode")
+        return _make_azc_unicast(log, kw), True, "env_on"
+    if e is False:
+        kw = _zeroconf_ctor_kwargs(log, unicast=False, params=params)
+        log.info("zeroconf: HOMEKIT_HUB_ZEROCONF_UNICAST env forces multicast mode")
+        return _make_azc_multicast(log, kw), False, "env_multicast"
+
+    if pol == "on":
+        kw = _zeroconf_ctor_kwargs(log, unicast=True, params=params)
+        log.info("zeroconf: zeroconf_unicast=on (unicast)")
+        return _make_azc_unicast(log, kw), True, "param_on"
+    if pol == "off":
+        kw = _zeroconf_ctor_kwargs(log, unicast=False, params=params)
+        log.info("zeroconf: zeroconf_unicast=off (multicast only)")
+        try:
+            return _make_azc_multicast(log, kw), False, "param_multicast"
+        except OSError as ex:
+            if ex.errno != errno.EADDRINUSE:
+                raise
+            log.error(
+                "zeroconf: multicast-only but UDP 5353 is in use; "
+                "set zeroconf_unicast to auto/on or HOMEKIT_HUB_ZEROCONF_UNICAST=1"
+            )
+            raise
+
+    kw_m = _zeroconf_ctor_kwargs(log, unicast=False, params=params)
+    try:
+        log.info("zeroconf: auto — trying multicast AsyncZeroconf first")
+        return _make_azc_multicast(log, kw_m), False, "auto_multicast"
+    except OSError as ex:
+        if ex.errno != errno.EADDRINUSE:
             raise
         log.warning(
-            "mDNS port 5353 is already in use on this host; retrying zeroconf in unicast mode "
-            "(if problems persist, set Avahi disallow-other-stacks=no or set "
-            "HOMEKIT_HUB_ZEROCONF_UNICAST=1)."
+            "zeroconf: auto — mDNS port 5353 in use; falling back to unicast "
+            "(set zeroconf_unicast=on to skip multicast attempt)"
         )
-        try:
-            kw_u = _zeroconf_ctor_kwargs(log, unicast=True)
-            return AsyncZeroconf(unicast=True, **kw_u), True
-        except TypeError:
-            log.error(
-                "unicast mode is not supported by this python-zeroconf; free UDP 5353 or upgrade zeroconf"
+        kw_u = _zeroconf_ctor_kwargs(log, unicast=True, params=params)
+        return _make_azc_unicast(log, kw_u), True, "auto_unicast_fallback"
+
+
+class ZeroconfManager:
+    """Owns ``AsyncZeroconf`` and mandatory HAP ``AsyncServiceBrowser`` instances."""
+
+    def __init__(self, log: logging.Logger) -> None:
+        self.log = log
+        self._azc: Optional[AsyncZeroconf] = None
+        self._hap_browsers: list[AsyncServiceBrowser] = []
+        self.using_unicast = False
+        self.mode_label = ""
+
+    @property
+    def async_zeroconf(self) -> Optional[AsyncZeroconf]:
+        return self._azc
+
+    @property
+    def hap_browsers(self) -> list[AsyncServiceBrowser]:
+        return self._hap_browsers
+
+    async def start(self, params: dict[str, Any] | None) -> AsyncZeroconf:
+        self._azc, self.using_unicast, self.mode_label = create_async_zeroconf(
+            self.log, params
+        )
+        assert self._azc is not None
+        zc = self._azc.zeroconf
+        for hap_type in (HAP_TYPE_TCP, HAP_TYPE_UDP):
+            self._hap_browsers.append(
+                AsyncServiceBrowser(zc, hap_type, handlers=[_hap_service_browser_noop])
             )
-            raise e
+        return self._azc
+
+    async def stop(self) -> None:
+        for browser in self._hap_browsers:
+            try:
+                await browser.async_cancel()
+            except Exception:
+                self.log.exception("AsyncServiceBrowser.async_cancel")
+        self._hap_browsers.clear()
+        if self._azc is not None:
+            try:
+                await self._azc.async_close()
+            except Exception:
+                self.log.exception("AsyncZeroconf.async_close")
+            self._azc = None
 
 
 def slot_alias(slot_num: int) -> str:
@@ -343,7 +495,7 @@ class HomeKitHubBridge:
 
         self._hk: Optional[HKController] = None
         self._async_zeroconf: Optional[AsyncZeroconf] = None
-        self._zc_hap_browsers: list[AsyncServiceBrowser] = []
+        self._zcm: Optional[ZeroconfManager] = None
         self._listeners: dict[str, Callable[[], None]] = {}
         self._clients: set[Any] = set()
         self._ws_server: Any = None
@@ -365,18 +517,12 @@ class HomeKitHubBridge:
             except Exception:
                 self.log.exception("HomeKit controller async_stop after failed start")
             self._hk = None
-        if self._async_zeroconf is not None:
-            if self._zc_hap_browsers:
-                for browser in self._zc_hap_browsers:
-                    try:
-                        await browser.async_cancel()
-                    except Exception:
-                        self.log.exception("AsyncServiceBrowser.async_cancel after failed start")
-                self._zc_hap_browsers = []
+        if self._zcm is not None:
             try:
-                await self._async_zeroconf.async_close()
+                await self._zcm.stop()
             except Exception:
-                self.log.exception("AsyncZeroconf.async_close after failed start")
+                self.log.exception("ZeroconfManager.stop after failed start")
+            self._zcm = None
             self._async_zeroconf = None
 
     async def start(self) -> None:
@@ -386,19 +532,8 @@ class HomeKitHubBridge:
         try:
             # aiohomekit IP transport requires a real AsyncZeroconf; default HKController()
             # passes None and IpController.async_start() crashes (no .zeroconf).
-            self._async_zeroconf, using_unicast = _async_zeroconf_for_hub(self.log)
-            if using_unicast:
-                # aiohomekit looks up an existing AsyncServiceBrowser on the zeroconf
-                # instance during startup; in unicast mode we must create one explicitly
-                # for each HAP transport type that may be enabled in aiohomekit.
-                for hap_type in (HAP_TYPE_TCP, HAP_TYPE_UDP):
-                    self._zc_hap_browsers.append(
-                        AsyncServiceBrowser(
-                            self._async_zeroconf.zeroconf,
-                            hap_type,
-                            handlers=[lambda **_: None],
-                        )
-                    )
+            self._zcm = ZeroconfManager(self.log)
+            self._async_zeroconf = await self._zcm.start(self._get_params())
             self._hk = HKController(async_zeroconf_instance=self._async_zeroconf)
             await self._hk.async_start()
             # Load pairings before accepting WebSocket clients; otherwise an immediate
@@ -421,18 +556,9 @@ class HomeKitHubBridge:
         if self._hk:
             await self._hk.async_stop()
             self._hk = None
-        if self._zc_hap_browsers:
-            for browser in self._zc_hap_browsers:
-                try:
-                    await browser.async_cancel()
-                except Exception:
-                    self.log.exception("AsyncServiceBrowser.async_cancel")
-            self._zc_hap_browsers = []
-        if self._async_zeroconf is not None:
-            try:
-                await self._async_zeroconf.async_close()
-            except Exception:
-                self.log.exception("AsyncZeroconf.async_close")
+        if self._zcm is not None:
+            await self._zcm.stop()
+            self._zcm = None
             self._async_zeroconf = None
         self._clients.clear()
 
@@ -443,6 +569,34 @@ class HomeKitHubBridge:
         self._clear_all_listeners()
         await self._shutdown_all_pairings()
         await self._sync_pairing_from_params()
+
+    async def full_restart(self) -> None:
+        """Full hub recycle (zeroconf + WebSocket + pairings)."""
+        await self.stop()
+        await self.start()
+
+    def zeroconf_diag(self) -> dict[str, Any]:
+        """Snapshot for support: mode, browsers, transports, 5353 probe, versions."""
+        zcm = self._zcm
+        transports: dict[str, int] = {}
+        hk = self._hk
+        if hk and getattr(hk, "transports", None):
+            for name, transport in hk.transports.items():
+                d = getattr(transport, "discoveries", None) or {}
+                transports[str(name)] = len(d)
+        return {
+            "hub_running": self._running,
+            "zeroconf_mode": getattr(zcm, "mode_label", "") if zcm else "",
+            "using_unicast": bool(zcm.using_unicast) if zcm else False,
+            "hap_browser_count": len(zcm.hap_browsers) if zcm else 0,
+            "hap_browser_types": [HAP_TYPE_TCP, HAP_TYPE_UDP],
+            "mdns_5353_probe": probe_mdns_port_5353(),
+            "transports_discovery_counts": transports,
+            "platform": sys.platform,
+            "python_version": sys.version.split()[0],
+            "zeroconf_version": _package_version("zeroconf"),
+            "aiohomekit_version": _package_version("aiohomekit"),
+        }
 
     def _clear_all_listeners(self) -> None:
         for stop in self._listeners.values():

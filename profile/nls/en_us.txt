@@ -3,11 +3,17 @@ ND-HKHubController-NAME = HomeKit Hub
 ND-HKHubController-ICON = GenericCtl
 CMD-hkctl-QUERY-NAME = Query
 CMD-hkctl-DISCOVER-NAME = Discover
-ST-hkctl-ST-NAME = Hub Status
+CMD-hkctl-ZEROCONF_DIAG-NAME = Zeroconf diagnostic
+ST-hkctl-ST-NAME = NodeServer Online
+ST-hkctl-GV0-NAME = Bridge Status
 
-CST-0 = Stopped
-CST-1 = Running
-CST-2 = Error
+CST-0 = Disconnected
+CST-1 = Connected
+CST-2 = Failed
+
+BRST-0 = Stopped
+BRST-1 = Running
+BRST-2 = Error
 
 ST-hkctl-ERR-NAME = Hub error code
 

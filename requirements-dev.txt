@@ -1,0 +1,4 @@
+# Local / CI dev dependencies (not installed by Polyglot install.sh).
+# Ruff is optional locally (CI uses astral-sh/ruff-action with a pinned version).
+pytest>=8
+pytest-asyncio>=0.23

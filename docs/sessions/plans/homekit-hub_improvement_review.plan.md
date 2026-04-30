@@ -10,13 +10,13 @@ todos:
     status: pending
   - id: remove-checked-in-log
     content: "P0: remove logs/debug.log from repo"
-    status: pending
+    status: completed
   - id: changelog
     content: "P0: add CHANGELOG.md aligned with profile/version.txt 0.1.x"
     status: pending
   - id: fix-get-event-loop
     content: "P0: replace asyncio.get_event_loop() with get_running_loop() in bridge.py"
-    status: pending
+    status: completed
   - id: loop-watchdog
     content: "P1: longPoll watchdog for asyncio loop thread; flip ST=2 + Notice on death"
     status: pending
@@ -70,28 +70,28 @@ todos:
     status: pending
   - id: bonjour-hybrid-followup
     content: "P4: revisit PG3 BONJOUR for UI-only discovery snapshot per prior plan"
-    status: pending
+    status: cancelled
   - id: zc-public-imports
     content: "P0 zeroconf: stop importing from zeroconf._utils.net; use top-level zeroconf.InterfaceChoice / IPVersion"
-    status: pending
+    status: completed
   - id: zc-browsers-always
     content: "P0 zeroconf: pre-create AsyncServiceBrowser for HAP_TYPE_TCP/UDP in ALL modes (not just unicast); promote no-op handler from lambda to a named callback"
-    status: pending
+    status: completed
   - id: zc-manager-class
     content: "P1 zeroconf: extract a ZeroconfManager helper to encapsulate AsyncZeroconf + browsers lifecycle (create / abort / close)"
-    status: pending
+    status: completed
   - id: zc-config-via-customparams
     content: "P1 zeroconf: replace HOMEKIT_HUB_ZEROCONF_* env vars with Custom Params (zeroconf_unicast, zeroconf_interfaces, zeroconf_ip_version) so users can configure in the PG3 UI; keep env as override; drop os.environ.setdefault in homekit-poly.py"
-    status: pending
+    status: completed
   - id: zc-default-mode-policy
     content: "P1 zeroconf: decide default policy now that unicast works; either keep unicast default (current) or auto-detect 5353 ownership and only fall back; remove unreachable multicast-first try if unicast becomes the documented default"
-    status: pending
+    status: completed
   - id: zc-diagnostic-cmd
     content: "P2 zeroconf: ZEROCONF_DIAG runCmd that posts a Notice with mode (unicast/multicast), interface count, IP version, browser count, transport count, and 5353 ownership probe result"
-    status: pending
+    status: completed
   - id: zc-bsd-quirks-guard
     content: "P2 zeroconf: keep BSD/macOS auto-narrowing but tag log lines with platform reason; add a single doc block in bridge.py explaining errno 49 and 5353 contention"
-    status: pending
+    status: completed
   - id: bj-verify-api
     content: "P0 bonjour: read udi_interface source for bonjour() argument shape, default service filter, and BONJOUR event payload schema; capture findings in BONJOUR_FEASIBILITY.md"
     status: completed
@@ -103,14 +103,21 @@ todos:
     status: completed
   - id: bj-feasibility-full
     content: "P1 bonjour: from BONJOUR sample, score TXT/SRV/A completeness against aiohomekit HomeKitService.from_service_info requirements; document feasibility of full AsyncZeroconf replacement and what aiohomekit changes would be required (requires real BONJOUR_COMPARE run)"
-    status: pending
+    status: completed
   - id: bj-decision-doc
     content: "P1 bonjour: write decision into plan (keep zeroconf / hybrid UI-only / full replacement), with concrete next-step tickets (requires real BONJOUR_COMPARE run)"
-    status: pending
+    status: completed
 isProject: false
 ---
 
 # Improvements review
+
+## Continuation status (2026-04-29)
+
+- **P6 (Bonjour):** Live `BONJOUR_COMPARE` JSON shows PG3 can return rich HAP rows when `poly.bonjour` uses broad filters (e.g. `type=None`). Overlap with aiohomekit/raw zeroconf was confirmed for at least one accessory (ecobee). **Full replacement of `AsyncZeroconf` for stock aiohomekit remains out of scope.** Tradeoffs are documented for operators in [`CONFIG.md`](../../CONFIG.md) (section *PG3 Bonjour vs in-process zeroconf*). Diagnostic/compare tooling may live on branch `old-pg-mdns` while **main** stays zeroconf-focused.
+- **P0 done since plan draft:** `get_running_loop()` in [`homekit_hub/bridge.py`](../../homekit_hub/bridge.py); public `zeroconf` imports (`InterfaceChoice`, `IPVersion`). **`logs/debug.log` is not tracked** in git (remove-checked-in-log may be N/A).
+- **P0 still open on `main`:** Tracked **pytest** + **CI** + **CHANGELOG** aligned to `profile/version.txt` (currently **0.1.8**). Local `tests/` and `.github/` may exist untracked until committed.
+- **P5 next high-leverage item:** **25** — always pre-create HAP `AsyncServiceBrowser` instances (today they are still only created when `using_unicast` in `HomeKitHubBridge.start`).
 
 ## Snapshot of what we have
 
@@ -152,7 +159,7 @@ flowchart LR
 3. **Remove `logs/debug.log` from the repo**  
    `[c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\logs\debug.log](c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\logs\debug.log)` is checked in even though `[.gitignore](c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\.gitignore)` lists `logs/`. Add a `.gitkeep` or remove the directory.
 
-4. **Add `CHANGELOG.md`** linking releases (we are on `0.1.3` after several substantive changes today).
+4. **Add `CHANGELOG.md`** linking releases (track `profile/version.txt`; e.g. **0.1.8** as of this refresh).
 
 5. **Fix deprecated `asyncio.get_event_loop()`** in `[homekit_hub/bridge.py](c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\homekit_hub\bridge.py)` lines 498 (`discover_collect`) and 578 (`_wait_for_pairing_discovery`) — switch to `asyncio.get_running_loop()` (Python 3.10+ best practice; we already require 3.9+ but PG3 ships 3.11).
 
@@ -291,6 +298,18 @@ Add **Custom Configuration Parameters** (visible in the PG3 UI, see `[CONFIG.md]
 | `zeroconf_ip_version` | `v4` / `v6` / `all` / blank | blank | IP family |
 
 `auto` keeps current behavior (try multicast, fall back on `EADDRINUSE`). Env vars remain a final override for support cases. Drop `os.environ.setdefault` in the entrypoint.
+
+#### Why “zeroconf config change” handling was proposed (and when you can skip it)
+
+`HomeKitHubBridge.start()` constructs `AsyncZeroconf` and the HAP browsers once. `restart_session()` reloads pairing rows from typed config but **does not** tear down or rebuild zeroconf. So if users could change zeroconf from **Custom Params** and the Controller only called `restart_session()` (today’s pattern for typed pairing edits), the new zeroconf settings would **not** apply until something performed a full bridge `stop`/`start` or a **Node Server restart**.
+
+That is the only technical reason to worry about it. It is **not** required for a working eISY-style deployment if:
+
+- Defaults (and optional `homekit-poly.py` / env) already match what we ship for production, and
+- Advanced tweaks stay **environment-only** (changing env always implies restarting the Node Server process), or
+- We document that any PG3-visible zeroconf knobs require **restart Node Server** after save.
+
+**Plan adjustment:** Treat automatic `full_restart()` / extra `_maybe_restart_on_config_change` branching for zeroconf as **optional convenience**, not a P5 requirement. Prefer documenting manual restart over adding complexity, unless we explicitly want “save in PG3 UI applies without restarting the Node Server.”
 
 ### 28. Decide and document the default mode
 

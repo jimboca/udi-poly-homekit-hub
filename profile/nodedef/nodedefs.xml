@@ -3,6 +3,7 @@
     <editors />
     <sts>
       <st id="ST" editor="cst" />
+      <st id="GV0" editor="brst" />
       <st id="ERR" editor="errc" />
     </sts>
     <cmds>
@@ -13,6 +14,7 @@
       <accepts>
         <cmd id="QUERY" />
         <cmd id="DISCOVER" />
+        <cmd id="ZEROCONF_DIAG" />
       </accepts>
     </cmds>
   </nodeDef>

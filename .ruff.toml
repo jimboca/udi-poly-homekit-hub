@@ -1,0 +1,7 @@
+target-version = "py39"
+line-length = 100
+exclude = [".venv", "env", "logs", "__pycache__"]
+
+[lint]
+# Default Ruff rule set; extend as the codebase adopts stricter style.
+select = ["E4", "E7", "E9", "F"]

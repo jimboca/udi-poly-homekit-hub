@@ -32,6 +32,15 @@ ERR_APPEND_PAIRING = 5
 ERR_BRIDGE_STOP = 6
 ERR_STATUS_UPDATE = 7
 
+# Merged into Custom Params before the bridge reads them (PG3 may omit unset keys).
+_DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
+    "ws_host": "127.0.0.1",
+    "ws_port": "8163",
+    # Matches prior entrypoint default: unicast-friendly when mDNS 5353 is shared.
+    "zeroconf_unicast": "on",
+    "zeroconf_interfaces": "",
+    "zeroconf_ip_version": "",
+}
 
 
 class Controller(Node):
@@ -117,7 +126,18 @@ class Controller(Node):
         LOGGER.debug("exit")
 
     def _bridge_get_params(self) -> dict[str, Any]:
-        return {k: self.Params[k] for k in self.Params.keys()}
+        raw = {k: self.Params[k] for k in self.Params.keys()}
+        out: dict[str, Any] = {}
+        for k, default in _DEFAULT_BRIDGE_PARAMS.items():
+            v = raw.get(k, default)
+            if v is None or (isinstance(v, str) and not str(v).strip()):
+                out[k] = default
+            else:
+                out[k] = v
+        for k, v in raw.items():
+            if k not in out:
+                out[k] = v
+        return out
 
     def _bridge_get_pairing_slot_rows(self) -> list:
         try:
@@ -183,9 +203,13 @@ class Controller(Node):
         )
 
     def _config_restart_snap(self) -> dict[str, Any]:
+        p = self._bridge_get_params()
         snap = {
-            "ws_host": self.Params.get("ws_host"),
-            "ws_port": self.Params.get("ws_port"),
+            "ws_host": p.get("ws_host"),
+            "ws_port": p.get("ws_port"),
+            "zeroconf_unicast": p.get("zeroconf_unicast"),
+            "zeroconf_interfaces": p.get("zeroconf_interfaces"),
+            "zeroconf_ip_version": p.get("zeroconf_ip_version"),
         }
         rows = self._bridge_get_pairing_slot_rows()
         snap["_pairing_slots"] = json.dumps(rows, sort_keys=True, default=str)
@@ -193,16 +217,53 @@ class Controller(Node):
 
     def _maybe_restart_on_config_change(self) -> None:
         snap = self._config_restart_snap()
-        if (
-            self.ready
-            and self.mainloop
-            and self.bridge
-            and self._config_snap is not None
-            and snap != self._config_snap
-        ):
-            LOGGER.info("Configuration changed; restarting HomeKit sessions")
-            asyncio.run_coroutine_threadsafe(self.bridge.restart_session(), self.mainloop)
+        prev = self._config_snap
         self._config_snap = snap
+        if not (self.ready and self.mainloop and self.bridge and prev is not None):
+            return
+        if snap == prev:
+            return
+        network_changed = (
+            snap.get("ws_host") != prev.get("ws_host")
+            or snap.get("ws_port") != prev.get("ws_port")
+            or snap.get("zeroconf_unicast") != prev.get("zeroconf_unicast")
+            or snap.get("zeroconf_interfaces") != prev.get("zeroconf_interfaces")
+            or snap.get("zeroconf_ip_version") != prev.get("zeroconf_ip_version")
+        )
+        pairing_changed = snap.get("_pairing_slots") != prev.get("_pairing_slots")
+        if network_changed:
+            LOGGER.info("Hub bind/zeroconf config changed; restarting bridge")
+            try:
+                self.setDriver("GV0", 0, report=True, force=True, uom=25)
+            except Exception:
+                LOGGER.exception("setDriver GV0 before full_restart")
+            fut = asyncio.run_coroutine_threadsafe(
+                self.bridge.full_restart(), self.mainloop
+            )
+            fut.add_done_callback(self._on_full_restart_done)
+        elif pairing_changed:
+            LOGGER.info("Typed pairing config changed; reloading HomeKit sessions")
+            asyncio.run_coroutine_threadsafe(self.bridge.restart_session(), self.mainloop)
+
+    def _on_full_restart_done(self, fut) -> None:
+        """Apply Bridge Status after ``full_restart`` completes (config-driven recycle)."""
+        try:
+            fut.result()
+        except Exception:
+            LOGGER.exception("Bridge full restart after config change failed")
+            try:
+                self.setDriver("GV0", 2, report=True, force=True, uom=25)
+                self.setDriver("ERR", ERR_BRIDGE_START, report=True, force=True, uom=25)
+            except Exception:
+                LOGGER.exception("setDriver after full_restart failure")
+            self.ready = False
+            return
+        try:
+            self.setDriver("GV0", 1, report=True, force=True, uom=25)
+            self.setDriver("ERR", ERR_OK, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver GV0 after full_restart")
+        self.ready = True
 
     def handler_config_done(self):
         self.handler_config_done_st = True
@@ -220,7 +281,7 @@ class Controller(Node):
     ) -> None:
         """Log (with traceback if ``exc``), post a Polyglot Notice, set **ERR** error code.
 
-        Use **set_st_error** only for hub-fatal faults (sets **ST** = 2 = Error per profile).
+        Use **set_st_error** only for hub-fatal faults (sets **GV0** Bridge Status = 2 = Error).
         """
         lm = log_message or title
         if exc is not None:
@@ -242,7 +303,7 @@ class Controller(Node):
         try:
             self.setDriver("ERR", code, report=True, force=True, uom=25)
             if set_st_error:
-                self.setDriver("ST", 2, report=True, force=True)
+                self.setDriver("GV0", 2, report=True, force=True, uom=25)
         except Exception as e2:
             LOGGER.exception("report_error: setDriver failed")
             try:
@@ -481,6 +542,11 @@ class Controller(Node):
 
         self._loop_thread = Thread(target=_run_loop, daemon=True)
         self._loop_thread.start()
+        try:
+            self.setDriver("ST", 1, report=True, force=True, uom=25)
+            self.setDriver("GV0", 0, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver ST/GV0 before bridge start")
 
         self._config_snap = None
         self.bridge = HomeKitHubBridge(
@@ -505,10 +571,10 @@ class Controller(Node):
                 log_message="HomeKit bridge failed to start",
                 extra_html=(
                     "If the error mentions <code>zeroconf</code> / port <b>5353</b>, another mDNS stack "
-                    "may own that port. The hub defaults to a compatible unicast mode (set in "
-                    "<code>homekit-poly.py</code>); you can override with env "
-                    "<code>HOMEKIT_HUB_ZEROCONF_UNICAST</code> for the Node Server process, or on Linux "
-                    "with Avahi set <code>disallow-other-stacks=no</code> in <code>avahi-daemon.conf</code>.<br/>"
+                    "may own that port. See <b>CONFIG.md</b> — Custom Params "
+                    "<code>zeroconf_*</code> (default keeps unicast-friendly behavior on shared mDNS hosts); "
+                    "environment variables override those when set. On Linux with Avahi, "
+                    "<code>disallow-other-stacks=no</code> in <code>avahi-daemon.conf</code> can help.<br/>"
                 ),
                 set_st_error=True,
             )
@@ -516,7 +582,10 @@ class Controller(Node):
 
         # Keep startup config guidance notices from bridge.start() visible in UI.
         self.clear_hub_error_indicators(keep_config_notice=True)
-        self.setDriver("ST", 1)
+        try:
+            self.setDriver("GV0", 1, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver GV0 after bridge start")
         self.heartbeat()
         self.ready = True
         LOGGER.info("HomeKit Hub ready")
@@ -524,6 +593,11 @@ class Controller(Node):
     def handler_stop(self):
         LOGGER.info("Stopping HomeKit Hub")
         self.ready = False
+        try:
+            self.setDriver("GV0", 0, report=True, force=True, uom=25)
+            self.setDriver("ST", 0, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver ST/GV0 on stop")
         if self.bridge and self.mainloop:
             fut = asyncio.run_coroutine_threadsafe(self.bridge.stop(), self.mainloop)
             try:
@@ -997,19 +1071,40 @@ class Controller(Node):
             self.hb = 0
 
     def query(self):
+        try:
+            self.setDriver("ST", 1, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver ST on query")
         self.reportDrivers()
 
     def cmd_discover(self, command=None):
         """DISCOVER from ISY/PG3 UI (runCmd); same work as ``handler_discover``."""
         self.handler_discover()
 
+    def cmd_zeroconf_diag(self, command=None):
+        """Post a one-shot Notice with zeroconf mode, transports, and version info."""
+        if not (self.ready and self.bridge and self.mainloop):
+            LOGGER.warning(
+                "ZEROCONF_DIAG skipped: hub not ready (wait for log line 'HomeKit Hub ready')."
+            )
+            return
+        diag = self.bridge.zeroconf_diag()
+        line = json.dumps(diag, indent=2, sort_keys=True, default=str)
+        LOGGER.info("ZEROCONF_DIAG:\n%s", line)
+        self.Notices["zeroconf_diag"] = (
+            "<b>Zeroconf / hub diagnostic</b><br/><pre>"
+            f"{html.escape(line)}</pre>"
+        )
+
     # Must match profile/nodedefs.xml; runCmd only sees commands listed here.
     id = "HKHubController"
     commands = {
         "DISCOVER": cmd_discover,
         "QUERY": query,
+        "ZEROCONF_DIAG": cmd_zeroconf_diag,
     }
     drivers = [
-        {"driver": "ST", "value": 1, "uom": 25, "name": "Hub status"},
+        {"driver": "ST", "value": 0, "uom": 25, "name": "NodeServer Online"},
+        {"driver": "GV0", "value": 0, "uom": 25, "name": "Bridge Status"},
         {"driver": "ERR", "value": 0, "uom": 25, "name": "Hub error code"},
     ]

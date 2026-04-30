@@ -6,6 +6,11 @@
 |-----------|----------|-------------|
 | `ws_host` | No | WebSocket bind address. Default `127.0.0.1`. |
 | `ws_port` | No | WebSocket port. Default `8163`. |
+| `zeroconf_unicast` | No | `on` (default), `auto`, or `off`. **`on`** uses python-zeroconf unicast mode (typical on eISY and other hosts where UDP **5353** is already owned). **`auto`** tries multicast first, then falls back on “address in use”. **`off`** forces multicast only (fails if 5353 is taken). **Most installs never change this.** |
+| `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
+| `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
+
+**Zeroconf parameters:** On a normal Polisy / eISY deployment you can ignore the three `zeroconf_*` keys entirely. Defaults match the supported production setup (unicast-friendly when mDNS is shared). Change them only for troubleshooting or unusual networks; the controller command **Zeroconf diagnostic** (`ZEROCONF_DIAG`) logs a snapshot (mode, transports, library versions). After changing `zeroconf_*` or WebSocket bind settings, save configuration; the hub restarts the asyncio bridge automatically when those values change. (Environment variables below still **override** Custom Params when set for the Node Server process.)
 
 ## Custom Typed Configuration Parameters
 
@@ -68,10 +73,10 @@ The WebSocket server binds to `127.0.0.1` by default so only local clients can c
 
 ## Environment (optional)
 
-These apply to the Node Server process (see `homekit-poly.py` for defaults such as unicast zeroconf):
+These apply to the **Node Server process**. When set, they **override** the corresponding Custom Params (`zeroconf_*`). Host operators use them for support or automation; **typical users rely on Custom Param defaults and do not set these.**
 
 | Variable | Values | Purpose |
 |----------|--------|---------|
-| `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` | Use python-zeroconf unicast mode (avoids binding UDP 5353 when another mDNS stack owns it). |
-| `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Narrow or widen interface selection for zeroconf (BSD/macOS unicast may need `default` to reduce `sendto` errno 49 warnings). |
-| `HOMEKIT_HUB_ZEROCONF_IP_VERSION` | `v4` / `v6` / `all` | Force IP stack for zeroconf; on BSD/macOS in unicast mode the hub may default to IPv4-only unless you set `all`. |
+| `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` / `on` or `0` / `false` / `off` | Force unicast or force multicast regardless of Custom Params. |
+| `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Interface selection for zeroconf (BSD/macOS: `default` can reduce errno **49** warnings in unicast mode). |
+| `HOMEKIT_HUB_ZEROCONF_IP_VERSION` | `v4` / `v6` / `all` | IP stack for zeroconf. |
