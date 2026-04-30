@@ -24,6 +24,11 @@ The hub may pair **multiple** HomeKit accessories at once. Every `event` include
 }
 ```
 
+After `ack`, the hub automatically sends an initial bootstrap stream on that same connection:
+
+1. one `list_devices` message (current active pairings)
+2. one `snapshot` message per returned `device_id`
+
 ## Hub → Client (`event`)
 
 Emitted when a subscribed HomeKit characteristic changes.
@@ -147,7 +152,10 @@ Request the set of currently active paired accessories.
 }
 ```
 
-Use `list_devices` + one `snapshot` request per `device_id` to initialize a client with all active devices.
+The hub may also send `list_devices` proactively after pairing/unpairing state changes so connected clients can refresh membership without polling.
+
+The hub now auto-bootstraps `list_devices` after `hello`/`ack`.
+Clients should request `snapshot` only for device(s) they care about.
 
 ## Example client (`websockets`)
 
@@ -167,16 +175,22 @@ async def main() -> None:
         ack = json.loads(await ws.recv())
         print("hello ack:", ack)
 
-        await ws.send(json.dumps({"version": "1", "action": "list_devices"}))
+        # Hub auto-sends list_devices after ack
         devices = json.loads(await ws.recv())
-        print("devices:", devices)
+        print("bootstrap devices:", devices)
 
-        # Subscribe to events by reading in a loop; send commands on another task as needed.
+        # Request snapshots only for device(s) you care about.
+        for item in devices.get("devices", []):
+            did = (item.get("device_id") or "").strip().lower()
+            if not did:
+                continue
+            await ws.send(json.dumps({"version": "1", "action": "snapshot", "device_id": did}))
+
+        # Subscribe to incoming messages; send commands on another task as needed.
         while True:
             raw = await ws.recv()
             msg = json.loads(raw)
-            if msg.get("action") == "event":
-                print("event:", msg)
+            print(msg.get("action"), msg)
 
 asyncio.run(main())
 ```

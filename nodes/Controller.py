@@ -21,6 +21,7 @@ from homekit_hub import (
 from homekit_hub.bridge import _parse_slot_value
 
 from nodes import VERSION
+from .PairedDeviceNode import PairedDeviceNode
 
 # ISY-visible error codes (driver ERR, UOM 25 index + NLS ERRC-*). See README.
 ERR_OK = 0
@@ -49,6 +50,20 @@ _HUB_BOOTSTRAP_AFTER_CONFIG_MAX_ATTEMPTS = 120
 _HUB_BOOTSTRAP_AFTER_CONFIG_RETRY_SEC = 0.1
 # If CONFIGDONE never arrives (misbehaving client), still try once custom handlers have run.
 _HUB_BOOTSTRAP_FALLBACK_SEC = 75.0
+_DATA_KEY_NODE_KEY_NEXT_INDEX = "node_key_next_index"
+
+
+def _alpha_key_from_index(n: int) -> str:
+    """Index 0->a, 25->z, 26->aa, ..."""
+    x = max(0, int(n))
+    chars: list[str] = []
+    while True:
+        x, rem = divmod(x, 26)
+        chars.append(chr(ord("a") + rem))
+        if x == 0:
+            break
+        x -= 1
+    return "".join(reversed(chars))
 
 
 class Controller(Node):
@@ -78,6 +93,9 @@ class Controller(Node):
         self.bridge: HomeKitHubBridge | None = None
         self._pending_hub_bootstrap = False
         self._hub_bootstrap_generation = 0
+        self._paired_nodes: dict[str, PairedDeviceNode] = {}
+        self._discover_notice_token = 0
+        self._node_key_next_index_cache: Optional[int] = None
 
         self.init_typed_params()
         poly.subscribe(poly.START, self.handler_start, address)
@@ -127,6 +145,11 @@ class Controller(Node):
                         {
                             "name": "discover_endpoint",
                             "title": "LAN host:port from last DISCOVER (informational; optional)",
+                            "isRequired": False,
+                        },
+                        {
+                            "name": "node_key",
+                            "title": "Stable node key (plugin-managed identity; auto-generated if empty. Edit only to match a previously paired device you want to keep on the same IoX node address)",
                             "isRequired": False,
                         },
                     ],
@@ -327,6 +350,7 @@ class Controller(Node):
         """Create asyncio loop thread, bridge, and start listening (PG3 thread)."""
         # One-shot migration: dashed PIN in UI for codes stored without dashes.
         self._normalize_and_persist_typed_pairing_pins()
+        self._ensure_pairing_row_node_keys()
 
         self.mainloop = asyncio.new_event_loop()
 
@@ -489,10 +513,183 @@ class Controller(Node):
             self.handler_data_st = False
             return
         self.Data.load(data)
+        self._sync_paired_nodes_from_data()
         self._maybe_post_pair_success_notice()
         self._maybe_clear_hap_discover_notice_for_paired()
         self._maybe_clear_pairing_error_notice_for_success()
         self.handler_data_st = True
+
+    def _paired_slots_from_data(self) -> dict[int, str]:
+        try:
+            pairings = self.Data.get("homekit_pairings")
+        except Exception:
+            return {}
+        if not isinstance(pairings, dict):
+            return {}
+        out: dict[int, str] = {}
+        for raw_slot, item in pairings.items():
+            if not isinstance(item, dict):
+                continue
+            pid = str(item.get("AccessoryPairingID") or "").strip().lower()
+            if not pid:
+                continue
+            slot = _parse_slot_value(raw_slot)
+            if slot is None or slot < 1:
+                continue
+            out[slot] = pid
+        return out
+
+    def _candidate_slots_from_typed_data(self) -> dict[int, str]:
+        try:
+            rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return {}
+        if not isinstance(rows, list):
+            return {}
+        out: dict[int, str] = {}
+        for slot, row in assign_pairing_slot_rows(rows, LOGGER):
+            if not isinstance(row, dict):
+                continue
+            aid = str(row.get("accessory_id") or "").strip().lower()
+            aname = str(row.get("accessory_name") or "").strip().lower()
+            label = aid or aname
+            if not label:
+                continue
+            out[slot] = label
+        return out
+
+    def _typed_row_node_key_map(self) -> dict[str, int]:
+        try:
+            rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return {}
+        if not isinstance(rows, list):
+            return {}
+        out: dict[str, int] = {}
+        for slot, row in assign_pairing_slot_rows(rows, LOGGER):
+            if not isinstance(row, dict):
+                continue
+            node_key = str(row.get("node_key") or "").strip().lower()
+            if node_key:
+                out[node_key] = slot
+        return out
+
+    def _get_node_key_next_index(self) -> int:
+        if self._node_key_next_index_cache is not None:
+            return max(0, int(self._node_key_next_index_cache))
+        idx = 0
+        try:
+            raw = self.Data.get(_DATA_KEY_NODE_KEY_NEXT_INDEX)
+            idx = int(raw) if raw is not None else 0
+        except Exception:
+            idx = 0
+        idx = max(0, idx)
+        self._node_key_next_index_cache = idx
+        return idx
+
+    def _set_node_key_next_index(self, idx: int) -> None:
+        next_idx = max(0, int(idx))
+        self._node_key_next_index_cache = next_idx
+        try:
+            d = self._bridge_get_data()
+            d[_DATA_KEY_NODE_KEY_NEXT_INDEX] = next_idx
+            self._bridge_set_data(d)
+        except Exception:
+            LOGGER.exception("Failed to persist node_key allocator cursor")
+
+    def _allocate_node_key(self, used: Set[str]) -> str:
+        idx = self._get_node_key_next_index()
+        while True:
+            key = _alpha_key_from_index(idx)
+            idx += 1
+            if key in used:
+                continue
+            self._set_node_key_next_index(idx)
+            return key
+
+    def _ensure_pairing_row_node_keys(self) -> bool:
+        """Assign stable alphabetic node_key values to pairing rows that need them."""
+        try:
+            raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return False
+        if not isinstance(raw_rows, list):
+            return False
+
+        rows = [dict(x) if isinstance(x, dict) else x for x in raw_rows]
+        used: Set[str] = set()
+        changed = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            node_key = str(row.get("node_key") or "").strip().lower()
+            if node_key.isalpha() and node_key not in used:
+                used.add(node_key)
+                continue
+            new_key = self._allocate_node_key(used)
+            used.add(new_key)
+            row["node_key"] = new_key
+            changed = True
+
+        if not changed:
+            return False
+
+        try:
+            td = self._typed_data_dict()
+            td[TYPED_PAIRING_SLOTS_KEY] = rows
+            self.TypedData.load(td, save=True)
+        except Exception:
+            LOGGER.exception("Failed to persist node_key values in typed pairing rows")
+            return False
+        LOGGER.info("Assigned stable node_key values for HomeKit pairing rows")
+        return True
+
+    def _sync_paired_nodes_from_data(self) -> None:
+        paired = self._paired_slots_from_data()
+        candidates = self._candidate_slots_from_typed_data()
+        key_map = self._typed_row_node_key_map()
+        desired: dict[str, tuple[int, str, bool]] = {}
+        for node_key, slot in key_map.items():
+            desired[node_key] = (slot, candidates.get(slot, ""), False)
+        for slot, pid in paired.items():
+            for node_key, key_slot in key_map.items():
+                if key_slot == slot:
+                    desired[node_key] = (slot, pid, True)
+                    break
+        desired_keys = set(desired.keys())
+        existing_keys = set(self._paired_nodes.keys())
+
+        for node_key in sorted(existing_keys - desired_keys):
+            node = self._paired_nodes.pop(node_key, None)
+            if node is None:
+                continue
+            try:
+                if hasattr(self.poly, "delNode"):
+                    self.poly.delNode(node.address)
+                elif hasattr(self.poly, "removeNode"):
+                    self.poly.removeNode(node.address)
+            except Exception:
+                LOGGER.exception(
+                    "Failed to delete paired device node for key %s", node_key
+                )
+
+        for node_key in sorted(desired_keys):
+            slot, device_label, is_paired = desired[node_key]
+            node = self._paired_nodes.get(node_key)
+            if node is None:
+                try:
+                    node = PairedDeviceNode(
+                        self, node_key, slot, device_label, is_paired
+                    )
+                    self.poly.addNode(node)
+                    self._paired_nodes[node_key] = node
+                except Exception:
+                    LOGGER.exception(
+                        "Failed to create paired device node for key %s", node_key
+                    )
+                    continue
+            else:
+                node.update_identity(slot, device_label, is_paired)
 
     def _current_paired_ids_from_data(self) -> Set[str]:
         try:
@@ -631,7 +828,9 @@ class Controller(Node):
         self.handler_typed_data_st = True
         # Use TypedData after load — PG3 may send a partial ``data`` dict without ``pairing_slots``.
         self._normalize_and_persist_typed_pairing_pins()
+        self._ensure_pairing_row_node_keys()
         self._auto_discover_if_needed_from_typed_update()
+        self._sync_paired_nodes_from_data()
         self._maybe_restart_on_config_change()
 
     def handler_params(self, params):
@@ -686,6 +885,7 @@ class Controller(Node):
     def handler_stop(self):
         LOGGER.info("Stopping HomeKit Hub")
         self.ready = False
+        self._paired_nodes.clear()
         try:
             self.setDriver("GV0", 0, report=True, force=True, uom=25)
             self.setDriver("ST", 0, report=True, force=True, uom=25)
@@ -727,12 +927,51 @@ class Controller(Node):
                             pass
                     LOGGER.info("Cleared transient pairing success notice after 2 longPolls")
 
+    def _set_discover_progress_notice(self, seconds_left: int) -> None:
+        sec = max(0, int(seconds_left))
+        self.Notices["discover_progress"] = (
+            "<b>HomeKit DISCOVER running</b><br/>"
+            f"Scan window ends in <b>{sec}</b> second(s)."
+        )
+
+    def _clear_discover_progress_notice(self) -> None:
+        try:
+            self.Notices.delete("discover_progress")
+        except Exception:
+            try:
+                del self.Notices["discover_progress"]
+            except Exception:
+                pass
+
+    def _start_discover_progress_notice(self, seconds: int) -> int:
+        token = self._discover_notice_token + 1
+        self._discover_notice_token = token
+        self._set_discover_progress_notice(seconds)
+
+        def _tick(remaining: int, this_token: int) -> None:
+            if this_token != self._discover_notice_token:
+                return
+            self._set_discover_progress_notice(remaining)
+            if remaining <= 0:
+                return
+            Timer(1.0, lambda: _tick(remaining - 1, this_token)).start()
+
+        if seconds > 0:
+            Timer(1.0, lambda: _tick(seconds - 1, token)).start()
+        return token
+
+    def _stop_discover_progress_notice(self, token: int) -> None:
+        if token == self._discover_notice_token:
+            self._discover_notice_token += 1
+        self._clear_discover_progress_notice()
+
     def handler_discover(self, _data=None):
         """Network scan: results are saved and shown in a Polyglot Notice (no log file needed).
 
         PG3 may invoke this via ``poly.subscribe(DISCOVER)`` (MQTT ``discover``) and/or via
         ``runCmd``; the latter requires ``commands['DISCOVER']`` (see udi-poly-ecobee / udi-poly-kasa).
         """
+        discover_notice_token: Optional[int] = None
         try:
             LOGGER.info("HomeKit DISCOVER: starting (zeroconf HAP scan)")
             if not (self.bridge and self.mainloop):
@@ -741,6 +980,7 @@ class Controller(Node):
                     "'HomeKit Hub ready' after the Node Server starts, then try again."
                 )
                 return
+            discover_notice_token = self._start_discover_progress_notice(12)
             fut = asyncio.run_coroutine_threadsafe(
                 self.bridge.discover_collect(12.0), self.mainloop
             )
@@ -766,6 +1006,9 @@ class Controller(Node):
                 exc=e,
                 log_message="HomeKit DISCOVER: unexpected error",
             )
+        finally:
+            if discover_notice_token is not None:
+                self._stop_discover_progress_notice(discover_notice_token)
 
     def _typed_data_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -952,6 +1195,11 @@ class Controller(Node):
             current = [dict(x) for x in raw if isinstance(x, dict)]
 
         used_slots = self._used_pairing_slots_from_rows(current)
+        used_node_keys: Set[str] = set()
+        for row in current:
+            nk = str(row.get("node_key") or "").strip().lower()
+            if nk.isalpha():
+                used_node_keys.add(nk)
 
         by_id: dict[str, dict[str, Any]] = {}
         for r in candidates:
@@ -1010,6 +1258,11 @@ class Controller(Node):
             row.setdefault("hap_pin", "")
             if _parse_slot_value(row.get("slot")) is None:
                 row["slot"] = str(self._take_next_free_slot(used_slots))
+            nk = str(row.get("node_key") or "").strip().lower()
+            if not nk.isalpha() or nk in used_node_keys:
+                nk = self._allocate_node_key(used_node_keys)
+                row["node_key"] = nk
+            used_node_keys.add(nk)
             seen.add(pid)
             n_filled += 1
 
@@ -1025,7 +1278,9 @@ class Controller(Node):
                 "hap_pin": "",
                 "accessory_id": pid,
                 "accessory_name": pname,
+                "node_key": self._allocate_node_key(used_node_keys),
             }
+            used_node_keys.add(str(new_row["node_key"]))
             if ep:
                 new_row["discover_endpoint"] = ep
             current.append(new_row)
@@ -1117,6 +1372,12 @@ class Controller(Node):
             f"{typed_blurb} <b>Enter only the HomeKit pairing code</b> on each target row, then save.<br/>"
             f"(Snapshot: <code>{html.escape(DATA_KEY_LAST_HAP_DISCOVER)}</code>.)<br/>",
         ]
+        if not unpaired and paired:
+            parts.append(
+                "<b>No unpaired HomeKit devices are currently available for pairing.</b><br/>"
+                "If you just unpaired this accessory, wait 30-60 seconds and run <b>DISCOVER</b> again. "
+                "If it still shows paired, power-cycle or reboot/reset the accessory, then rediscover.<br/>"
+            )
         if n_appended:
             parts.append(f"Added <b>{n_appended}</b> new row(s) for unpaired accessories.<br/>")
         if n_filled:
@@ -1194,28 +1455,17 @@ class Controller(Node):
             f"{html.escape(line)}</pre>"
         )
 
-    def cmd_unpair(self, command=None):
-        """UNPAIR slot N: clear that slot's pairing code in Custom Typed and reload sessions.
-
-        The resolved slot follows the same assignment rules as the hub (explicit ``slot``
-        field or auto-filled slot numbers). Choose the target slot from the command picker.
-        """
-        cmd = command if isinstance(command, dict) else {}
-        try:
-            slot = int(cmd.get("value"))
-        except (TypeError, ValueError):
-            LOGGER.warning("UNPAIR: missing or invalid slot selection")
-            return
+    def _clear_slot_pin_and_reload(self, slot: int, *, source: str) -> bool:
         if slot < 1:
-            LOGGER.warning("UNPAIR: slot must be >= 1 (got %s)", slot)
-            return
+            LOGGER.warning("UNPAIR[%s]: slot must be >= 1 (got %s)", source, slot)
+            return False
         try:
             raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
         except Exception:
             raw_rows = None
         if not isinstance(raw_rows, list):
-            LOGGER.warning("UNPAIR: no Custom Typed pairing rows loaded")
-            return
+            LOGGER.warning("UNPAIR[%s]: no Custom Typed pairing rows loaded", source)
+            return False
         assigned = assign_pairing_slot_rows(raw_rows, LOGGER)
         cleared = False
         matched = False
@@ -1231,39 +1481,156 @@ class Controller(Node):
             break
         if not matched:
             LOGGER.warning(
-                "UNPAIR: no pairing row resolved to slot %s (check Custom Typed slots)",
+                "UNPAIR[%s]: no pairing row resolved to slot %s (check Custom Typed slots)",
+                source,
                 slot,
             )
-            return
+            return False
         if not cleared:
             LOGGER.warning(
-                "UNPAIR: slot %s already has an empty pairing code in Custom Typed",
+                "UNPAIR[%s]: slot %s already has an empty pairing code in Custom Typed",
+                source,
                 slot,
             )
-            return
+            return False
         try:
             td = self._typed_data_dict()
             td[TYPED_PAIRING_SLOTS_KEY] = raw_rows
             self.TypedData.load(td, save=True)
         except Exception as e:
-            LOGGER.exception("UNPAIR: failed to save Custom Typed data")
+            LOGGER.exception("UNPAIR[%s]: failed to save Custom Typed data", source)
             self.report_error(
                 ERR_TYPED_SAVE,
                 "homekit_err_config",
                 "Failed to save Custom Typed data after UNPAIR",
                 exc=e,
-                log_message="UNPAIR typed save",
+                log_message=f"UNPAIR typed save ({source})",
             )
-            return
-        LOGGER.info("UNPAIR: cleared hap_pin for slot %s; reloading hub sessions", slot)
+            return False
+        LOGGER.info(
+            "UNPAIR[%s]: cleared hap_pin for slot %s; reloading hub sessions",
+            source,
+            slot,
+        )
         self._maybe_restart_on_config_change()
+        return True
+
+    def _clear_node_key_pin_and_reload(self, node_key: str, *, source: str) -> bool:
+        key = str(node_key or "").strip().lower()
+        slot = self._typed_row_node_key_map().get(key)
+        if slot is None:
+            LOGGER.warning("UNPAIR[%s]: no row found for node_key %s", source, key)
+            return False
+        return self._clear_slot_pin_and_reload(slot, source=source)
+
+    def _delete_node_key_config_and_node(self, node_key: str, *, source: str) -> bool:
+        key = str(node_key or "").strip().lower()
+        if not key:
+            LOGGER.warning("DELETE[%s]: missing node_key", source)
+            return False
+
+        removed_typed_row = False
+        removed_slot: Optional[int] = None
+        try:
+            raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            raw_rows = None
+        if isinstance(raw_rows, list):
+            assigned = assign_pairing_slot_rows(raw_rows, LOGGER)
+            keep_rows: list[Any] = []
+            for sn, row in assigned:
+                row_key = (
+                    str(row.get("node_key") or "").strip().lower()
+                    if isinstance(row, dict)
+                    else ""
+                )
+                if row_key == key and not removed_typed_row:
+                    removed_typed_row = True
+                    removed_slot = sn
+                    continue
+                keep_rows.append(row)
+            if removed_typed_row:
+                try:
+                    td = self._typed_data_dict()
+                    td[TYPED_PAIRING_SLOTS_KEY] = keep_rows
+                    self.TypedData.load(td, save=True)
+                except Exception as e:
+                    LOGGER.exception("DELETE[%s]: failed to save Custom Typed data", source)
+                    self.report_error(
+                        ERR_TYPED_SAVE,
+                        "homekit_err_config",
+                        "Failed to save Custom Typed data after DELETE",
+                        exc=e,
+                        log_message=f"DELETE typed save ({source})",
+                    )
+                    return False
+
+        removed_pairing = False
+        try:
+            data = self._bridge_get_data()
+            pairings = data.get("homekit_pairings")
+            if isinstance(pairings, dict):
+                for pair_key in list(pairings.keys()):
+                    key_slot = _parse_slot_value(pair_key)
+                    if removed_slot is not None and key_slot == removed_slot:
+                        del pairings[pair_key]
+                        removed_pairing = True
+            if removed_pairing:
+                self._bridge_set_data(data)
+        except Exception as e:
+            LOGGER.exception("DELETE[%s]: failed to save custom data", source)
+            self.report_error(
+                ERR_TYPED_SAVE,
+                "homekit_err_config",
+                "Failed to save custom data after DELETE",
+                exc=e,
+                log_message=f"DELETE customdata save ({source})",
+            )
+            return False
+
+        node = self._paired_nodes.pop(key, None)
+        if node is not None:
+            try:
+                if hasattr(self.poly, "delNode"):
+                    self.poly.delNode(node.address)
+                elif hasattr(self.poly, "removeNode"):
+                    self.poly.removeNode(node.address)
+            except Exception:
+                LOGGER.exception("DELETE[%s]: failed to remove node for key %s", source, key)
+
+        if not removed_typed_row and not removed_pairing:
+            LOGGER.warning(
+                "DELETE[%s]: no row/pairing matched node_key %s; removing node only if present",
+                source,
+                key,
+            )
+            return node is not None
+
+        LOGGER.info(
+            "DELETE[%s]: removed node_key %s config (typed_row=%s pairings=%s); reloading hub sessions",
+            source,
+            key,
+            removed_typed_row,
+            removed_pairing,
+        )
+        self._maybe_restart_on_config_change()
+        return True
+
+    def cmd_unpair(self, command=None):
+        """Backward-compatible controller UNPAIR path."""
+        cmd = command if isinstance(command, dict) else {}
+        try:
+            slot = int(cmd.get("value"))
+        except (TypeError, ValueError):
+            LOGGER.warning("UNPAIR[controller]: missing or invalid slot selection")
+            return
+        self._clear_slot_pin_and_reload(slot, source="controller")
 
     # Must match profile/nodedefs.xml; runCmd only sees commands listed here.
     id = "HKHubController"
     commands = {
         "DISCOVER": cmd_discover,
         "QUERY": query,
-        "UNPAIR": cmd_unpair,
         "ZEROCONF_DIAG": cmd_zeroconf_diag,
     }
     drivers = [

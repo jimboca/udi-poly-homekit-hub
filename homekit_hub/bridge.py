@@ -983,6 +983,7 @@ class HomeKitHubBridge:
                     "protocol": PROTOCOL_VERSION,
                 },
             )
+            await self._send_bootstrap_state(ws)
             return
         if action == "command":
             await self._handle_command(ws, msg)
@@ -1000,6 +1001,23 @@ class HomeKitHubBridge:
                 "action": "error",
                 "message": f"unknown action {action!r}",
             },
+        )
+
+    async def _send_bootstrap_state(self, ws: Any) -> None:
+        """Send initial device membership to a newly handshaken client."""
+        device_ids = await self._active_pairing_device_ids_stable()
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "list_devices",
+                "devices": [{"device_id": did} for did in device_ids],
+            },
+        )
+        self.log.debug(
+            "hello bootstrap: sent list_devices count=%d ids=%s",
+            len(device_ids),
+            device_ids,
         )
 
     def _active_pairing_device_ids(self) -> list[str]:
@@ -1036,6 +1054,25 @@ class HomeKitHubBridge:
         if not self._hk:
             return None
         return self._hk.pairings.get(device_id)
+
+    async def _active_pairing_device_ids_stable(self) -> list[str]:
+        """Retry briefly before returning an empty paired-device list."""
+        ids = self._active_pairing_device_ids()
+        if ids:
+            return ids
+        if not self._hk:
+            return []
+        for delay_s in (0.25, 0.35, 0.45):
+            await asyncio.sleep(delay_s)
+            ids = self._active_pairing_device_ids()
+            if ids:
+                self.log.debug(
+                    "stable list_devices retry recovered ids after %.2fs: %s",
+                    delay_s,
+                    ids,
+                )
+                return ids
+        return []
 
     async def _handle_command(self, ws: Any, msg: dict) -> None:
         device_id = (msg.get("device_id") or "").strip().lower()
@@ -1181,6 +1218,7 @@ class HomeKitHubBridge:
     async def _handle_list_devices(self, ws: Any, msg: dict) -> None:
         del msg  # currently unused; kept for future request options
         if not self._hk:
+            self.log.debug("list_devices: hk controller is not ready; returning empty list")
             await self._send_ws(
                 ws,
                 {
@@ -1190,7 +1228,23 @@ class HomeKitHubBridge:
                 },
             )
             return
-        device_ids = self._active_pairing_device_ids()
+        device_ids = await self._active_pairing_device_ids_stable()
+        pairings = getattr(self._hk, "pairings", None)
+        aliases = getattr(self._hk, "aliases", None)
+        pairings_keys = sorted(str(k).strip().lower() for k in pairings.keys()) if isinstance(pairings, dict) else []
+        alias_ids = sorted(
+            str(getattr(p, "id", "")).strip().lower()
+            for p in aliases.values()
+            if p is not None and str(getattr(p, "id", "")).strip()
+        ) if isinstance(aliases, dict) else []
+        self.log.debug(
+            "list_devices: pairings_count=%d aliases_count=%d pairings_keys=%s alias_ids=%s response_ids=%s",
+            len(pairings) if isinstance(pairings, dict) else -1,
+            len(aliases) if isinstance(aliases, dict) else -1,
+            pairings_keys,
+            alias_ids,
+            device_ids,
+        )
         await self._send_ws(
             ws,
             {
@@ -1207,6 +1261,23 @@ class HomeKitHubBridge:
         line = json.dumps(obj, default=str)
         for ws in list(self._client_out.keys()):
             self._enqueue_ws_line(ws, line)
+
+    async def _broadcast_device_list_update(self, *, reason: str) -> None:
+        """Push latest paired device list to all connected clients."""
+        device_ids = await self._active_pairing_device_ids_stable()
+        await self._broadcast(
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "list_devices",
+                "devices": [{"device_id": did} for did in device_ids],
+            }
+        )
+        self.log.debug(
+            "broadcast list_devices update reason=%s count=%d ids=%s",
+            reason,
+            len(device_ids),
+            device_ids,
+        )
 
     def _dispatch_hap_event(self, device_id: str, pairing, ev: dict) -> None:
         if not pairing or not pairing.accessories:
@@ -1427,6 +1498,7 @@ class HomeKitHubBridge:
     async def _close_alias_if_present(self, alias: str) -> None:
         if not self._hk:
             return
+        removed_device_id: str | None = None
         st = self._listeners.pop(alias, None)
         if st:
             try:
@@ -1436,11 +1508,14 @@ class HomeKitHubBridge:
         pairing = self._hk.aliases.pop(alias, None)
         if pairing:
             pid = pairing.id
+            removed_device_id = str(pid).strip().lower() if pid else None
             self._hk.pairings.pop(pid, None)
             try:
                 await pairing.close()
             except Exception:
                 self.log.exception("close %s", alias)
+        if removed_device_id:
+            await self._broadcast_device_list_update(reason=f"alias_closed:{alias}")
 
     async def _pair_with_pin(
         self,
@@ -1548,3 +1623,4 @@ class HomeKitHubBridge:
             except Exception:
                 self.log.exception("subscribe failed for %s", alias)
         self.log.info("HomeKit session active for %s (%s)", alias, pairing.id)
+        await self._broadcast_device_list_update(reason=f"pairing_active:{alias}")

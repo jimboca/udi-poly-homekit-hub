@@ -8,7 +8,10 @@
   <editor id="errc">
     <range uom="25" subset="0-10" nls="ERRC"/>
   </editor>
-  <editor id="hkslot">
-    <range uom="25" subset="1-16" nls="HKSLOT"/>
+  <editor id="pairst">
+    <range uom="25" subset="0,1" nls="PAIRST"/>
+  </editor>
+  <editor id="slotnum">
+    <range uom="56" subset="0-256"/>
   </editor>
 </editors>

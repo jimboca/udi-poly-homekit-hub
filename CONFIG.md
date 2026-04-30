@@ -28,6 +28,7 @@ Each row has a **Slot** (optional) plus the pairing and filter fields:
 | **HomeKit pairing code** (`hap_pin`) | Code shown on the accessory (e.g. `123-45-678`). You may enter **eight digits without dashes** (`12345678`); the hub normalizes to `123-45-678` before pairing. **Leave empty** on that row to disassociate only that accessory (Hub removes pairing when possible and clears saved data for that slot). |
 | **Accessory device id** (`accessory_id`) | **Optional.** If you leave it (and the name) **empty**, the Hub uses the **most recent DISCOVER** snapshot in custom data (`last_hap_discover`) to pick the target — you do not copy ids by hand. If **several** accessories are unpaired at once, set this field (or **name** below) on the row to choose one. |
 | **Substring of accessory name** (`accessory_name`) | **Optional** extra filter (same as id); use when you must disambiguate multiple unpaired devices. |
+| **Node key** (`node_key`) | Stable plugin-managed key used for IoX child node identity/address. Auto-assigned if missing. Leave it unchanged to keep the same IoX node address across unpair/re-pair, including when replacing with a different physical device in that row, so existing programs/scenes/references continue to target the same node. Auto-generated keys are monotonic and are not automatically reused later, even if old rows are deleted. |
 
 - There is **no fixed maximum** number of rows; use as many as you need.
 - **Remove** a row or **clear** its pairing code in the editor to disassociate that slot.
@@ -68,8 +69,27 @@ Notes:
 | Command | Purpose |
 |---------|---------|
 | **DISCOVER** | Scan for HAP accessories; refreshes `last_hap_discover` and updates Custom Typed rows. |
-| **UNPAIR** | Pick **slot 1–16**; clears the **HomeKit pairing code** on the Custom Typed row that resolves to that slot (same slot assignment rules as the hub), saves typed data, and reloads hub sessions—so the accessory is unpaired when the hub next applies config. Use this when you want a one-shot unpair from the ISY/PG3 UI without opening the full typed editor. Slots above **16** are still supported in Custom Typed; clear those rows in the editor (or add a temporary explicit slot ≤ 16) if you need the command picker. |
 | **ZEROCONF_DIAG** | Notice with zeroconf mode, transport discovery counts, and library versions. |
+
+## Paired device node commands
+
+Each pairing slot row is exposed as its own node (including DISCOVER candidates), with:
+
+- **ST** = paired status (`1` while the slot is currently paired, `0` for discovered/candidate slots not paired yet),
+- **GV0** = slot number.
+- Node address = `hkp_<node_key>` (stable per row; not tied to slot/device id/name).
+- Default node name = `HK Device <NODE_KEY>` (state-independent to avoid node churn on pair/unpair).
+- Because address is keyed by `node_key`, IoX references to that node address remain valid even if slot assignment changes or a new accessory is paired into the same row.
+
+| Command | Purpose |
+|---------|---------|
+| **UNPAIR** | Clears only that slot row's `hap_pin` in Custom Typed data and reloads hub sessions. This removes plugin-side pairing configuration for that slot. |
+| **DELETE** | Removes that slot row from Custom Typed data, removes that slot entry from saved custom data (`homekit_pairings`), then deletes the node. |
+
+Important:
+
+- `UNPAIR` / `DELETE` are plugin-side cleanup and do **not** guarantee the accessory itself has cleared HomeKit bonds.
+- If a device still advertises as `paired=True` after plugin-side unpair/delete, also unpair/reset it from Apple Home or vendor workflow, then rediscover.
 
 ## HomeKit setup URI (`X-HM://`)
 
@@ -79,6 +99,35 @@ Vendor apps often show a **QR code** or share link whose payload starts with **`
   `python3 tools/decode_x_hm_setup.py 'X-HM://…'`  
   (or pipe the URI on stdin). JSON output includes `setup_code` in `XXX-XX-XXX` form.
 - **Library:** `homekit_hub.x_hm_uri.decode_x_hm_setup_uri` returns the same fields for tests or tooling.
+
+## Troubleshooting
+
+### UNPAIR slot was run, but re-pair still fails
+
+Symptom:
+
+- You run **UNPAIR** for a slot (or clear the slot `hap_pin`), then save a new pairing code.
+- Pairing fails with a notice like:
+  - `HomeKit pairing: no matching accessory`
+  - `Slot N: no unpaired accessory matched id=... name=...`
+- A fresh **DISCOVER** may show the device under **Already paired elsewhere**.
+
+Why this happens:
+
+- The slot unpair path clears this plugin's saved pairing state and asks the hub to remove its session.
+- If the accessory is still paired to another HomeKit controller (Apple Home or another bridge), or has not fully returned to pairing mode yet, discovery reports it as `paired=True`.
+- The hub intentionally refuses to run SRP pairing against discoveries marked paired, so it reports "no matching accessory" for that slot.
+
+Recovery sequence:
+
+1. Remove/unpair the accessory from Apple Home (and any other HomeKit controller).
+2. Put the accessory into HomeKit pairing mode again.
+3. Power-cycle the accessory (or perform vendor HomeKit reset/factory reset if required).
+4. Wait ~30-60 seconds for mDNS/HomeKit state to settle.
+5. Run **DISCOVER** again and confirm the target appears as unpaired (not in "Already paired elsewhere").
+6. Enter/save the pairing code in the slot row and let the hub pair.
+
+If DISCOVER continues to show `paired=True` after those steps, the accessory still has an active HomeKit pairing and usually needs the vendor-specific HomeKit reset/factory reset workflow.
 
 ## WebSocket protocol
 

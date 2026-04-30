@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-04-30
+
+### Added
+
+- New per-row typed field **`node_key`** (plugin-managed) to anchor child-node identity.
+- Paired-device child node command **`DELETE`** (remove typed row + saved pairing entry + node).
+- Automatic child node creation for DISCOVER/typed candidate rows (`ST=0`) before pairing completes.
+
+### Changed
+
+- Child-node address is now stable and row-based: **`hkp_<node_key>`** (no longer derived from slot/device id/name).
+- Child-node default naming is now static (`HK Device <NODE_KEY>`) and no longer toggles between Candidate/Paired.
+- Child-node `UNPAIR` / `DELETE` flows now resolve by **`node_key`**, so IoX references can remain stable when slot assignments or physical devices change.
+- Auto-generated `node_key` allocation is now persistent/monotonic (`customdata` cursor), so keys are not automatically reused after row deletion.
+- Removed controller-level `UNPAIR` profile command exposure; unpair/delete actions are now on each paired-device node.
+- Documentation updated to clarify that `node_key` preserves IoX node-address continuity across unpair/re-pair and replacement devices.
+
 ## [0.1.13] - 2026-04-29
 
 ### Added

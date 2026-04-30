@@ -105,9 +105,9 @@ def _format_message(msg: dict[str, Any], show_raw: bool) -> str:
                     parts.append(f"    - {item.get('device_id')}")
             if len(devices) == 0:
                 parts.append(
-                    "  note           : no paired accessories in hub memory (DISCOVER-only targets are not listed). "
-                    "If **event** frames show a device_id but this list is empty, use hub **0.1.7+** or send "
-                    "**list_devices** again after startup — earlier builds could answer before pairings finished loading."
+                    "  note           : list_devices is empty at this moment. DISCOVER-only targets are not listed "
+                    "until paired. Some runtimes can briefly report an empty list during pairing/session reload even "
+                    "while active event subscriptions still emit device_id updates; retry list_devices after a few seconds."
                 )
 
     if show_raw:
