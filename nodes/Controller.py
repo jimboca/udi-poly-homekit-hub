@@ -15,6 +15,7 @@ from homekit_hub import (
     DATA_KEY_LAST_HAP_DISCOVER,
     TYPED_PAIRING_SLOTS_KEY,
     HomeKitHubBridge,
+    assign_pairing_slot_rows,
     normalize_hap_pin,
 )
 from homekit_hub.bridge import _parse_slot_value
@@ -1193,11 +1194,76 @@ class Controller(Node):
             f"{html.escape(line)}</pre>"
         )
 
+    def cmd_unpair(self, command=None):
+        """UNPAIR slot N: clear that slot's pairing code in Custom Typed and reload sessions.
+
+        The resolved slot follows the same assignment rules as the hub (explicit ``slot``
+        field or auto-filled slot numbers). Choose the target slot from the command picker.
+        """
+        cmd = command if isinstance(command, dict) else {}
+        try:
+            slot = int(cmd.get("value"))
+        except (TypeError, ValueError):
+            LOGGER.warning("UNPAIR: missing or invalid slot selection")
+            return
+        if slot < 1:
+            LOGGER.warning("UNPAIR: slot must be >= 1 (got %s)", slot)
+            return
+        try:
+            raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            raw_rows = None
+        if not isinstance(raw_rows, list):
+            LOGGER.warning("UNPAIR: no Custom Typed pairing rows loaded")
+            return
+        assigned = assign_pairing_slot_rows(raw_rows, LOGGER)
+        cleared = False
+        matched = False
+        for sn, row in assigned:
+            if sn != slot:
+                continue
+            matched = True
+            if not isinstance(row, dict):
+                break
+            if (row.get("hap_pin") or "").strip():
+                row["hap_pin"] = ""
+                cleared = True
+            break
+        if not matched:
+            LOGGER.warning(
+                "UNPAIR: no pairing row resolved to slot %s (check Custom Typed slots)",
+                slot,
+            )
+            return
+        if not cleared:
+            LOGGER.warning(
+                "UNPAIR: slot %s already has an empty pairing code in Custom Typed",
+                slot,
+            )
+            return
+        try:
+            td = self._typed_data_dict()
+            td[TYPED_PAIRING_SLOTS_KEY] = raw_rows
+            self.TypedData.load(td, save=True)
+        except Exception as e:
+            LOGGER.exception("UNPAIR: failed to save Custom Typed data")
+            self.report_error(
+                ERR_TYPED_SAVE,
+                "homekit_err_config",
+                "Failed to save Custom Typed data after UNPAIR",
+                exc=e,
+                log_message="UNPAIR typed save",
+            )
+            return
+        LOGGER.info("UNPAIR: cleared hap_pin for slot %s; reloading hub sessions", slot)
+        self._maybe_restart_on_config_change()
+
     # Must match profile/nodedefs.xml; runCmd only sees commands listed here.
     id = "HKHubController"
     commands = {
         "DISCOVER": cmd_discover,
         "QUERY": query,
+        "UNPAIR": cmd_unpair,
         "ZEROCONF_DIAG": cmd_zeroconf_diag,
     }
     drivers = [

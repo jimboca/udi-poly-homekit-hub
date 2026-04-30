@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-04-29
+
+### Added
+
+- **UNPAIR (slot 1–16)** controller command: clears the pairing code on the Custom Typed row that resolves to the chosen slot and reloads hub sessions (same semantics as clearing **hap_pin** in the editor).
+- **`homekit_hub.x_hm_uri.decode_x_hm_setup_uri`** and **`tools/decode_x_hm_setup.py`**: decode HomeKit **`X-HM://`** setup URIs to the numeric **`XXX-XX-XXX`** code (27-bit HAP payload).
+- **`PROTOCOL.md`**: example **`websockets`** client (hello → list_devices → event loop).
+- **`CONFIG.md`**: controller command summary, **`X-HM://`** / decode helper pointer.
+
+### Changed
+
+- **WebSocket fan-out**: each client has a bounded outbound queue and sender task; **`_broadcast`** no longer awaits **`ws.send`** for every peer on one slow connection. Overflow drops the **oldest** queued line per client and logs a warning.
+- **HAP events**: characteristic updates go through a bounded hub queue and a single broadcast worker instead of unbounded **`loop.create_task`** per characteristic.
+- **`homekit-poly.py`**: **`checkProfile()`** instead of **`updateProfile()`** (PG3x profile install semantics).
+- **Transport discovery**: **`_iter_transport_discoveries`** (and zeroconf diag) tolerate **`aiohomekit`** internal API drift with a one-time warning; module docstring documents supported **aiohomekit** 3.2.x–3.x range.
+
 ## [0.1.12] - 2026-04-29
 
 ### Changed

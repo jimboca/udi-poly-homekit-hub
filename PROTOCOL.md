@@ -148,3 +148,37 @@ Request the set of currently active paired accessories.
 ```
 
 Use `list_devices` + one `snapshot` request per `device_id` to initialize a client with all active devices.
+
+## Example client (`websockets`)
+
+Python 3.9+ using the [`websockets`](https://websockets.readthedocs.io/) library (same dependency as the hub). The hub listens on Custom Params `ws_host` / `ws_port` (default `127.0.0.1:8163`).
+
+```python
+import asyncio
+import json
+
+import websockets
+
+URI = "ws://127.0.0.1:8163"
+
+async def main() -> None:
+    async with websockets.connect(URI) as ws:
+        await ws.send(json.dumps({"version": "1", "action": "hello", "client": "example"}))
+        ack = json.loads(await ws.recv())
+        print("hello ack:", ack)
+
+        await ws.send(json.dumps({"version": "1", "action": "list_devices"}))
+        devices = json.loads(await ws.recv())
+        print("devices:", devices)
+
+        # Subscribe to events by reading in a loop; send commands on another task as needed.
+        while True:
+            raw = await ws.recv()
+            msg = json.loads(raw)
+            if msg.get("action") == "event":
+                print("event:", msg)
+
+asyncio.run(main())
+```
+
+In production, run the receive loop concurrently with your command/snapshot logic (e.g. `asyncio.create_task`); the hub may push many `event` messages without prior requests.

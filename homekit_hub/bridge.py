@@ -10,9 +10,11 @@ Zeroconf / mDNS constraints:
 - **UDP 5353**: python-zeroconf normally binds the mDNS port. If another stack already
   owns it, multicast ``AsyncZeroconf()`` can raise ``EADDRINUSE``. Use **unicast** or
   **auto** (try multicast, then fall back).
-- **aiohomekit**: startup expects existing ``AsyncServiceBrowser`` instances for
-  ``_hap._tcp.local.`` and ``_hap._udp.local.``; we always register both before
-  ``HKController.async_start()``.
+- **aiohomekit** (supported range **3.2.x–3.x**, see ``requirements.txt``): startup
+  expects existing ``AsyncServiceBrowser`` instances for ``_hap._tcp.local.`` and
+  ``_hap._udp.local.``; we always register both before ``HKController.async_start()``.
+  Transport discovery iteration is wrapped to soft-fail across minor library API
+  differences (logged once).
 - **BSD / macOS errno 49**: unicast with broad interface / dual-stack choices can cause
   ``sendto`` failures; unicast on BSD-like hosts defaults to narrower interface and
   IPv4 unless overridden (Custom Params or env; env wins).
@@ -44,6 +46,11 @@ DATA_KEY_PAIRINGS = "homekit_pairings"
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
 HAP_TYPE_TCP = "_hap._tcp.local."
 HAP_TYPE_UDP = "_hap._udp.local."
+
+# WebSocket: per-client outbound queue caps (drop-oldest on overflow).
+WS_CLIENT_OUTBOUND_QUEUE_MAX = 256
+# HAP → hub broadcast: bounded queue before fan-out to clients (drop-oldest on overflow).
+HAP_EVENT_BROADCAST_QUEUE_MAX = 512
 
 # ISY **ERR** driver codes (must match profile NLS ``ERRC-*``).
 ERR_PAIRING_NO_TARGET = 8
@@ -497,13 +504,19 @@ class HomeKitHubBridge:
         self._async_zeroconf: Optional[AsyncZeroconf] = None
         self._zcm: Optional[ZeroconfManager] = None
         self._listeners: dict[str, Callable[[], None]] = {}
-        self._clients: set[Any] = set()
+        # WebSocket client → (outbound text queue, sender task). Slow clients do not block others.
+        self._client_out: dict[Any, tuple[asyncio.Queue[Optional[str]], asyncio.Task[None]]] = {}
+        self._hap_evt_queue: Optional[asyncio.Queue[Optional[dict[str, Any]]]] = None
+        self._hap_evt_worker: Optional[asyncio.Task[None]] = None
+        self._transport_discovery_warned = False
         self._ws_server: Any = None
         self._running = False
 
     async def _abort_start(self) -> None:
         """Undo partial startup (used when async_start or later steps fail)."""
         self._running = False
+        await self._stop_hap_event_worker()
+        await self._detach_all_ws_clients()
         if self._ws_server is not None:
             try:
                 self._ws_server.close()
@@ -525,6 +538,116 @@ class HomeKitHubBridge:
             self._zcm = None
             self._async_zeroconf = None
 
+    async def _stop_hap_event_worker(self) -> None:
+        """Signal the HAP broadcast worker to exit and wait for it."""
+        t = self._hap_evt_worker
+        self._hap_evt_worker = None
+        q = self._hap_evt_queue
+        if q is not None:
+            try:
+                q.put_nowait(None)
+            except Exception:
+                pass
+        self._hap_evt_queue = None
+        if t is not None:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self.log.exception("HAP event broadcast worker stop")
+
+    async def _hap_event_broadcast_worker(self) -> None:
+        q = self._hap_evt_queue
+        if q is None:
+            return
+        try:
+            while True:
+                msg = await q.get()
+                if msg is None:
+                    break
+                await self._broadcast(msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.log.exception("HAP event broadcast worker")
+
+    def _enqueue_hap_broadcast(self, msg: dict[str, Any]) -> None:
+        q = self._hap_evt_queue
+        if q is None:
+            return
+        dropped = False
+        while True:
+            try:
+                q.put_nowait(msg)
+                if dropped:
+                    self.log.warning(
+                        "HAP event hub queue full (%d); dropped oldest pending broadcast",
+                        HAP_EVENT_BROADCAST_QUEUE_MAX,
+                    )
+                return
+            except asyncio.QueueFull:
+                try:
+                    q.get_nowait()
+                    dropped = True
+                except asyncio.QueueEmpty:
+                    pass
+
+    async def _ws_outbound_worker(self, ws: Any, queue: asyncio.Queue[Optional[str]]) -> None:
+        try:
+            while True:
+                line = await queue.get()
+                if line is None:
+                    break
+                await ws.send(line)
+        except websockets.ConnectionClosed:
+            pass
+        except Exception:
+            self.log.exception("WebSocket outbound sender error")
+
+    def _enqueue_ws_line(self, ws: Any, line: str) -> None:
+        tup = self._client_out.get(ws)
+        if not tup:
+            return
+        q, _ = tup
+        dropped = False
+        while True:
+            try:
+                q.put_nowait(line)
+                if dropped:
+                    self.log.warning(
+                        "WebSocket client %s outbound queue full (%d); dropped oldest message",
+                        getattr(ws, "remote_address", None),
+                        WS_CLIENT_OUTBOUND_QUEUE_MAX,
+                    )
+                return
+            except asyncio.QueueFull:
+                try:
+                    q.get_nowait()
+                    dropped = True
+                except asyncio.QueueEmpty:
+                    pass
+
+    async def _detach_ws_client(self, ws: Any) -> None:
+        tup = self._client_out.pop(ws, None)
+        if not tup:
+            return
+        q, task = tup
+        try:
+            q.put_nowait(None)
+        except Exception:
+            pass
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            self.log.exception("WebSocket outbound worker join")
+
+    async def _detach_all_ws_clients(self) -> None:
+        for ws in list(self._client_out.keys()):
+            await self._detach_ws_client(ws)
+
     async def start(self) -> None:
         if self._running:
             return
@@ -540,6 +663,8 @@ class HomeKitHubBridge:
             # ``list_devices`` runs while ``self._hk.pairings`` is still empty (events
             # appear only after ``_sync_pairing_from_params`` finishes).
             await self._sync_pairing_from_params()
+            self._hap_evt_queue = asyncio.Queue(maxsize=HAP_EVENT_BROADCAST_QUEUE_MAX)
+            self._hap_evt_worker = asyncio.create_task(self._hap_event_broadcast_worker())
             await self._start_websocket_server()
         except Exception:
             await self._abort_start()
@@ -548,11 +673,13 @@ class HomeKitHubBridge:
     async def stop(self) -> None:
         self._running = False
         self._clear_all_listeners()
+        await self._stop_hap_event_worker()
         await self._shutdown_all_pairings()
         if self._ws_server is not None:
             self._ws_server.close()
             await self._ws_server.wait_closed()
             self._ws_server = None
+        await self._detach_all_ws_clients()
         if self._hk:
             await self._hk.async_stop()
             self._hk = None
@@ -560,7 +687,6 @@ class HomeKitHubBridge:
             await self._zcm.stop()
             self._zcm = None
             self._async_zeroconf = None
-        self._clients.clear()
 
     async def restart_session(self) -> None:
         """Reload all slots from params + customData (after PG3 param change)."""
@@ -581,9 +707,12 @@ class HomeKitHubBridge:
         transports: dict[str, int] = {}
         hk = self._hk
         if hk and getattr(hk, "transports", None):
-            for name, transport in hk.transports.items():
-                d = getattr(transport, "discoveries", None) or {}
-                transports[str(name)] = len(d)
+            try:
+                for name, transport in hk.transports.items():
+                    d = getattr(transport, "discoveries", None) or {}
+                    transports[str(name)] = len(d)
+            except (AttributeError, TypeError):
+                pass
         return {
             "hub_running": self._running,
             "zeroconf_mode": getattr(zcm, "mode_label", "") if zcm else "",
@@ -620,15 +749,28 @@ class HomeKitHubBridge:
                     self.log.exception("pairing close for %s", alias)
 
     def _iter_transport_discoveries(self):
-        """Yield discovery objects from all aiohomekit transports (IP, COAP, BLE)."""
+        """Yield discovery objects from all aiohomekit transports (IP, COAP, BLE).
+
+        Soft-fails on unexpected ``aiohomekit`` internal shapes (library version skew);
+        logs a one-time warning. Prefer this over direct ``Controller.transports`` access.
+        """
         if not self._hk:
             return
-        transports = getattr(self._hk, "transports", None)
-        if not transports:
-            return
-        for transport in transports.values():
-            discoveries = getattr(transport, "discoveries", None) or {}
-            yield from discoveries.values()
+        try:
+            transports = getattr(self._hk, "transports", None)
+            if not transports:
+                return
+            for transport in transports.values():
+                discoveries = getattr(transport, "discoveries", None) or {}
+                yield from discoveries.values()
+        except (AttributeError, TypeError) as ex:
+            if not self._transport_discovery_warned:
+                self._transport_discovery_warned = True
+                self.log.warning(
+                    "aiohomekit transport discovery iteration failed (%s); use aiohomekit "
+                    "in the supported range (see requirements.txt / module docstring).",
+                    ex,
+                )
 
     def _row_from_discovery(self, discovery: Any) -> dict[str, Any] | None:
         d = discovery.description
@@ -792,7 +934,9 @@ class HomeKitHubBridge:
         )
 
     async def _ws_connection(self, ws: Any) -> None:
-        self._clients.add(ws)
+        q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=WS_CLIENT_OUTBOUND_QUEUE_MAX)
+        task = asyncio.create_task(self._ws_outbound_worker(ws, q))
+        self._client_out[ws] = (q, task)
         self.log.debug("WS client connected from %s", getattr(ws, "remote_address", None))
         try:
             async for raw in ws:
@@ -802,7 +946,7 @@ class HomeKitHubBridge:
         except Exception:
             self.log.exception("WebSocket handler error")
         finally:
-            self._clients.discard(ws)
+            await self._detach_ws_client(ws)
 
     async def _handle_ws_message(self, ws: Any, raw: str) -> None:
         try:
@@ -1057,30 +1201,17 @@ class HomeKitHubBridge:
         )
 
     async def _send_ws(self, ws: Any, obj: dict) -> None:
-        try:
-            await ws.send(json.dumps(obj, default=str))
-        except Exception:
-            pass
+        self._enqueue_ws_line(ws, json.dumps(obj, default=str))
 
     async def _broadcast(self, obj: dict) -> None:
         line = json.dumps(obj, default=str)
-        dead: list[Any] = []
-        for ws in list(self._clients):
-            try:
-                await ws.send(line)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self._clients.discard(ws)
+        for ws in list(self._client_out.keys()):
+            self._enqueue_ws_line(ws, line)
 
     def _dispatch_hap_event(self, device_id: str, pairing, ev: dict) -> None:
         if not pairing or not pairing.accessories:
             return
         if not ev:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
             return
 
         for key, payload in ev.items():
@@ -1094,18 +1225,16 @@ class HomeKitHubBridge:
                 label = characteristic_label(ch.type)
             except Exception:
                 label = f"{aid}.{iid}"
-            loop.create_task(
-                self._broadcast(
-                    {
-                        "version": PROTOCOL_VERSION,
-                        "action": "event",
-                        "device_id": device_id,
-                        "characteristic": label,
-                        "aid": aid,
-                        "iid": iid,
-                        "value": payload.get("value"),
-                    }
-                )
+            self._enqueue_hap_broadcast(
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "event",
+                    "device_id": device_id,
+                    "characteristic": label,
+                    "aid": aid,
+                    "iid": iid,
+                    "value": payload.get("value"),
+                }
             )
 
     def _attach_listener(self, alias: str, pairing) -> None:

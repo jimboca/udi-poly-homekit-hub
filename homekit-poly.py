@@ -15,7 +15,7 @@ def main() -> None:
     try:
         polyglot = Interface([Controller])
         polyglot.start(VERSION)
-        polyglot.updateProfile()
+        polyglot.checkProfile()
         Controller(polyglot, "controller", "controller", "HomeKit Hub")
         polyglot.runForever()
     except (KeyboardInterrupt, SystemExit):

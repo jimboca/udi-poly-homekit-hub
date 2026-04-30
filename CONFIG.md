@@ -63,6 +63,23 @@ Notes:
 - HomeKit paired state in discovery can lag briefly after unpair.
 - Deleting a row also removes the saved pairing slot data for that row; if that happens, re-pairing is a fresh pairing flow.
 
+## Controller commands
+
+| Command | Purpose |
+|---------|---------|
+| **DISCOVER** | Scan for HAP accessories; refreshes `last_hap_discover` and updates Custom Typed rows. |
+| **UNPAIR** | Pick **slot 1–16**; clears the **HomeKit pairing code** on the Custom Typed row that resolves to that slot (same slot assignment rules as the hub), saves typed data, and reloads hub sessions—so the accessory is unpaired when the hub next applies config. Use this when you want a one-shot unpair from the ISY/PG3 UI without opening the full typed editor. Slots above **16** are still supported in Custom Typed; clear those rows in the editor (or add a temporary explicit slot ≤ 16) if you need the command picker. |
+| **ZEROCONF_DIAG** | Notice with zeroconf mode, transport discovery counts, and library versions. |
+
+## HomeKit setup URI (`X-HM://`)
+
+Vendor apps often show a **QR code** or share link whose payload starts with **`X-HM://`**. The hub still needs the **numeric** setup code (e.g. `123-45-678`) in Custom Typed; the URI encodes that code plus metadata.
+
+- **Decode helper (dev machine):** from the Node Server repo root, run  
+  `python3 tools/decode_x_hm_setup.py 'X-HM://…'`  
+  (or pipe the URI on stdin). JSON output includes `setup_code` in `XXX-XX-XXX` form.
+- **Library:** `homekit_hub.x_hm_uri.decode_x_hm_setup_uri` returns the same fields for tests or tooling.
+
 ## WebSocket protocol
 
 See `PROTOCOL.md`. All messages require `"version": "1"`. Events for all paired accessories share one connection; clients filter by `device_id`.

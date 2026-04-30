@@ -2,8 +2,28 @@
 """
 Simple WebSocket debug client for the udi-poly-homekit hub.
 
-Connects to ws://<host>:<port>, sends the protocol "hello", and prints inbound
-messages in a human-readable format.
+Connects to ``ws://<host>:<port>``, sends the protocol ``hello``, and prints
+inbound messages in a human-readable format. Protocol details: ``PROTOCOL.md``.
+
+Usage (from the Node Server repo root, with ``websockets`` installed):
+
+    # Default: 127.0.0.1:8163 — connect, hello, then print all hub → client frames
+    python3 ws_debug_client.py
+
+    # Match Custom Params ws_host / ws_port
+    python3 ws_debug_client.py --host 127.0.0.1 --port 8163
+
+    # After hello, request one device snapshot (lowercase AccessoryPairingID)
+    python3 ws_debug_client.py --snapshot-device-id aa:bb:cc:dd:ee:ff
+
+    # list_devices, then snapshot every paired device (paired accessories only)
+    python3 ws_debug_client.py --snapshot-all
+
+    # Send arbitrary JSON after hello (must include "version": "1")
+    python3 ws_debug_client.py --command '{"version":"1","action":"list_devices"}'
+
+    # Full JSON for each received message
+    python3 ws_debug_client.py --raw
 
 ``list_devices`` / ``--snapshot-all`` only enumerate **paired** accessories
 (aiohomekit active pairings). Unpaired devices seen via DISCOVER / mDNS do not
@@ -160,8 +180,30 @@ async def _run(args: argparse.Namespace) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    epilog = """
+examples:
+  %(prog)s
+      Connect to ws://127.0.0.1:8163, send hello, print events/acks/errors until Ctrl+C.
+
+  %(prog)s --host 192.168.1.10 --port 8163 --raw
+      Custom bind; include full JSON for every received message.
+
+  %(prog)s --snapshot-device-id 12:34:56:78:90:ab
+      After hello, request snapshot for that paired accessory (id lowercase).
+
+  %(prog)s --snapshot-all
+      Send list_devices, then snapshot each returned device_id (paired only).
+
+  %(prog)s --command '{"version":"1","action":"list_devices"}'
+      Send custom JSON once after hello (quote carefully in your shell).
+
+See PROTOCOL.md for actions: hello, command, snapshot, list_devices, and hub events.
+Hub ws_host / ws_port default to 127.0.0.1 and 8163 (Custom Params on the Polyglot node).
+"""
     p = argparse.ArgumentParser(
-        description="Debug client for udi-poly-homekit WebSocket stream."
+        description="Debug client for udi-poly-homekit WebSocket stream.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=epilog,
     )
     p.add_argument("--host", default="127.0.0.1", help="WebSocket host (default: 127.0.0.1)")
     p.add_argument("--port", default=8163, type=int, help="WebSocket port (default: 8163)")
