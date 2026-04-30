@@ -31,6 +31,8 @@ ERR_TYPED_SAVE = 4
 ERR_APPEND_PAIRING = 5
 ERR_BRIDGE_STOP = 6
 ERR_STATUS_UPDATE = 7
+# 8–9: pairing (see profile NLS)
+ERR_ASYNC_LOOP_DEAD = 10
 
 # Merged into Custom Params before the bridge reads them (PG3 may omit unset keys).
 _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
@@ -66,6 +68,7 @@ class Controller(Node):
         self._pair_success_notice_polls_remaining = 0
         self.mainloop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: Any = None
+        self._async_loop_death_reported = False
         self.bridge: HomeKitHubBridge | None = None
 
         self.init_typed_params()
@@ -340,6 +343,37 @@ class Controller(Node):
     def handler_log_level(self, level):
         LOGGER.info(f"log level {level}")
 
+    def _check_asyncio_loop_thread_health(self) -> None:
+        """If the asyncio loop thread dies while the hub is ready, surface failure on ISY.
+
+        ``longPoll`` runs on the PG3 thread; ``ST`` / ``GV0`` / ``ERR`` match the improvement
+        plan watchdog (fatal hub loss: **ST** = Failed, **GV0** = Error via ``report_error``).
+        """
+        t = self._loop_thread
+        if t is None or t.is_alive():
+            return
+        if not self.ready:
+            return
+        if self._async_loop_death_reported:
+            return
+        self._async_loop_death_reported = True
+        self.ready = False
+        self.report_error(
+            ERR_ASYNC_LOOP_DEAD,
+            "homekit_bridge",
+            "HomeKit Hub asyncio loop stopped unexpectedly",
+            log_message="asyncio loop thread is not alive while hub was ready",
+            extra_html=(
+                "The background event loop thread exited while the hub was running. "
+                "Restart the Node Server from Polyglot.<br/>"
+            ),
+            set_st_error=True,
+        )
+        try:
+            self.setDriver("ST", 2, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver ST after asyncio loop thread death")
+
     def handler_data(self, data):
         if data is None:
             LOGGER.warning("No custom data on first run")
@@ -498,6 +532,7 @@ class Controller(Node):
         self._maybe_restart_on_config_change()
 
     def handler_start(self):
+        self._async_loop_death_reported = False
         self.Notices.clear()
         LOGGER.info("HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION)
         cfg_md = Path(__file__).resolve().parent.parent / "CONFIG.md"
@@ -616,6 +651,7 @@ class Controller(Node):
 
     def handler_poll(self, polltype):
         if polltype == "longPoll":
+            self._check_asyncio_loop_thread_health()
             self.heartbeat()
             if self._pair_success_notice_polls_remaining > 0:
                 self._pair_success_notice_polls_remaining -= 1

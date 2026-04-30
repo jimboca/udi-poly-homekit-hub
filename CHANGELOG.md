@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-04-29
+
+### Added
+
+- **longPoll** watchdog: if the asyncio event-loop thread exits while the hub is still marked ready, set **ST** = Failed, **GV0** = Error, **ERR** = 10, and post a Notice (restart Node Server).
+
+### Changed
+
+- Profile **ERR** editor subset extended to include code **10** (`ERRC-10`).
+
+## [0.1.9] - 2026-04-29
+
 ### Added
 
 - Pytest harness (`tests/`, `pytest.ini`, `requirements-dev.txt`) for pure helpers in `homekit_hub.bridge` and `nodes.Controller`.
@@ -17,8 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `asyncio.get_running_loop()` instead of deprecated `get_event_loop()` in `discover_collect` and `_wait_for_pairing_discovery`.
 - Import `InterfaceChoice` / `IPVersion` from the public `zeroconf` package (not `zeroconf._utils.net`).
-
-## [0.1.9] - 2026-04-29
 
 ### Changed
 

@@ -7,3 +7,8 @@ build.txt
 *.egg-info/
 .venv/
 env/
+*.cert
+*.key
+*.lock
+svc.pid
+snapshot-all.txt

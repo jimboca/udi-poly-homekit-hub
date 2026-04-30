@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 
 from homekit_hub.bridge import DATA_KEY_LAST_HAP_DISCOVER, TYPED_PAIRING_SLOTS_KEY
-from nodes.Controller import Controller
+from nodes.Controller import ERR_ASYNC_LOOP_DEAD, Controller
 
 
 class FakeTypedData:
@@ -41,6 +41,7 @@ def _bare_controller():
     c.report_error = MagicMock()
     c._maybe_restart_on_config_change = MagicMock()
     c.ready = False
+    c.setDriver = MagicMock()
     return c
 
 
@@ -119,6 +120,47 @@ def test_append_pairing_rows_for_discover_empty():
     c = _bare_controller()
     c.TypedData = FakeTypedData({TYPED_PAIRING_SLOTS_KEY: []})
     assert c._append_pairing_rows_for_discover([]) == (0, 0, 0)
+
+
+def test_check_asyncio_loop_thread_health_noop_when_alive():
+    c = _bare_controller()
+    c.ready = True
+    alive = MagicMock()
+    alive.is_alive.return_value = True
+    c._loop_thread = alive
+    c._check_asyncio_loop_thread_health()
+    c.report_error.assert_not_called()
+    assert c.ready is True
+
+
+def test_check_asyncio_loop_thread_health_noop_when_dead_but_not_ready():
+    c = _bare_controller()
+    c.ready = False
+    dead = MagicMock()
+    dead.is_alive.return_value = False
+    c._loop_thread = dead
+    c._check_asyncio_loop_thread_health()
+    c.report_error.assert_not_called()
+
+
+def test_check_asyncio_loop_thread_health_reports_when_dead_and_ready():
+    c = _bare_controller()
+    c.ready = True
+    c._async_loop_death_reported = False
+    dead = MagicMock()
+    dead.is_alive.return_value = False
+    c._loop_thread = dead
+    c._check_asyncio_loop_thread_health()
+    c.report_error.assert_called_once()
+    args, kwargs = c.report_error.call_args
+    assert args[0] == ERR_ASYNC_LOOP_DEAD
+    assert kwargs.get("set_st_error") is True
+    assert c.ready is False
+    c.setDriver.assert_called()
+    c.report_error.reset_mock()
+    c.setDriver.reset_mock()
+    c._check_asyncio_loop_thread_health()
+    c.report_error.assert_not_called()
 
 
 def test_append_pairing_rows_for_discover_load_failure():

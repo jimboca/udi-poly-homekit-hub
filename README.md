@@ -43,7 +43,7 @@ The controller node exposes **ST** (Polyglot / NodeServer connection — same id
 | **ST** `2` | Failed (reserved; same editor family as Kasa). |
 | **GV0** `0` | Bridge stopped (starting or Node Server stopping). |
 | **GV0** `1` | Bridge running (aiohomekit + WebSocket server up). |
-| **GV0** `2` | Bridge error — failed start or failed config-driven **full_restart**. Other faults (discover, typed save, etc.) update **ERR** and Notices only; they leave **GV0** unchanged. |
+| **GV0** `2` | Bridge error — failed start, failed config-driven **full_restart**, or the asyncio loop thread exited while the hub was running (see **ERR** 10). Other faults (discover, typed save, etc.) update **ERR** and Notices only; they leave **GV0** unchanged. |
 
 **ERR** codes (UOM 25; see profile NLS `ERRC-*`):
 
@@ -59,8 +59,9 @@ The controller node exposes **ST** (Polyglot / NodeServer connection — same id
 | 7 | Status update failed |
 | 8 | Pairing: no matching accessory |
 | 9 | Pairing failed |
+| 10 | Asyncio loop stopped |
 
-**`report_error`** (in `nodes/Controller.py`) centralizes failure reporting: it logs with **`LOGGER.exception`** when an exception is passed, otherwise **`LOGGER.error`**; sets a Polyglot Notice under a fixed key (`homekit_bridge`, `homekit_err_discover`, `homekit_err_config`, or `homekit_meta`); and sets **ERR** to the code. Only hub-fatal start failures also set **GV0** to 2. After a **successful** bridge start, **`clear_hub_error_indicators`** clears those hub error Notice keys and sets **ERR** back to 0 (it does not clear DISCOVER-related state).
+**`report_error`** (in `nodes/Controller.py`) centralizes failure reporting: it logs with **`LOGGER.exception`** when an exception is passed, otherwise **`LOGGER.error`**; sets a Polyglot Notice under a fixed key (`homekit_bridge`, `homekit_err_discover`, `homekit_err_config`, or `homekit_meta`); and sets **ERR** to the code. Hub-fatal conditions (**GV0** = 2) include start failure, failed **full_restart**, and unexpected asyncio loop thread exit (longPoll watchdog). After a **successful** bridge start, **`clear_hub_error_indicators`** clears those hub error Notice keys and sets **ERR** back to 0 (it does not clear DISCOVER-related state).
 
 On **Node Server start**, the controller clears **all** Notices before loading.
 

@@ -4,22 +4,22 @@ overview: Review of the entire `udi-poly-homekit` plugin and our chat. Concrete,
 todos:
   - id: tests-pure-helpers
     content: "P0: pytest + pytest-asyncio; cover normalize_hap_pin, assign_pairing_slot_rows, _resolve_filters_from_last_discover, _typed_update_needs_discover"
-    status: pending
+    status: completed
   - id: ci-github-actions
     content: "P0: GitHub Actions workflow (ruff, pytest, xmllint, make zip artifact on tag)"
-    status: pending
+    status: completed
   - id: remove-checked-in-log
     content: "P0: remove logs/debug.log from repo"
     status: completed
   - id: changelog
     content: "P0: add CHANGELOG.md aligned with profile/version.txt 0.1.x"
-    status: pending
+    status: completed
   - id: fix-get-event-loop
     content: "P0: replace asyncio.get_event_loop() with get_running_loop() in bridge.py"
     status: completed
   - id: loop-watchdog
     content: "P1: longPoll watchdog for asyncio loop thread; flip ST=2 + Notice on death"
-    status: pending
+    status: completed
   - id: drop-time-sleep
     content: "P1: replace time.sleep waiting on _st flags with CONFIGDONE-driven readiness"
     status: pending
@@ -115,9 +115,10 @@ isProject: false
 ## Continuation status (2026-04-29)
 
 - **P6 (Bonjour):** Live `BONJOUR_COMPARE` JSON shows PG3 can return rich HAP rows when `poly.bonjour` uses broad filters (e.g. `type=None`). Overlap with aiohomekit/raw zeroconf was confirmed for at least one accessory (ecobee). **Full replacement of `AsyncZeroconf` for stock aiohomekit remains out of scope.** Tradeoffs are documented for operators in [`CONFIG.md`](../../CONFIG.md) (section *PG3 Bonjour vs in-process zeroconf*). Diagnostic/compare tooling may live on branch `old-pg-mdns` while **main** stays zeroconf-focused.
-- **P0 done since plan draft:** `get_running_loop()` in [`homekit_hub/bridge.py`](../../homekit_hub/bridge.py); public `zeroconf` imports (`InterfaceChoice`, `IPVersion`). **`logs/debug.log` is not tracked** in git (remove-checked-in-log may be N/A).
-- **P0 still open on `main`:** Tracked **pytest** + **CI** + **CHANGELOG** aligned to `profile/version.txt` (currently **0.1.8**). Local `tests/` and `.github/` may exist untracked until committed.
-- **P5 next high-leverage item:** **25** — always pre-create HAP `AsyncServiceBrowser` instances (today they are still only created when `using_unicast` in `HomeKitHubBridge.start`).
+- **P0 on `main`:** **pytest**, **CHANGELOG**, **GitHub Actions CI** (`.github/workflows/ci.yml`), and core helper tests are in-repo. Profile/version tracks releases (e.g. **0.1.10** adds longPoll asyncio-loop watchdog).
+- **P1 just landed:** **longPoll** checks whether the asyncio loop thread is still alive while `ready`; on unexpected exit sets **ST** = Failed, **GV0** = Error, **ERR** = 10, Notice + log.
+- **P5 zeroconf cleanup items 24–30** in this plan are largely implemented (`ZeroconfManager`, always-on HAP browsers, Custom Params, `ZEROCONF_DIAG`, default policy). See `CHANGELOG.md` / `CONFIG.md` for current behavior.
+- **Next high-leverage (plan §P1):** **7** — replace `time.sleep` / `_st` polling in `handler_start` with **CONFIGDONE**-driven readiness; then **8–9** (WebSocket backpressure) or **10** (aiohomekit isolation).
 
 ## Snapshot of what we have
 
