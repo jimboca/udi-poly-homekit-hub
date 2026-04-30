@@ -40,7 +40,7 @@ The controller node exposes **ST** (Polyglot / NodeServer connection — same id
 |--------|---------|
 | **ST** `0` | Disconnected (Node Server stopped / not reporting to Polyglot). |
 | **ST** `1` | Connected. |
-| **ST** `2` | Failed (reserved; same editor family as Kasa). |
+| **ST** `2` | Failed. |
 | **GV0** `0` | Bridge stopped (starting or Node Server stopping). |
 | **GV0** `1` | Bridge running (aiohomekit + WebSocket server up). |
 | **GV0** `2` | Bridge error — failed start, failed config-driven **full_restart**, or the asyncio loop thread exited while the hub was running (see **ERR** 10). Other faults (discover, typed save, etc.) update **ERR** and Notices only; they leave **GV0** unchanged. |

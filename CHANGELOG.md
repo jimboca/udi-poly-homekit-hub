@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-04-29
+
+### Fixed
+
+- **longPoll** asyncio-loop watchdog no longer sets **ST**; **ST** remains the Polyglot / Node Server connection driver only. Bridge thread death still sets **GV0** = Error, **ERR** = 10, and a Notice.
+
 ## [0.1.10] - 2026-04-29
 
 ### Added
 
-- **longPoll** watchdog: if the asyncio event-loop thread exits while the hub is still marked ready, set **ST** = Failed, **GV0** = Error, **ERR** = 10, and post a Notice (restart Node Server).
+- **longPoll** watchdog: if the asyncio event-loop thread exits while the hub is still marked ready, set **GV0** = Error, **ERR** = 10, and post a Notice (restart Node Server). (**ST** is not changed — Polyglot connection only.)
 
 ### Changed
 

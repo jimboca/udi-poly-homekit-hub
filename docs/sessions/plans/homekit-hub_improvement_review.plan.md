@@ -18,7 +18,7 @@ todos:
     content: "P0: replace asyncio.get_event_loop() with get_running_loop() in bridge.py"
     status: completed
   - id: loop-watchdog
-    content: "P1: longPoll watchdog for asyncio loop thread; flip ST=2 + Notice on death"
+    content: "P1: longPoll watchdog for asyncio loop thread; GV0/ERR + Notice on death (ST = Polyglot connection only)"
     status: completed
   - id: drop-time-sleep
     content: "P1: replace time.sleep waiting on _st flags with CONFIGDONE-driven readiness"
@@ -115,8 +115,8 @@ isProject: false
 ## Continuation status (2026-04-29)
 
 - **P6 (Bonjour):** Live `BONJOUR_COMPARE` JSON shows PG3 can return rich HAP rows when `poly.bonjour` uses broad filters (e.g. `type=None`). Overlap with aiohomekit/raw zeroconf was confirmed for at least one accessory (ecobee). **Full replacement of `AsyncZeroconf` for stock aiohomekit remains out of scope.** Tradeoffs are documented for operators in [`CONFIG.md`](../../CONFIG.md) (section *PG3 Bonjour vs in-process zeroconf*). Diagnostic/compare tooling may live on branch `old-pg-mdns` while **main** stays zeroconf-focused.
-- **P0 on `main`:** **pytest**, **CHANGELOG**, **GitHub Actions CI** (`.github/workflows/ci.yml`), and core helper tests are in-repo. Profile/version tracks releases (e.g. **0.1.10** adds longPoll asyncio-loop watchdog).
-- **P1 just landed:** **longPoll** checks whether the asyncio loop thread is still alive while `ready`; on unexpected exit sets **ST** = Failed, **GV0** = Error, **ERR** = 10, Notice + log.
+- **P0 on `main`:** **pytest**, **CHANGELOG**, **GitHub Actions CI** (`.github/workflows/ci.yml`), and core helper tests are in-repo. Profile/version tracks releases (e.g. **0.1.11** refines the longPoll asyncio-loop watchdog: **GV0**/**ERR** only, not **ST**).
+- **P1 just landed:** **longPoll** checks whether the asyncio loop thread is still alive while `ready`; on unexpected exit sets **GV0** = Error, **ERR** = 10, Notice + log (**ST** remains the Polyglot / Node Server connection driver only).
 - **P5 zeroconf cleanup items 24–30** in this plan are largely implemented (`ZeroconfManager`, always-on HAP browsers, Custom Params, `ZEROCONF_DIAG`, default policy). See `CHANGELOG.md` / `CONFIG.md` for current behavior.
 - **Next high-leverage (plan §P1):** **7** — replace `time.sleep` / `_st` polling in `handler_start` with **CONFIGDONE**-driven readiness; then **8–9** (WebSocket backpressure) or **10** (aiohomekit isolation).
 
@@ -169,7 +169,7 @@ flowchart LR
 ## P1 — robustness
 
 6. **Watchdog for the asyncio loop thread**  
-   `[nodes/Controller.py](c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\nodes\Controller.py)` line 293 spawns the loop thread but never checks `_loop_thread.is_alive()`. If it dies, **`ST`** stays `1`. Add a `longPoll` health check that flips **`ST` = 2** + posts a Notice.
+   `[nodes/Controller.py](c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\nodes\Controller.py)` spawns the loop thread; if it dies while the hub is still marked ready, a `longPoll` health check should set **GV0** = Error, **ERR**, post a Notice, and clear `ready`. **ST** stays reserved for Polyglot / Node Server connection (do not overload it for bridge-internal failures).
 
 7. **Bridge readiness without `time.sleep(1)`**  
    `[handler_start](c:\Users\jimse\OneDrive\Documents\GitHub\udi-poly-homekit\nodes\Controller.py)` blocks the PG3 thread while polling four `_st` flags. Use `poly.subscribe(CONFIGDONE, ...)` as the gate (we already subscribe but ignore it) and start the bridge from a queued task rather than spinning.

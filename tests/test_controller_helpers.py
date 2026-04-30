@@ -156,9 +156,8 @@ def test_check_asyncio_loop_thread_health_reports_when_dead_and_ready():
     assert args[0] == ERR_ASYNC_LOOP_DEAD
     assert kwargs.get("set_st_error") is True
     assert c.ready is False
-    c.setDriver.assert_called()
+    c.setDriver.assert_not_called()
     c.report_error.reset_mock()
-    c.setDriver.reset_mock()
     c._check_asyncio_loop_thread_health()
     c.report_error.assert_not_called()
 

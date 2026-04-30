@@ -344,10 +344,11 @@ class Controller(Node):
         LOGGER.info(f"log level {level}")
 
     def _check_asyncio_loop_thread_health(self) -> None:
-        """If the asyncio loop thread dies while the hub is ready, surface failure on ISY.
+        """If the asyncio loop thread dies while the hub is ready, surface bridge failure on ISY.
 
-        ``longPoll`` runs on the PG3 thread; ``ST`` / ``GV0`` / ``ERR`` match the improvement
-        plan watchdog (fatal hub loss: **ST** = Failed, **GV0** = Error via ``report_error``).
+        ``longPoll`` runs on the PG3 thread. **ST** stays under Polyglot control (Node Server
+        connection only); this path sets **GV0** = Error and **ERR** via ``report_error`` (and
+        clears ``ready``) so operators still see a dead hub without conflating **ST**.
         """
         t = self._loop_thread
         if t is None or t.is_alive():
@@ -369,10 +370,6 @@ class Controller(Node):
             ),
             set_st_error=True,
         )
-        try:
-            self.setDriver("ST", 2, report=True, force=True, uom=25)
-        except Exception:
-            LOGGER.exception("setDriver ST after asyncio loop thread death")
 
     def handler_data(self, data):
         if data is None:
