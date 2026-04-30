@@ -1,1 +1,53 @@
+name: CI
 
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Ruff
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.8.6"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Pytest
+        run: pytest -q
+
+      - name: Install xmllint
+        run: sudo apt-get update -qq && sudo apt-get install -y libxml2-utils
+
+      - name: Validate profile XML
+        run: xmllint --noout profile/*/*.xml
+
+      - name: Build zip (tags only, 3.11)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.python-version == '3.11'
+        run: make zip
+
+      - name: Upload HomeKitHub.zip (tags only, 3.11)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: HomeKitHub
+          path: HomeKitHub.zip
