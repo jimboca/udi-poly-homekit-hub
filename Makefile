@@ -27,6 +27,7 @@ clean:
 	rm -f $(NAME).zip
 
 zip:
+	rm -f $(NAME).zip
 	zip -x@zip_exclude.lst -r $(NAME).zip *
 
 # Build store zip, write $(STORE_INFO) (PG3 store hints), annotated tag v<version>, push branch + tag to $(GIT_REMOTE).

@@ -12,3 +12,7 @@ zip_exclude.lst
 env/*
 */.gitignore
 release-pg3-store.txt
+*.cert
+*.key
+*.lock
+snapshot-all.txt

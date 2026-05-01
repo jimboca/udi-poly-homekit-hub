@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`zip_exclude.lst`**: exclude Polyglot **`*.cert`**, **`*.key`**, **`*.lock`**, and **`snapshot-all.txt`** so store zips do not bundle host secrets or debug artifacts. **`make zip`** now removes an existing **`HomeKitHub.zip`** first so **`zip -r`** cannot leave stale entries from older builds.
+
 ## [0.2.0] - 2026-05-01
 
 ### Added
