@@ -16,14 +16,15 @@ jobs:
         python-version: ["3.9", "3.11"]
 
     steps:
-      - uses: actions/checkout@v4
+      # Node 24 runtimes (GitHub is deprecating Node 20 for Actions); requires runner >= 2.327.1.
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Ruff
-        uses: astral-sh/ruff-action@v3
+        uses: astral-sh/ruff-action@v4
         with:
           version: "0.8.6"
 
@@ -47,7 +48,7 @@ jobs:
 
       - name: Upload HomeKitHub.zip (tags only, 3.11)
         if: startsWith(github.ref, 'refs/tags/') && matrix.python-version == '3.11'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: HomeKitHub
           path: HomeKitHub.zip

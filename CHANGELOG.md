@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GitHub Actions CI**: bump `actions/checkout`, `actions/setup-python`, `astral-sh/ruff-action`, and `actions/upload-artifact` to versions that run on **Node.js 24**, avoiding deprecated Node 20 action runtimes on `ubuntu-latest`.
+
+- **Controller**: `_get_node_key_next_index` tolerates instances built with `__new__` (unit tests) that never run `__init__`, so discover-append helpers do not raise on a missing `_node_key_next_index_cache`.
+
 - **WebSocket `snapshot`**: if the pairing has no in-memory accessory layout yet (e.g. after reload or before a successful HAP fetch), the hub now **calls `/accessories` first** instead of returning **0 characteristics** with no explanation. If the accessory is unreachable, the client receives an **`error`** frame with the underlying message instead of an empty snapshot.
 - Pairing health probes now **force a HAP DNS-SD refresh and close the IP session** after a failed probe, then **retry with backoff and additional DNS-SD bumps** (accessories often need time to listen, and the HAP port can change twice during boot). This fixes **Degraded** sticking after power-cycle when a single immediate retry races the accessory or stale mDNS.
 - If soft recovery still fails, the hub now **reloads the slot’s saved pairing blob into a fresh aiohomekit `IpPairing`** (clears wedged connector tasks) and retries, with **settle delays** to avoid `CancelledError` races during reconnect.

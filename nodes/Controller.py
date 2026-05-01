@@ -686,8 +686,10 @@ class Controller(Node):
         return out
 
     def _get_node_key_next_index(self) -> int:
-        if self._node_key_next_index_cache is not None:
-            return max(0, int(self._node_key_next_index_cache))
+        # Tests may construct Controller via __new__ without __init__; tolerate missing cache.
+        cached = getattr(self, "_node_key_next_index_cache", None)
+        if cached is not None:
+            return max(0, int(cached))
         idx = 0
         try:
             raw = self.Data.get(_DATA_KEY_NODE_KEY_NEXT_INDEX)
