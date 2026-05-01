@@ -76,9 +76,7 @@ def _append_list_device_item_lines(parts: list[str], item: dict[str, Any]) -> No
         parts.append(f"{indent}{key}: {item[key]}")
 
 
-def _append_snapshot_like_values(
-    parts: list[str], msg: dict[str, Any], *, source: str
-) -> None:
+def _append_snapshot_like_values(parts: list[str], msg: dict[str, Any], *, source: str) -> None:
     """Pretty-print ``values`` for ``snapshot`` or ``get`` (same payload shape)."""
     parts.append(f"  device_id      : {msg.get('device_id')}")
     vals = msg.get("values")
@@ -94,11 +92,7 @@ def _append_snapshot_like_values(
                 aid=item.get("aid"),
                 iid=item.get("iid"),
                 value=item.get("value"),
-                status=(
-                    f" [status={item.get('status')}]"
-                    if "status" in item
-                    else ""
-                ),
+                status=(f" [status={item.get('status')}]" if "status" in item else ""),
             )
         )
     if len(vals) == 0:
@@ -197,8 +191,8 @@ def _format_message(msg: dict[str, Any], show_raw: bool) -> str:
 def _interactive_help_text() -> str:
     return (
         "Interactive mode commands:\n"
-        "  - Enter a JSON object to send it as-is (example: {\"version\":\"1\",\"action\":\"list_devices\"})\n"
-        "  - /list        send {\"version\":\"1\",\"action\":\"list_devices\"}\n"
+        '  - Enter a JSON object to send it as-is (example: {"version":"1","action":"list_devices"})\n'
+        '  - /list        send {"version":"1","action":"list_devices"}\n'
         "  - /snapshot <device_id>\n"
         "  - /get <device_id> <characteristic>\n"
         "  - /quit        close client\n"
@@ -278,9 +272,7 @@ async def _run(args: argparse.Namespace) -> None:
     uri = f"ws://{args.host}:{args.port}"
     print(f"[{_now()}] connecting to {uri}")
 
-    async with websockets.connect(
-        uri, ping_interval=20, ping_timeout=20, close_timeout=5
-    ) as ws:
+    async with websockets.connect(uri, ping_interval=20, ping_timeout=20, close_timeout=5) as ws:
         hello = {
             "version": PROTOCOL_VERSION,
             "action": "hello",
@@ -311,9 +303,7 @@ async def _run(args: argparse.Namespace) -> None:
             await ws.send(json.dumps(payload))
             print(f"[{_now()}] requested active device list")
 
-        sender_task = (
-            asyncio.create_task(_interactive_sender(ws)) if args.interactive else None
-        )
+        sender_task = asyncio.create_task(_interactive_sender(ws)) if args.interactive else None
         try:
             async for raw in ws:
                 try:
@@ -396,7 +386,7 @@ Hub ws_host / ws_port / optional ws_token are Custom Params on the Polyglot node
     )
     p.add_argument(
         "--command",
-        help="Optional JSON payload to send once after hello (example: '{\"version\":\"1\",\"action\":\"command\",...}')",
+        help='Optional JSON payload to send once after hello (example: \'{"version":"1","action":"command",...}\')',
     )
     p.add_argument(
         "--snapshot-device-id",

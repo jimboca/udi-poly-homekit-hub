@@ -1,4 +1,5 @@
 """HomeKit Hub async bridge (aiohomekit + WebSocket)."""
+
 from .bridge import (
     DATA_KEY_LAST_HAP_DISCOVER,
     DATA_KEY_PAIRINGS,

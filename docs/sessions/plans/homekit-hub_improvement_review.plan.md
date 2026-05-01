@@ -61,13 +61,13 @@ todos:
     status: cancelled
   - id: pyproject-tooling
     content: "P4: pyproject.toml with ruff/black/pre-commit"
-    status: pending
+    status: completed
   - id: install-sh-polish
     content: "P4: install.sh: avoid system pip upgrade, print versions"
-    status: pending
+    status: completed
   - id: makefile-targets
     content: "P4: Makefile lint/test/clean targets"
-    status: pending
+    status: completed
   - id: bonjour-hybrid-followup
     content: "P4: revisit PG3 BONJOUR for UI-only discovery snapshot per prior plan"
     status: cancelled
@@ -112,13 +112,15 @@ isProject: false
 
 # Improvements review
 
-## Continuation status (2026-04-29)
+## Continuation status (2026-05-01)
 
 - **P6 (Bonjour):** Live `BONJOUR_COMPARE` JSON shows PG3 can return rich HAP rows when `poly.bonjour` uses broad filters (e.g. `type=None`). Overlap with aiohomekit/raw zeroconf was confirmed for at least one accessory (ecobee). **Full replacement of `AsyncZeroconf` for stock aiohomekit remains out of scope.** Tradeoffs are documented for operators in [`CONFIG.md`](../../CONFIG.md) (section *PG3 Bonjour vs in-process zeroconf*). Diagnostic/compare tooling may live on branch `old-pg-mdns` while **main** stays zeroconf-focused.
 - **P0 on `main`:** **pytest**, **CHANGELOG**, **GitHub Actions CI** (`.github/workflows/ci.yml`), and core helper tests are in-repo. Profile/version tracks releases (e.g. **0.1.12**: CONFIGDONE-gated hub bootstrap, no blocking sleep in START).
-- **P1 just landed:** **longPoll** checks whether the asyncio loop thread is still alive while `ready`; on unexpected exit sets **GV0** = Error, **ERR** = 10, Notice + log (**ST** remains the Polyglot / Node Server connection driver only).
+- **P1:** **longPoll** asyncio watchdog, CONFIGDONE-gated hub bootstrap, per-client WebSocket queues, HAP event backpressure, aiohomekit transport isolation, and pairing health probes are implemented. See `CHANGELOG.md`.
 - **P5 zeroconf cleanup items 24–30** in this plan are largely implemented (`ZeroconfManager`, always-on HAP browsers, Custom Params, `ZEROCONF_DIAG`, default policy). See `CHANGELOG.md` / `CONFIG.md` for current behavior.
-- **Next high-leverage (plan §P1):** **8–9** (WebSocket per-client queues + HAP backpressure) or **10** (aiohomekit transport accessor). **Item 7** is done: hub bootstrap runs after **CONFIGDONE** (non-blocking START; retries + fallback timer).
+- **P2–P3 WebSocket / profile:** `ws_token`, hello capabilities, `get` / `subscribe` / `unsubscribe`, `PROTOCOL.md` policy and examples, UNPAIR/DISCOVER flows, and QR helper are implemented per changelog.
+- **P4 repo hygiene:** **`pyproject.toml`** (ruff, black, pytest), **`.pre-commit-config.yaml`** (optional local hooks), **`Makefile`** `lint` / `format-check` / `test` / `clean` / `xml-check`, and **`install.sh`** polish are done. **Plan todo items `pyproject-tooling`, `install-sh-polish`, `makefile-targets`:** completed.
+- **No further items** remain in this plan’s YAML todo list except cancelled work (`checkprofile-not-updateprofile`, `bonjour-hybrid-followup`).
 
 ## Snapshot of what we have
 

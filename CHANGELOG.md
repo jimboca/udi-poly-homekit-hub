@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WebSocket**: optional Custom Param **`ws_token`**. When non-empty, clients must complete **`hello`** with a matching **`token`** / **`ws_token`** field before other actions; hello **`ack`** includes **`device_ids`** and **`capabilities`** (supported actions, auth mode, event-filter semantics).
 - **WebSocket** actions **`get`** (partial read), **`subscribe`** / **`unsubscribe`** (per-connection `event` fan-out filtering). Documented in **`PROTOCOL.md`** with **`PROTOCOL_VERSION` bump policy**.
 - When a **degraded** IP pairing slot **recovers** (health probe), the hub reports the live **LAN host:port** on the existing `pairing_health_notice` callback; the controller persists it to the matching Custom Typed row **`discover_endpoint`** (so the UI matches the resolved endpoint after reboot or IP/port change).
+- **Dev ergonomics (P4):** `pyproject.toml` (**ruff**, **black**, **pytest** settings), optional **`.pre-commit-config.yaml`** (ruff + ruff-format, aligned with CI), **`Makefile`** targets `lint`, `format-check`, `black-check`, `test`, `clean`, and `xml-check` (profile **`check`** aliases `xml-check`; removed debug `echo` of XML globs). **`install.sh`** no longer runs `pip install --upgrade pip`, uses **`pip3 install --no-input`**, and prints **python3** / **pip3** / **udi_interface** diagnostics. Pytest config moved from **`pytest.ini`** into **`pyproject.toml`**. Python sources were run through **`ruff format`** once so `make format-check` stays green.
+
+### Changed
+
+- **Python minimum 3.10**: **`aiohomekit` ≥3.2** and current **`udi_interface`** publish wheels that require Python **3.10+**, so **`pip install -r requirements.txt`** cannot succeed on 3.9. **`pyproject.toml`** **`requires-python`**, entry-point version check, **CI matrix** (**3.10** / **3.11**), and docs now match.
 
 ### Fixed
 
@@ -87,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Pytest harness (`tests/`, `pytest.ini`, `requirements-dev.txt`) for pure helpers in `homekit_hub.bridge` and `nodes.Controller`.
+- Pytest harness (`tests/`, `pyproject.toml` / `pytest` settings, `requirements-dev.txt`) for pure helpers in `homekit_hub.bridge` and `nodes.Controller`.
 - GitHub Actions CI: Python 3.9 / 3.11 matrix, `ruff`, `pytest`, `xmllint` on profile XML, tag-only `HomeKitHub.zip` artifact.
 - This `CHANGELOG.md`.
 

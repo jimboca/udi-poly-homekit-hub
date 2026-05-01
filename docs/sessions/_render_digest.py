@@ -8,6 +8,7 @@ Usage::
 
     python docs/sessions/_render_digest.py docs/sessions/2026-04-28_session.jsonl docs/sessions/2026-04-28_session.md
 """
+
 from __future__ import annotations
 
 import json
@@ -30,9 +31,11 @@ def _block_to_md(block: dict) -> str:
             cmd = (inp.get("command") or "").splitlines()[0][:140]
             return f"_[tool: Shell `{cmd}`]_"
         if name == "Write":
-            return f"_[tool: Write `{inp.get('path','')}` ({len(inp.get('contents') or '')} chars)]_"
+            return (
+                f"_[tool: Write `{inp.get('path', '')}` ({len(inp.get('contents') or '')} chars)]_"
+            )
         if name == "StrReplace":
-            return f"_[tool: StrReplace `{inp.get('path','')}`]_"
+            return f"_[tool: StrReplace `{inp.get('path', '')}`]_"
         if name == "TodoWrite":
             todos = inp.get("todos") or []
             return f"_[tool: TodoWrite ({len(todos)} todos, merge={inp.get('merge')})]_"
@@ -40,11 +43,11 @@ def _block_to_md(block: dict) -> str:
             qs = inp.get("questions") or []
             return f"_[tool: AskQuestion ({len(qs)} question(s))]_"
         if name == "WebFetch":
-            return f"_[tool: WebFetch `{inp.get('url','')}`]_"
+            return f"_[tool: WebFetch `{inp.get('url', '')}`]_"
         if name == "WebSearch":
-            return f"_[tool: WebSearch \"{inp.get('search_term','')}\"]_"
+            return f'_[tool: WebSearch "{inp.get("search_term", "")}"]_'
         if name == "SwitchMode":
-            return f"_[tool: SwitchMode -> {inp.get('target_mode_id','')}]_"
+            return f"_[tool: SwitchMode -> {inp.get('target_mode_id', '')}]_"
         return f"_[tool: {name}]_"
     return ""
 

@@ -355,7 +355,7 @@ Clients that want "all thermostats", "all lights", "all switches/plugs", etc. sh
 
 ## Example client (`websockets`)
 
-Python 3.9+ using the [`websockets`](https://websockets.readthedocs.io/) library (same dependency as the hub). The hub listens on Custom Params `ws_host` / `ws_port` (default `127.0.0.1:8163`).
+Python 3.10+ using the [`websockets`](https://websockets.readthedocs.io/) library (same dependency as the hub). The hub listens on Custom Params `ws_host` / `ws_port` (default `127.0.0.1:8163`).
 
 ```python
 import asyncio

@@ -1,4 +1,7 @@
 # Local / CI dev dependencies (not installed by Polyglot install.sh).
-# Ruff is optional locally (CI uses astral-sh/ruff-action with a pinned version).
+# Pin ruff to match .github/workflows/ci.yml and .pre-commit-config.yaml.
 pytest>=8
 pytest-asyncio>=0.23
+ruff==0.8.6
+black>=24.10.0
+pre-commit>=4.0.0

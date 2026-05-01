@@ -258,9 +258,7 @@ class Controller(Node):
         for node in self._paired_nodes.values():
             node.update_health(node.slot in unhealthy_slots)
 
-    def _persist_typed_discover_from_recovered_lan(
-        self, by_alias: dict[str, str]
-    ) -> None:
+    def _persist_typed_discover_from_recovered_lan(self, by_alias: dict[str, str]) -> None:
         """Update ``discover_endpoint`` on pairing rows when hub reports recovered LAN host:port."""
         slots_eps: dict[int, str] = {}
         for alias, endpoint in by_alias.items():
@@ -381,9 +379,7 @@ class Controller(Node):
                 self.setDriver("GV0", 0, report=True, force=True, uom=25)
             except Exception:
                 LOGGER.exception("setDriver GV0 before full_restart")
-            fut = asyncio.run_coroutine_threadsafe(
-                self.bridge.full_restart(), self.mainloop
-            )
+            fut = asyncio.run_coroutine_threadsafe(self.bridge.full_restart(), self.mainloop)
             fut.add_done_callback(self._on_full_restart_done)
         elif pairing_changed:
             LOGGER.info("Typed pairing config changed; reloading HomeKit sessions")
@@ -542,8 +538,7 @@ class Controller(Node):
         parts = [f"<b>{html.escape(title)}</b><br/>"]
         if exc is not None:
             parts.append(
-                f"<code>{html.escape(type(exc).__name__)}</code>: "
-                f"{html.escape(str(exc))}<br/>"
+                f"<code>{html.escape(type(exc).__name__)}</code>: {html.escape(str(exc))}<br/>"
             )
         if extra_html:
             parts.append(extra_html)
@@ -558,8 +553,7 @@ class Controller(Node):
             LOGGER.exception("report_error: setDriver failed")
             try:
                 self.Notices["homekit_meta"] = (
-                    "<b>Could not update error status drivers</b><br/>"
-                    f"{html.escape(str(e2))}"
+                    f"<b>Could not update error status drivers</b><br/>{html.escape(str(e2))}"
                 )
             except Exception:
                 pass
@@ -782,24 +776,18 @@ class Controller(Node):
                 elif hasattr(self.poly, "removeNode"):
                     self.poly.removeNode(node.address)
             except Exception:
-                LOGGER.exception(
-                    "Failed to delete paired device node for key %s", node_key
-                )
+                LOGGER.exception("Failed to delete paired device node for key %s", node_key)
 
         for node_key in sorted(desired_keys):
             slot, device_label, is_paired = desired[node_key]
             node = self._paired_nodes.get(node_key)
             if node is None:
                 try:
-                    node = PairedDeviceNode(
-                        self, node_key, slot, device_label, is_paired
-                    )
+                    node = PairedDeviceNode(self, node_key, slot, device_label, is_paired)
                     self.poly.addNode(node)
                     self._paired_nodes[node_key] = node
                 except Exception:
-                    LOGGER.exception(
-                        "Failed to create paired device node for key %s", node_key
-                    )
+                    LOGGER.exception("Failed to create paired device node for key %s", node_key)
                     continue
             else:
                 node.update_identity(slot, device_label, is_paired)
@@ -957,7 +945,9 @@ class Controller(Node):
         self._hub_bootstrap_generation += 1
         bootstrap_gen = self._hub_bootstrap_generation
         self.Notices.clear()
-        LOGGER.info("HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION)
+        LOGGER.info(
+            "HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION
+        )
         cfg_md = Path(__file__).resolve().parent.parent / "CONFIG.md"
         if cfg_md.is_file():
             try:
@@ -1043,8 +1033,7 @@ class Controller(Node):
     def _set_discover_progress_notice(self, seconds_left: int) -> None:
         sec = max(0, int(seconds_left))
         self.Notices["discover_progress"] = (
-            "<b>HomeKit DISCOVER running</b><br/>"
-            f"Scan window ends in <b>{sec}</b> second(s)."
+            f"<b>HomeKit DISCOVER running</b><br/>Scan window ends in <b>{sec}</b> second(s)."
         )
 
     def _clear_discover_progress_notice(self) -> None:
@@ -1349,7 +1338,11 @@ class Controller(Node):
             if changed:
                 n_merged += 1
 
-        blank_idxs = [i for i, row in enumerate(current) if isinstance(row, dict) and self._pairing_row_needs_discover_fill(row)]
+        blank_idxs = [
+            i
+            for i, row in enumerate(current)
+            if isinstance(row, dict) and self._pairing_row_needs_discover_fill(row)
+        ]
         bi = 0
         n_filled = 0
         for r in unpaired:
@@ -1477,9 +1470,7 @@ class Controller(Node):
                 "where needed."
             )
         else:
-            typed_blurb = (
-                "<b>Custom Typed &gt; HomeKit pairing slots</b> was checked, with no row changes in this scan."
-            )
+            typed_blurb = "<b>Custom Typed &gt; HomeKit pairing slots</b> was checked, with no row changes in this scan."
         parts = [
             "<b>HomeKit discover</b> — <code>last_hap_discover</code> is saved and "
             f"{typed_blurb} <b>Enter only the HomeKit pairing code</b> on each target row, then save.<br/>"
@@ -1528,9 +1519,7 @@ class Controller(Node):
             for r in paired:
                 rid = html.escape(str(r.get("id") or ""), quote=True)
                 nm = html.escape(str(r.get("name") or "(no name)"), quote=True)
-                parts.append(
-                    f"<li><b>id</b> <code>{rid}</code> &nbsp; <b>name</b> {nm}</li>"
-                )
+                parts.append(f"<li><b>id</b> <code>{rid}</code> &nbsp; <b>name</b> {nm}</li>")
             parts.append("</ul>")
         self.Notices["hap_discover"] = "".join(parts)
 
@@ -1564,8 +1553,7 @@ class Controller(Node):
         line = json.dumps(diag, indent=2, sort_keys=True, default=str)
         LOGGER.info("ZEROCONF_DIAG:\n%s", line)
         self.Notices["zeroconf_diag"] = (
-            "<b>Zeroconf / hub diagnostic</b><br/><pre>"
-            f"{html.escape(line)}</pre>"
+            f"<b>Zeroconf / hub diagnostic</b><br/><pre>{html.escape(line)}</pre>"
         )
 
     def _clear_slot_pin_and_reload(self, slot: int, *, source: str) -> bool:
@@ -1653,9 +1641,7 @@ class Controller(Node):
             keep_rows: list[Any] = []
             for sn, row in assigned:
                 row_key = (
-                    str(row.get("node_key") or "").strip().lower()
-                    if isinstance(row, dict)
-                    else ""
+                    str(row.get("node_key") or "").strip().lower() if isinstance(row, dict) else ""
                 )
                 if row_key == key and not removed_typed_row:
                     removed_typed_row = True

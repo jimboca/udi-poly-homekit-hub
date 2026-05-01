@@ -1,0 +1,26 @@
+# Tooling and dev config. Runtime deps remain in requirements.txt (Polyglot install.sh).
+# IoX profile version: profile/version.txt
+
+[project]
+name = "udi-poly-homekit"
+description = "PG3x HomeKit hub Node Server (profile version in profile/version.txt)"
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["homekit_hub", "nodes", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]

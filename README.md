@@ -6,6 +6,8 @@ The hub supports **multiple simultaneous HomeKit pairings** (each row has an opt
 
 ## Requirements
 
+**Python 3.10+** on the Polyglot host (**`aiohomekit` 3.x** and current **`udi_interface`** require it).
+
 **Polyglot** runs **`install.sh`** on the Node Server host to install **`requirements.txt`**; you do not need to install those packages by hand for a normal install.
 
 ## Development

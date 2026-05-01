@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Polyglot PG3x HomeKit Hub Node Server entry point."""
+
 import sys
 
 from udi_interface import Interface, LOGGER
@@ -8,8 +9,8 @@ from nodes import VERSION, Controller
 
 
 def main() -> None:
-    if sys.version_info < (3, 9):
-        LOGGER.error("Python 3.9+ is required, not %s.%s", sys.version_info[0], sys.version_info[1])
+    if sys.version_info < (3, 10):
+        LOGGER.error("Python 3.10+ is required, not %s.%s", sys.version_info[0], sys.version_info[1])
         sys.exit(1)
     # Zeroconf defaults: see CONFIG.md (Custom Params `zeroconf_*`; env overrides).
     try:

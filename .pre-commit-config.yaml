@@ -1,0 +1,9 @@
+# Optional: pip install pre-commit && pre-commit install
+# Align ruff version with CI (.github/workflows/ci.yml) and requirements-dev.txt.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+      - id: ruff-format

@@ -76,7 +76,10 @@ def test_assign_pairing_slot_rows_duplicate_slot_goes_auto():
         {"slot": 1, "k": "dup"},
     ]
     out = assign_pairing_slot_rows(rows, log)
-    assert sorted(out, key=lambda x: x[0]) == [(1, {"slot": 1, "k": "first"}), (2, {"slot": 1, "k": "dup"})]
+    assert sorted(out, key=lambda x: x[0]) == [
+        (1, {"slot": 1, "k": "first"}),
+        (2, {"slot": 1, "k": "dup"}),
+    ]
     log.warning.assert_called()
 
 

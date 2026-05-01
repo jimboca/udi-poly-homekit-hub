@@ -69,7 +69,11 @@ def test_typed_update_needs_discover_false_when_no_pin():
 def test_typed_update_needs_discover_true_when_pin_no_filter_and_no_last():
     c = _bare_controller()
     c.TypedData = FakeTypedData(
-        {TYPED_PAIRING_SLOTS_KEY: [{"hap_pin": "12345678", "accessory_id": "", "accessory_name": ""}]}
+        {
+            TYPED_PAIRING_SLOTS_KEY: [
+                {"hap_pin": "12345678", "accessory_id": "", "accessory_name": ""}
+            ]
+        }
     )
     c.Data = FakeData({DATA_KEY_LAST_HAP_DISCOVER: []})
     assert c._typed_update_needs_discover() is True
@@ -78,7 +82,11 @@ def test_typed_update_needs_discover_true_when_pin_no_filter_and_no_last():
 def test_typed_update_needs_discover_false_when_last_populated():
     c = _bare_controller()
     c.TypedData = FakeTypedData(
-        {TYPED_PAIRING_SLOTS_KEY: [{"hap_pin": "12345678", "accessory_id": "", "accessory_name": ""}]}
+        {
+            TYPED_PAIRING_SLOTS_KEY: [
+                {"hap_pin": "12345678", "accessory_id": "", "accessory_name": ""}
+            ]
+        }
     )
     c.Data = FakeData({DATA_KEY_LAST_HAP_DISCOVER: [{"id": "x", "paired": False}]})
     assert c._typed_update_needs_discover() is False
@@ -87,7 +95,11 @@ def test_typed_update_needs_discover_false_when_last_populated():
 def test_typed_update_needs_discover_false_when_filter_set():
     c = _bare_controller()
     c.TypedData = FakeTypedData(
-        {TYPED_PAIRING_SLOTS_KEY: [{"hap_pin": "12345678", "accessory_id": "aa:bb", "accessory_name": ""}]}
+        {
+            TYPED_PAIRING_SLOTS_KEY: [
+                {"hap_pin": "12345678", "accessory_id": "aa:bb", "accessory_name": ""}
+            ]
+        }
     )
     c.Data = FakeData({})
     assert c._typed_update_needs_discover() is False
