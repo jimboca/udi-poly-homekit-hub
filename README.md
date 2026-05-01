@@ -19,7 +19,13 @@ pytest -q
 
 Lint is checked in **GitHub Actions** with [Ruff](https://docs.astral.sh/ruff/) (pinned in the workflow). Locally: `pip install ruff==0.8.6 && ruff check .` (optional).
 
-**Releases:** on a **branch** (not detached `HEAD`), with a **clean** git tree, run **`make release`** from this repo (or **`make -C /path/to/udi-poly-homekit release`**). That builds **`HomeKitHub.zip`**, creates annotated **`v`<version>**, **`git push`**es the current branch and that tag to **`origin`** (override with **`GIT_REMOTE=myfork`**), then writes **`release-pg3-store.txt`** (`plugin_version`, `profile_version`, **`zip_path`**, and git hints for the PG3 store).
+**Releases:** Polyglot installs use a **git URL + branch**. This repo uses two remote branches: **`beta`** (pre-release) and **`production`** (stable). On a **branch** (not detached `HEAD`) with a **clean** git tree:
+
+- **`make beta`** — pushes **current `HEAD`** to **`origin/beta`** (override remote: **`GIT_REMOTE=myfork`**; override branch name: **`BRANCH_BETA=...`**).
+- **`make production`** — same for **`origin/production`** (**`BRANCH_PRODUCTION=...`**).
+- **`make release`** — parses **`VERSION`** from **`nodes/__init__.py`**, creates annotated **`v`<version>**, **`git push`**es the current branch, **`v`<version>**, and **`HEAD` → `production`**, then writes **`release-pg3-store.txt`** (versions and git branch hints for the PG3 store). Does **not** build a zip.
+
+**`make zip`** remains for an optional **local `HomeKitHub.zip`** (legacy / manual upload); primary delivery is the branches above.
 
 ## Layout
 
@@ -69,9 +75,11 @@ The controller node exposes **ST** (Polyglot / NodeServer connection — same id
 
 On **Node Server start**, the controller clears **all** Notices before loading.
 
-## Packaging (zip for Polyglot)
+## Packaging (git branches; optional zip)
 
-From the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:
+Point PG3 at this repository and the **`production`** or **`beta`** branch (see **Releases** above). Polyglot clones that branch and runs **`install.sh`** / **`requirements.txt`** on the host like other git-based Node Servers.
+
+Optional local archive (reference only): from the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:
 
 ```bash
 chmod +x install.sh
@@ -79,8 +87,6 @@ chmod +x install.sh
 make check                # validate profile XML
 make zip                  # produces HomeKitHub.zip (see zip_exclude.lst)
 ```
-
-Install the zip via the Polyglot dashboard like other Node Servers. The archive includes `requirements.txt` and `install.sh` for Polyglot to run on the host.
 
 ## Logs
 

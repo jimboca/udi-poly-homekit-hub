@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Releases / PG3 install:** delivery is **`beta`** and **`production`** git branches (**`make beta`**, **`make production`**, **`make release`** updates **`production`** + annotated tag). **`make release`** no longer builds **`HomeKitHub.zip`**; **`make zip`** is kept for optional local archives only.
+
 ### Fixed
 
 - **`zip_exclude.lst`**: exclude Polyglot **`*.cert`**, **`*.key`**, **`*.lock`**, and **`snapshot-all.txt`** so store zips do not bundle host secrets or debug artifacts. **`make zip`** now removes an existing **`HomeKitHub.zip`** first so **`zip -r`** cannot leave stale entries from older builds.
