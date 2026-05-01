@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **GitHub Actions CI**: bump `actions/checkout`, `actions/setup-python`, `astral-sh/ruff-action`, and `actions/upload-artifact` to versions that run on **Node.js 24**, avoiding deprecated Node 20 action runtimes on `ubuntu-latest`.
+- **GitHub Actions CI**: bump `actions/checkout`, `actions/setup-python`, `astral-sh/ruff-action` (pin **`v4.0.0`** — immutable tags, no floating `v4`), and `actions/upload-artifact` to versions that run on **Node.js 24**, avoiding deprecated Node 20 action runtimes on `ubuntu-latest`.
 
 - **Controller**: `_get_node_key_next_index` tolerates instances built with `__new__` (unit tests) that never run `__init__`, so discover-append helpers do not raise on a missing `_node_key_next_index_cache`.
 
