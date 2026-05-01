@@ -11,3 +11,4 @@ zip_exclude.lst
 .venv/*
 env/*
 */.gitignore
+release-pg3-store.txt

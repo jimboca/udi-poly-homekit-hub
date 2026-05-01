@@ -19,7 +19,6 @@ Zeroconf / mDNS constraints:
   ``sendto`` failures; unicast on BSD-like hosts defaults to narrower interface and
   IPv4 unless overridden (Custom Params or env; env wins).
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -285,7 +284,9 @@ class ZeroconfManager:
         return self._hap_browsers
 
     async def start(self, params: dict[str, Any] | None) -> AsyncZeroconf:
-        self._azc, self.using_unicast, self.mode_label = create_async_zeroconf(self.log, params)
+        self._azc, self.using_unicast, self.mode_label = create_async_zeroconf(
+            self.log, params
+        )
         assert self._azc is not None
         zc = self._azc.zeroconf
         for hap_type in (HAP_TYPE_TCP, HAP_TYPE_UDP):
@@ -877,7 +878,9 @@ class HomeKitHubBridge:
         get_pairing_slot_rows: Callable[[], list],
         get_custom_data: Callable[[], dict[str, Any]],
         set_custom_data: Callable[[dict[str, Any]], None],
-        pairing_notice: Optional[Callable[[int, str, str, Optional[Exception]], None]] = None,
+        pairing_notice: Optional[
+            Callable[[int, str, str, Optional[Exception]], None]
+        ] = None,
         pairing_health_notice: Optional[
             Callable[[bool, str, list[str], dict[str, str], bool], None]
         ] = None,
@@ -1340,7 +1343,10 @@ class HomeKitHubBridge:
                     if attempt:
                         await asyncio.sleep(PAIRING_HEALTH_POST_RESYNC_DELAY_SEC)
                         pdata = getattr(pairing, "pairing_data", None)
-                        if isinstance(pdata, dict) and pdata.get("Connection") == "IP":
+                        if (
+                            isinstance(pdata, dict)
+                            and pdata.get("Connection") == "IP"
+                        ):
                             await self._bump_ip_pairing_zeroconf(
                                 hk, alias, pairing, log_failures=False
                             )
@@ -1362,7 +1368,9 @@ class HomeKitHubBridge:
                     for reopen_try in range(PAIRING_HEALTH_RELOAD_LIST_TRIES):
                         if reopen_try:
                             await asyncio.sleep(PAIRING_HEALTH_POST_RESYNC_DELAY_SEC)
-                            if pairing and isinstance(getattr(pairing, "pairing_data", None), dict):
+                            if pairing and isinstance(
+                                getattr(pairing, "pairing_data", None), dict
+                            ):
                                 if pairing.pairing_data.get("Connection") == "IP":
                                     await self._bump_ip_pairing_zeroconf(
                                         hk, alias, pairing, log_failures=False
@@ -1410,7 +1418,9 @@ class HomeKitHubBridge:
                 try:
                     await pairing.subscribe(to_sub)
                 except Exception:
-                    self.log.exception("pairing health recovery subscribe failed for %s", alias)
+                    self.log.exception(
+                        "pairing health recovery subscribe failed for %s", alias
+                    )
                     continue
             self._pairing_unhealthy_aliases.discard(alias)
             ep = _ip_lan_endpoint_str(pairing)
@@ -1538,7 +1548,9 @@ class HomeKitHubBridge:
         if not self._hk:
             return []
         if not getattr(self._hk, "transports", None):
-            self.log.warning("aiohomekit Controller has no transports; discovery may be incomplete")
+            self.log.warning(
+                "aiohomekit Controller has no transports; discovery may be incomplete"
+            )
         self.log.info(
             "HomeKit discovery (%.1fs window, mDNS _hap._tcp; devices appear as announced)...",
             timeout,
@@ -2355,20 +2367,12 @@ class HomeKitHubBridge:
         device_ids = [str(d.get("device_id") or "") for d in devices_payload]
         pairings = getattr(self._hk, "pairings", None)
         aliases = getattr(self._hk, "aliases", None)
-        pairings_keys = (
-            sorted(str(k).strip().lower() for k in pairings.keys())
-            if isinstance(pairings, dict)
-            else []
-        )
-        alias_ids = (
-            sorted(
-                str(getattr(p, "id", "")).strip().lower()
-                for p in aliases.values()
-                if p is not None and str(getattr(p, "id", "")).strip()
-            )
-            if isinstance(aliases, dict)
-            else []
-        )
+        pairings_keys = sorted(str(k).strip().lower() for k in pairings.keys()) if isinstance(pairings, dict) else []
+        alias_ids = sorted(
+            str(getattr(p, "id", "")).strip().lower()
+            for p in aliases.values()
+            if p is not None and str(getattr(p, "id", "")).strip()
+        ) if isinstance(aliases, dict) else []
         self.log.debug(
             "list_devices: pairings_count=%d aliases_count=%d pairings_keys=%s alias_ids=%s response_ids=%s",
             len(pairings) if isinstance(pairings, dict) else -1,
@@ -2538,12 +2542,17 @@ class HomeKitHubBridge:
             # Startup guard: PIN-only row with no saved customdata and no discover
             # snapshot cannot be restored or targeted, and attempting fresh pairing
             # just spams "already paired" warnings while scanning.
-            if not saved and not acc_id and not acc_name:
+            if (
+                not saved
+                and not acc_id
+                and not acc_name
+            ):
                 raw = self._get_custom_data()
                 last = raw.get(DATA_KEY_LAST_HAP_DISCOVER) if isinstance(raw, dict) else None
                 has_last_discover = isinstance(last, list) and len(last) > 0
                 has_any_saved_pairings = any(
-                    isinstance(v, dict) and v.get("AccessoryPairingID") for v in blob.values()
+                    isinstance(v, dict) and v.get("AccessoryPairingID")
+                    for v in blob.values()
                 )
                 if not has_last_discover and not has_any_saved_pairings:
                     self.log.warning(
@@ -2566,7 +2575,11 @@ class HomeKitHubBridge:
             # Resilience path for older configs: if this row has no id/name filter and
             # no blob at its current slot, try a unique unclaimed saved pairing blob.
             # This helps recover when slot numbering changed but pairing data still exists.
-            if not saved and not acc_id and not acc_name:
+            if (
+                not saved
+                and not acc_id
+                and not acc_name
+            ):
                 candidates: list[tuple[str, dict[str, Any]]] = []
                 for bkey, bval in blob.items():
                     if bkey in consumed_saved_slot_keys:
@@ -2650,7 +2663,9 @@ class HomeKitHubBridge:
         accessory_name: str,
         blob: dict[str, Any],
     ) -> None:
-        matched = await self._wait_for_pairing_discovery(accessory_id, accessory_name, timeout=30.0)
+        matched = await self._wait_for_pairing_discovery(
+            accessory_id, accessory_name, timeout=30.0
+        )
         if not matched:
             paired_seen = False
             if not accessory_id and not accessory_name:

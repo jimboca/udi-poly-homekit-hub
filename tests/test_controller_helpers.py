@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 
 from homekit_hub.bridge import DATA_KEY_LAST_HAP_DISCOVER, TYPED_PAIRING_SLOTS_KEY
-from nodes.Controller import ERR_ASYNC_LOOP_DEAD, Controller
+from nodes.Controller import ERR_ASYNC_LOOP_DEAD, Controller, _DEFAULT_BRIDGE_PARAMS
 
 
 class FakeTypedData:
@@ -36,6 +36,20 @@ class FakeData:
         return self._d.get(key, default)
 
 
+class FakeParams:
+    def __init__(self, d: dict | None = None):
+        self._d = dict(d or {})
+
+    def get(self, key, default=None):
+        return self._d.get(key, default)
+
+    def __contains__(self, key):
+        return key in self._d
+
+    def __setitem__(self, key, value):
+        self._d[key] = value
+
+
 def _bare_controller():
     c = Controller.__new__(Controller)
     c.report_error = MagicMock()
@@ -47,6 +61,29 @@ def _bare_controller():
     c.handler_typedparams_st = None
     c.handler_typed_data_st = None
     return c
+
+
+def test_refresh_change_node_names_default_true():
+    c = _bare_controller()
+    c.Params = FakeParams({})
+    c._refresh_change_node_names_flag()
+    assert c.change_node_names is True
+
+
+def test_refresh_change_node_names_custom_param_false():
+    c = _bare_controller()
+    c.Params = FakeParams({"change_node_names": "false"})
+    c._refresh_change_node_names_flag()
+    assert c.change_node_names is False
+
+
+def test_ensure_default_custom_params_seeds_missing_keys():
+    c = _bare_controller()
+    c.Params = FakeParams({"ws_host": "127.0.0.1"})
+    c._ensure_default_custom_params()
+    for key in _DEFAULT_BRIDGE_PARAMS:
+        assert key in c.Params
+    assert c.Params.get("change_node_names") == "true"
 
 
 def test_custom_handlers_have_run_false_until_all_set():

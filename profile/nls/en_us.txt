@@ -1,4 +1,6 @@
 # HomeKit Hub controller
+# ND-*-ICON tokens must match the IoX predefined set:
+# https://wiki.universal-devices.com/Polisy_Developers:ISY:API:Appendix:Icons
 ND-HKHubController-NAME = HomeKit Hub
 ND-HKHubController-ICON = GenericCtl
 CMD-hkctl-QUERY-NAME = Query
@@ -31,7 +33,7 @@ ERRC-10 = Asyncio loop stopped
 ERRC-11 = Pairing health degraded
 
 ND-HKHubPairedDevice-NAME = Paired HomeKit device
-ND-HKHubPairedDevice-ICON = Generic
+ND-HKHubPairedDevice-ICON = GenericCtl
 CMD-hkpair-QUERY-NAME = Query
 CMD-hkpair-UNPAIR-NAME = Unpair device
 CMD-hkpair-DELETE-NAME = Delete device node

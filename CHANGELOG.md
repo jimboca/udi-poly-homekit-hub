@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-01
+
 ### Added
 
+- **`make release`**: build **`HomeKitHub.zip`**, create annotated **`v`<version>**, **`git push`** current branch + tag to **`origin`** (or **`GIT_REMOTE`**), then write **`release-pg3-store.txt`** (versions, **`zip_path`**, branch/remote/tag hints). Requires clean tree and a checked-out branch (not detached **`HEAD`**).
 - **WebSocket `list_devices`** (and hello **`ack`**): each paired row may include HAP **Accessory Information** metadata (**`name`**, **`manufacturer`**, **`model`**, **`serial_number`**, **`firmware_revision`**, **`hardware_revision`**, **`category`**, **`category_label`**, **`primary_aid`**) so clients can filter by vendor or category (e.g. Ecobee thermostats) without out-of-band config. When the cached accessory model has no **Manufacturer** yet, the hub issues a **read** of those characteristics so metadata can fill in on the same response.
 - **`PROTOCOL.md`**: added a client playbook for selecting device types/capabilities (switch, light, plug, thermostat, sensors, etc.) using `list_devices` metadata as a first-pass hint and `snapshot`/`get` characteristic sets as the authoritative capability model.
 - **WebSocket**: optional Custom Param **`ws_token`**. When non-empty, clients must complete **`hello`** with a matching **`token`** / **`ws_token`** field before other actions; hello **`ack`** includes **`device_ids`** and **`capabilities`** (supported actions, auth mode, event-filter semantics).
@@ -18,9 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Profile / Node Server version** **0.2.0** (`profile/version.txt` and `nodes/__init__.py` **`VERSION`**) so IoX receives updated profile/NLS and matches the running server.
+
+- **Paired device nodes**: NLS **`ND-HKHubPairedDevice-ICON`** is **`GenericRspCtl`** ([Appendix: Icons](https://wiki.universal-devices.com/Polisy_Developers:ISY:API:Appendix:Icons)). The **admin-console tree** icon is driven by the Polyglot **`addnode` `hint`**, not by that NLS key alone; **`PairedDeviceNode`** now sets **`hint`** to **`0x01040200`** (home · Relay · On/Off Power Switch · n/a per [UniversalDevicesInc/hints](https://github.com/UniversalDevicesInc/hints/blob/master/hint.yaml)) so new nodes are not created with the default **`[0,0,0,0]`** “unknown” / bulb glyph. Nodes already in IoX keep their stored hint until you remove them and let the plugin add them again (same address after sync).
+
 - **Python minimum 3.10**: **`aiohomekit` ≥3.2** and current **`udi_interface`** publish wheels that require Python **3.10+**, so **`pip install -r requirements.txt`** cannot succeed on 3.9. **`pyproject.toml`** **`requires-python`**, entry-point version check, **CI matrix** (**3.10** / **3.11**), and docs now match.
 
 ### Fixed
+
+- **Paired device tree icon**: previous builds left **`hint`** at the **`udi_interface`** default, so IoX showed the bulb/unknown glyph even after NLS **`ND-*-ICON`** changes.
 
 - **GitHub Actions CI**: bump `actions/checkout`, `actions/setup-python`, `astral-sh/ruff-action` (pin **`v4.0.0`** — immutable tags, no floating `v4`), and `actions/upload-artifact` to versions that run on **Node.js 24**, avoiding deprecated Node 20 action runtimes on `ubuntu-latest`.
 

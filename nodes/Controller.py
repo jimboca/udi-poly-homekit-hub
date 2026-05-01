@@ -46,6 +46,8 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     "zeroconf_unicast": "on",
     "zeroconf_interfaces": "",
     "zeroconf_ip_version": "",
+    # IoX child node titles: see CONFIG.md (string true/false; merged like other Custom Params).
+    "change_node_names": "true",
 }
 
 # After CONFIGDONE, PG3 may still be delivering CUSTOM* events on other threads; retry briefly.
@@ -54,6 +56,20 @@ _HUB_BOOTSTRAP_AFTER_CONFIG_RETRY_SEC = 0.1
 # If CONFIGDONE never arrives (misbehaving client), still try once custom handlers have run.
 _HUB_BOOTSTRAP_FALLBACK_SEC = 75.0
 _DATA_KEY_NODE_KEY_NEXT_INDEX = "node_key_next_index"
+
+
+def _coerce_change_node_names(val: Any) -> bool:
+    """Custom Param ``change_node_names`` string (or bool); default True when unset or ambiguous."""
+    if val is None:
+        return True
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("false", "0", "no", "off"):
+        return False
+    if s in ("true", "1", "yes", "on"):
+        return True
+    return True
 
 
 def _alpha_key_from_index(n: int) -> str:
@@ -97,6 +113,7 @@ class Controller(Node):
         self._pending_hub_bootstrap = False
         self._hub_bootstrap_generation = 0
         self._paired_nodes: dict[str, PairedDeviceNode] = {}
+        self.change_node_names = True
         self._discover_notice_token = 0
         self._node_key_next_index_cache: Optional[int] = None
 
@@ -156,7 +173,7 @@ class Controller(Node):
                             "isRequired": False,
                         },
                     ],
-                }
+                },
             ],
             True,
         )
@@ -258,7 +275,9 @@ class Controller(Node):
         for node in self._paired_nodes.values():
             node.update_health(node.slot in unhealthy_slots)
 
-    def _persist_typed_discover_from_recovered_lan(self, by_alias: dict[str, str]) -> None:
+    def _persist_typed_discover_from_recovered_lan(
+        self, by_alias: dict[str, str]
+    ) -> None:
         """Update ``discover_endpoint`` on pairing rows when hub reports recovered LAN host:port."""
         slots_eps: dict[int, str] = {}
         for alias, endpoint in by_alias.items():
@@ -379,7 +398,9 @@ class Controller(Node):
                 self.setDriver("GV0", 0, report=True, force=True, uom=25)
             except Exception:
                 LOGGER.exception("setDriver GV0 before full_restart")
-            fut = asyncio.run_coroutine_threadsafe(self.bridge.full_restart(), self.mainloop)
+            fut = asyncio.run_coroutine_threadsafe(
+                self.bridge.full_restart(), self.mainloop
+            )
             fut.add_done_callback(self._on_full_restart_done)
         elif pairing_changed:
             LOGGER.info("Typed pairing config changed; reloading HomeKit sessions")
@@ -538,7 +559,8 @@ class Controller(Node):
         parts = [f"<b>{html.escape(title)}</b><br/>"]
         if exc is not None:
             parts.append(
-                f"<code>{html.escape(type(exc).__name__)}</code>: {html.escape(str(exc))}<br/>"
+                f"<code>{html.escape(type(exc).__name__)}</code>: "
+                f"{html.escape(str(exc))}<br/>"
             )
         if extra_html:
             parts.append(extra_html)
@@ -553,7 +575,8 @@ class Controller(Node):
             LOGGER.exception("report_error: setDriver failed")
             try:
                 self.Notices["homekit_meta"] = (
-                    f"<b>Could not update error status drivers</b><br/>{html.escape(str(e2))}"
+                    "<b>Could not update error status drivers</b><br/>"
+                    f"{html.escape(str(e2))}"
                 )
             except Exception:
                 pass
@@ -644,7 +667,41 @@ class Controller(Node):
             out[slot] = pid
         return out
 
-    def _candidate_slots_from_typed_data(self) -> dict[int, str]:
+    @staticmethod
+    def _truncate_isy_node_name(title: str) -> str:
+        s = str(title or "").strip()
+        if len(s) <= 80:
+            return s
+        return s[:77] + "..."
+
+    def _discover_display_name_by_id(self) -> dict[str, str]:
+        """Map lowercase HAP accessory id -> display name from last DISCOVER snapshot."""
+        out: dict[str, str] = {}
+        try:
+            rows = self.Data.get(DATA_KEY_LAST_HAP_DISCOVER)
+        except Exception:
+            return out
+        if not isinstance(rows, list):
+            return out
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            pid = str(r.get("id") or "").strip().lower()
+            if not pid:
+                continue
+            nm = str(r.get("name") or "").strip()
+            if nm:
+                out[pid] = nm
+        return out
+
+    def _pairing_slot_display_names(self) -> dict[int, str]:
+        """Per slot: human title — prefer live DISCOVER name by id so renames refresh IoX titles.
+
+        Order: ``last_hap_discover`` name for accessory id and/or pairing id, then typed
+        ``accessory_name``, then ``accessory_id`` string, then truncated pairing id.
+        """
+        discover = self._discover_display_name_by_id()
+        paired_by_slot = self._paired_slots_from_data()
         try:
             rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
         except Exception:
@@ -655,12 +712,31 @@ class Controller(Node):
         for slot, row in assign_pairing_slot_rows(rows, LOGGER):
             if not isinstance(row, dict):
                 continue
-            aid = str(row.get("accessory_id") or "").strip().lower()
-            aname = str(row.get("accessory_name") or "").strip().lower()
-            label = aid or aname
-            if not label:
-                continue
-            out[slot] = label
+            aname = str(row.get("accessory_name") or "").strip()
+            aid_raw = str(row.get("accessory_id") or "").strip()
+            aid_l = aid_raw.lower()
+            paired_pid = paired_by_slot.get(slot)
+
+            ids_to_try: list[str] = []
+            if aid_l:
+                ids_to_try.append(aid_l)
+            if paired_pid and paired_pid not in ids_to_try:
+                ids_to_try.append(paired_pid)
+
+            title = ""
+            for lid in ids_to_try:
+                nm = discover.get(lid, "")
+                if nm:
+                    title = nm
+                    break
+            if not title and aname:
+                title = aname
+            if not title and aid_raw:
+                title = aid_raw
+            if not title and paired_pid:
+                title = self._truncate_isy_node_name(paired_pid)
+            if title:
+                out[slot] = self._truncate_isy_node_name(title)
         return out
 
     def _typed_row_node_key_map(self) -> dict[str, int]:
@@ -753,15 +829,19 @@ class Controller(Node):
 
     def _sync_paired_nodes_from_data(self) -> None:
         paired = self._paired_slots_from_data()
-        candidates = self._candidate_slots_from_typed_data()
+        display_by_slot = self._pairing_slot_display_names()
+        discover_names = self._discover_display_name_by_id()
         key_map = self._typed_row_node_key_map()
         desired: dict[str, tuple[int, str, bool]] = {}
         for node_key, slot in key_map.items():
-            desired[node_key] = (slot, candidates.get(slot, ""), False)
+            desired[node_key] = (slot, display_by_slot.get(slot, ""), False)
         for slot, pid in paired.items():
             for node_key, key_slot in key_map.items():
                 if key_slot == slot:
-                    desired[node_key] = (slot, pid, True)
+                    label = display_by_slot.get(slot, "")
+                    if not label:
+                        label = discover_names.get(pid, "") or self._truncate_isy_node_name(pid)
+                    desired[node_key] = (slot, label, True)
                     break
         desired_keys = set(desired.keys())
         existing_keys = set(self._paired_nodes.keys())
@@ -776,21 +856,28 @@ class Controller(Node):
                 elif hasattr(self.poly, "removeNode"):
                     self.poly.removeNode(node.address)
             except Exception:
-                LOGGER.exception("Failed to delete paired device node for key %s", node_key)
+                LOGGER.exception(
+                    "Failed to delete paired device node for key %s", node_key
+                )
 
         for node_key in sorted(desired_keys):
-            slot, device_label, is_paired = desired[node_key]
+            slot, display_name, is_paired = desired[node_key]
             node = self._paired_nodes.get(node_key)
             if node is None:
                 try:
-                    node = PairedDeviceNode(self, node_key, slot, device_label, is_paired)
+                    node = PairedDeviceNode(
+                        self, node_key, slot, display_name, is_paired
+                    )
                     self.poly.addNode(node)
                     self._paired_nodes[node_key] = node
+                    node.reconcile_isy_name()
                 except Exception:
-                    LOGGER.exception("Failed to create paired device node for key %s", node_key)
+                    LOGGER.exception(
+                        "Failed to create paired device node for key %s", node_key
+                    )
                     continue
             else:
-                node.update_identity(slot, device_label, is_paired)
+                node.update_identity(slot, display_name, is_paired)
 
     def _current_paired_ids_from_data(self) -> Set[str]:
         try:
@@ -934,20 +1021,50 @@ class Controller(Node):
         self._sync_paired_nodes_from_data()
         self._maybe_restart_on_config_change()
 
+    def _refresh_change_node_names_flag(self) -> None:
+        try:
+            dflt = str(_DEFAULT_BRIDGE_PARAMS.get("change_node_names") or "true")
+            raw = self.Params.get("change_node_names")
+            if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+                raw = dflt
+        except Exception:
+            raw = "true"
+        self.change_node_names = _coerce_change_node_names(raw)
+
+    def _ensure_default_custom_params(self) -> None:
+        """Polyglot only shows Custom Params that exist in saved config; seed new keys (Kasa pattern).
+
+        Without this, keys added in a plugin upgrade never appear in the PG3 editor until typed manually.
+        """
+        for key, default in _DEFAULT_BRIDGE_PARAMS.items():
+            if key in self.Params:
+                continue
+            try:
+                self.Params[key] = default
+                LOGGER.info(
+                    "Seeded default Custom Param %s=%r (first time / missing in PG3 store)",
+                    key,
+                    default,
+                )
+            except Exception:
+                LOGGER.exception("Failed to seed default Custom Param %s", key)
+
     def handler_params(self, params):
         LOGGER.debug("customparams: %s", params)
         self.Params.load(params)
+        self._ensure_default_custom_params()
+        self._refresh_change_node_names_flag()
         self.handler_params_st = True
         self._maybe_restart_on_config_change()
+        if self.handler_typed_data_st:
+            self._sync_paired_nodes_from_data()
 
     def handler_start(self):
         self._async_loop_death_reported = False
         self._hub_bootstrap_generation += 1
         bootstrap_gen = self._hub_bootstrap_generation
         self.Notices.clear()
-        LOGGER.info(
-            "HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION
-        )
+        LOGGER.info("HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION)
         cfg_md = Path(__file__).resolve().parent.parent / "CONFIG.md"
         if cfg_md.is_file():
             try:
@@ -1033,7 +1150,8 @@ class Controller(Node):
     def _set_discover_progress_notice(self, seconds_left: int) -> None:
         sec = max(0, int(seconds_left))
         self.Notices["discover_progress"] = (
-            f"<b>HomeKit DISCOVER running</b><br/>Scan window ends in <b>{sec}</b> second(s)."
+            "<b>HomeKit DISCOVER running</b><br/>"
+            f"Scan window ends in <b>{sec}</b> second(s)."
         )
 
     def _clear_discover_progress_notice(self) -> None:
@@ -1338,11 +1456,7 @@ class Controller(Node):
             if changed:
                 n_merged += 1
 
-        blank_idxs = [
-            i
-            for i, row in enumerate(current)
-            if isinstance(row, dict) and self._pairing_row_needs_discover_fill(row)
-        ]
+        blank_idxs = [i for i, row in enumerate(current) if isinstance(row, dict) and self._pairing_row_needs_discover_fill(row)]
         bi = 0
         n_filled = 0
         for r in unpaired:
@@ -1470,7 +1584,9 @@ class Controller(Node):
                 "where needed."
             )
         else:
-            typed_blurb = "<b>Custom Typed &gt; HomeKit pairing slots</b> was checked, with no row changes in this scan."
+            typed_blurb = (
+                "<b>Custom Typed &gt; HomeKit pairing slots</b> was checked, with no row changes in this scan."
+            )
         parts = [
             "<b>HomeKit discover</b> — <code>last_hap_discover</code> is saved and "
             f"{typed_blurb} <b>Enter only the HomeKit pairing code</b> on each target row, then save.<br/>"
@@ -1519,7 +1635,9 @@ class Controller(Node):
             for r in paired:
                 rid = html.escape(str(r.get("id") or ""), quote=True)
                 nm = html.escape(str(r.get("name") or "(no name)"), quote=True)
-                parts.append(f"<li><b>id</b> <code>{rid}</code> &nbsp; <b>name</b> {nm}</li>")
+                parts.append(
+                    f"<li><b>id</b> <code>{rid}</code> &nbsp; <b>name</b> {nm}</li>"
+                )
             parts.append("</ul>")
         self.Notices["hap_discover"] = "".join(parts)
 
@@ -1553,7 +1671,8 @@ class Controller(Node):
         line = json.dumps(diag, indent=2, sort_keys=True, default=str)
         LOGGER.info("ZEROCONF_DIAG:\n%s", line)
         self.Notices["zeroconf_diag"] = (
-            f"<b>Zeroconf / hub diagnostic</b><br/><pre>{html.escape(line)}</pre>"
+            "<b>Zeroconf / hub diagnostic</b><br/><pre>"
+            f"{html.escape(line)}</pre>"
         )
 
     def _clear_slot_pin_and_reload(self, slot: int, *, source: str) -> bool:
@@ -1641,7 +1760,9 @@ class Controller(Node):
             keep_rows: list[Any] = []
             for sn, row in assigned:
                 row_key = (
-                    str(row.get("node_key") or "").strip().lower() if isinstance(row, dict) else ""
+                    str(row.get("node_key") or "").strip().lower()
+                    if isinstance(row, dict)
+                    else ""
                 )
                 if row_key == key and not removed_typed_row:
                     removed_typed_row = True

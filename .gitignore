@@ -14,3 +14,4 @@ env/
 *.lock
 svc.pid
 snapshot-all.txt
+release-pg3-store.txt

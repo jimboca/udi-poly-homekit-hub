@@ -10,6 +10,7 @@
 | `zeroconf_unicast` | No | `on` (default), `auto`, or `off`. **`on`** uses python-zeroconf unicast mode (typical on eISY and other hosts where UDP **5353** is already owned). **`auto`** tries multicast first, then falls back on “address in use”. **`off`** forces multicast only (fails if 5353 is taken). **Most installs never change this.** |
 | `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
 | `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
+| `change_node_names` | No | `true` (default) or `false` (string). When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
 
 **Zeroconf parameters:** On a normal Polisy / eISY deployment you can ignore the three `zeroconf_*` keys entirely. Defaults match the supported production setup (unicast-friendly when mDNS is shared). Change them only for troubleshooting or unusual networks; the controller command **Zeroconf diagnostic** (`ZEROCONF_DIAG`) logs a snapshot (mode, transports, library versions). After changing `zeroconf_*` or WebSocket bind settings, save configuration; the hub restarts the asyncio bridge automatically when those values change. (Environment variables below still **override** Custom Params when set for the Node Server process.)
 
@@ -80,7 +81,7 @@ Each pairing slot row is exposed as its own node (including DISCOVER candidates)
 - **ST** = paired status (`1` while the slot is currently paired, `0` for discovered/candidate slots not paired yet),
 - **GV0** = slot number.
 - Node address = `hkp_<node_key>` (stable per row; not tied to slot/device id/name).
-- Default node name = `HK Device <NODE_KEY>` (state-independent to avoid node churn on pair/unpair).
+- Default node title prefers the name from **`last_hap_discover`** for the row’s accessory / pairing id (so **DISCOVER** refreshes pick up renamed devices), then the typed **name** field, then id / pairing id. If nothing is available, the title falls back to `HK Device <NODE_KEY>`. Pair/unpair does not change the address. Custom Param **`change_node_names`** defaults to **`true`** so IoX titles stay in sync; set **`false`** to freeze names in the IoX database.
 - Because address is keyed by `node_key`, IoX references to that node address remain valid even if slot assignment changes or a new accessory is paired into the same row.
 
 | Command | Purpose |

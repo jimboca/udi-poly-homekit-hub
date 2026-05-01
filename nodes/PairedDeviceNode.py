@@ -10,43 +10,106 @@ from udi_interface import LOGGER, Node
 if TYPE_CHECKING:
     from .Controller import Controller
 
+# IoX/PG3 device-tree icon comes from Polyglot ``addnode`` ``hint``, not from NLS ``ND-*-ICON`` alone.
+# Default ``[0, 0, 0, 0]`` maps to the “unknown” / bulb glyph. This value is: home (0x01), Relay (0x04),
+# On/Off Power Switch (0x02), node-specific n/a (0x00). See UniversalDevicesInc/hints hint.yaml.
+_PAIRED_DEVICE_HINT = "0x01040200"
+
 
 class PairedDeviceNode(Node):
     """Child node representing one HomeKit slot row."""
+
+    @staticmethod
+    def _node_title(node_key: str, display_name: str) -> str:
+        base = str(display_name or "").strip()
+        if not base:
+            nk = str(node_key or "").strip().lower()
+            return f"HK Device {nk.upper()}" if nk else "HK Device"
+        if len(base) > 80:
+            return base[:77] + "..."
+        return base
 
     def __init__(
         self,
         controller: "Controller",
         node_key: str,
         slot: int,
-        device_label: str,
+        display_name: str,
         paired: bool,
     ):
         self.controller = controller
         self.node_key = str(node_key or "").strip().lower()
         self.slot = int(slot)
-        self.device_label = str(device_label or "").strip().lower()
+        self.display_name = str(display_name or "").strip()
         self.paired = bool(paired)
         address = f"hkp_{self.node_key}"
-        name = f"HK Device {self.node_key.upper()}"
-        super().__init__(controller.poly, controller.address, address, name)
+        title = self._node_title(self.node_key, self.display_name)
+        super().__init__(controller.poly, controller.address, address, title)
         self.setDriver("ST", 1 if self.paired else 0, report=False, force=True, uom=25)
         self.setDriver("GV0", self.slot, report=False, force=True, uom=56)
         self.setDriver("GV1", 0, report=False, force=True, uom=25)
 
-    def update_identity(self, slot: int, device_label: str, paired: bool) -> None:
+    def _requested_title(self) -> str:
+        return self._node_title(self.node_key, self.display_name)
+
+    def reconcile_isy_name(self) -> None:
+        """Align IoX node title with discover/typed name; respects ``change_node_names``."""
+        requested = self._requested_title()
+        poly = self.poly
+        if not hasattr(poly, "getNodeNameFromDb"):
+            self.name = requested
+            return
+        try:
+            cname = poly.getNodeNameFromDb(self.address)
+        except Exception:
+            cname = None
+        if cname is None:
+            self.name = requested
+            return
+        if cname == requested:
+            self.name = requested
+            return
+        if self.controller.change_node_names:
+            LOGGER.warning(
+                "Existing node name '%s' for %s does not match '%s'; renaming to match",
+                cname,
+                self.address,
+                requested,
+            )
+            if hasattr(poly, "renameNode"):
+                try:
+                    poly.renameNode(self.address, requested)
+                except Exception:
+                    LOGGER.error(
+                        "renameNode failed for %s (known issue on some PG3x builds)",
+                        self.address,
+                        exc_info=True,
+                    )
+            self.name = requested
+        else:
+            LOGGER.warning(
+                "Existing node name '%s' for %s does not match '%s'; "
+                "set change_node_names=false in Custom Params to keep the IoX name unchanged",
+                cname,
+                self.address,
+                requested,
+            )
+            self.name = cname
+
+    def update_identity(self, slot: int, display_name: str, paired: bool) -> None:
         self.slot = int(slot)
-        self.device_label = str(device_label or "").strip().lower()
+        self.display_name = str(display_name or "").strip()
         self.paired = bool(paired)
+        self.reconcile_isy_name()
         try:
             self.setDriver("ST", 1 if self.paired else 0, report=True, force=True, uom=25)
             self.setDriver("GV0", self.slot, report=True, force=True, uom=56)
         except Exception:
             LOGGER.exception(
-                "paired node update: key=%s slot=%s label=%s",
+                "paired node update: key=%s slot=%s display=%s",
                 self.node_key,
                 self.slot,
-                self.device_label,
+                self.display_name,
             )
 
     def query(self):
@@ -70,6 +133,7 @@ class PairedDeviceNode(Node):
         del command
         self.controller._delete_node_key_config_and_node(self.node_key, source=self.address)
 
+    hint = _PAIRED_DEVICE_HINT
     id = "HKHubPairedDevice"
     commands = {"QUERY": query, "UNPAIR": cmd_unpair, "DELETE": cmd_delete}
     drivers = [

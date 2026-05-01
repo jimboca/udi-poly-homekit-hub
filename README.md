@@ -19,6 +19,8 @@ pytest -q
 
 Lint is checked in **GitHub Actions** with [Ruff](https://docs.astral.sh/ruff/) (pinned in the workflow). Locally: `pip install ruff==0.8.6 && ruff check .` (optional).
 
+**Releases:** on a **branch** (not detached `HEAD`), with a **clean** git tree, run **`make release`** from this repo (or **`make -C /path/to/udi-poly-homekit release`**). That builds **`HomeKitHub.zip`**, creates annotated **`v`<version>**, **`git push`**es the current branch and that tag to **`origin`** (override with **`GIT_REMOTE=myfork`**), then writes **`release-pg3-store.txt`** (`plugin_version`, `profile_version`, **`zip_path`**, and git hints for the PG3 store).
+
 ## Layout
 
 - `homekit-poly.py` — entry point
