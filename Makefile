@@ -48,8 +48,11 @@ beta:
 		echo "ERROR: detached HEAD. Checkout a branch, then run make beta."; \
 		exit 1; \
 	fi; \
+	REPO=$$(git -C "$$ROOT" rev-parse --show-toplevel); \
 	git -C "$$ROOT" push "$(GIT_REMOTE)" HEAD:"$(BRANCH_BETA)"; \
-	echo "Pushed $$ROOT @ $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_BETA)."
+	echo "Repository: $$REPO"; \
+	echo "Branch: $(BRANCH_BETA)"; \
+	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_BETA)."
 
 # Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION). Requires clean tree; not detached HEAD.
 production:
@@ -65,8 +68,11 @@ production:
 		echo "ERROR: detached HEAD. Checkout a branch, then run make production."; \
 		exit 1; \
 	fi; \
+	REPO=$$(git -C "$$ROOT" rev-parse --show-toplevel); \
 	git -C "$$ROOT" push "$(GIT_REMOTE)" HEAD:"$(BRANCH_PRODUCTION)"; \
-	echo "Pushed $$ROOT @ $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_PRODUCTION)."
+	echo "Repository: $$REPO"; \
+	echo "Branch: $(BRANCH_PRODUCTION)"; \
+	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_PRODUCTION)."
 
 # Write $(STORE_INFO) (PG3 hints), annotated tag v<version>, push current branch + production branch ref + tag to $(GIT_REMOTE).
 # Does not build a zip; use \`make zip\` only if you need a local archive.
