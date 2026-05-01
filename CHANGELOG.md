@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WebSocket `list_devices`** (and hello **`ack`**): each paired row may include HAP **Accessory Information** metadata (**`name`**, **`manufacturer`**, **`model`**, **`serial_number`**, **`firmware_revision`**, **`hardware_revision`**, **`category`**, **`category_label`**, **`primary_aid`**) so clients can filter by vendor or category (e.g. Ecobee thermostats) without out-of-band config. When the cached accessory model has no **Manufacturer** yet, the hub issues a **read** of those characteristics so metadata can fill in on the same response.
+- **`PROTOCOL.md`**: added a client playbook for selecting device types/capabilities (switch, light, plug, thermostat, sensors, etc.) using `list_devices` metadata as a first-pass hint and `snapshot`/`get` characteristic sets as the authoritative capability model.
+- **WebSocket**: optional Custom Param **`ws_token`**. When non-empty, clients must complete **`hello`** with a matching **`token`** / **`ws_token`** field before other actions; hello **`ack`** includes **`device_ids`** and **`capabilities`** (supported actions, auth mode, event-filter semantics).
+- **WebSocket** actions **`get`** (partial read), **`subscribe`** / **`unsubscribe`** (per-connection `event` fan-out filtering). Documented in **`PROTOCOL.md`** with **`PROTOCOL_VERSION` bump policy**.
 - When a **degraded** IP pairing slot **recovers** (health probe), the hub reports the live **LAN host:port** on the existing `pairing_health_notice` callback; the controller persists it to the matching Custom Typed row **`discover_endpoint`** (so the UI matches the resolved endpoint after reboot or IP/port change).
 
 ### Fixed

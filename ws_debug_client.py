@@ -13,6 +13,9 @@ Usage (from the Node Server repo root, with ``websockets`` installed):
     # Match Custom Params ws_host / ws_port
     python3 ws_debug_client.py --host 127.0.0.1 --port 8163
 
+    # When the hub Custom Param ws_token is set
+    python3 ws_debug_client.py --token 'your-shared-secret'
+
     # After hello, request one device snapshot (lowercase AccessoryPairingID)
     python3 ws_debug_client.py --snapshot-device-id aa:bb:cc:dd:ee:ff
 
@@ -53,6 +56,65 @@ def _to_json(obj: Any) -> str:
     return json.dumps(obj, indent=2, sort_keys=True, default=str)
 
 
+def _append_list_device_item_lines(parts: list[str], item: dict[str, Any]) -> None:
+    """Pretty-print one ``list_devices`` / hello ``devices[]`` row."""
+    parts.append(f"    - {item.get('device_id')}")
+    indent = "        "
+    for key in (
+        "name",
+        "manufacturer",
+        "model",
+        "serial_number",
+        "firmware_revision",
+        "hardware_revision",
+        "category",
+        "category_label",
+        "primary_aid",
+    ):
+        if key not in item:
+            continue
+        parts.append(f"{indent}{key}: {item[key]}")
+
+
+def _append_snapshot_like_values(
+    parts: list[str], msg: dict[str, Any], *, source: str
+) -> None:
+    """Pretty-print ``values`` for ``snapshot`` or ``get`` (same payload shape)."""
+    parts.append(f"  device_id      : {msg.get('device_id')}")
+    vals = msg.get("values")
+    if not isinstance(vals, list):
+        return
+    parts.append(f"  values         : {len(vals)} characteristic(s)")
+    for item in vals:
+        if not isinstance(item, dict):
+            continue
+        parts.append(
+            "    - {char} ({aid}/{iid}) = {value!r}{status}".format(
+                char=item.get("characteristic"),
+                aid=item.get("aid"),
+                iid=item.get("iid"),
+                value=item.get("value"),
+                status=(
+                    f" [status={item.get('status')}]"
+                    if "status" in item
+                    else ""
+                ),
+            )
+        )
+    if len(vals) == 0:
+        if source == "get":
+            parts.append(
+                "  note           : 0 values — check hub logs / a nearby action=error for get, "
+                "or confirm the accessory is online and characteristic names resolve."
+            )
+        else:
+            parts.append(
+                "  note           : 0 values usually means the hub never loaded the HAP layout for this pairing "
+                "(snapshot triggers /accessories first) or get_characteristics returned nothing; "
+                "look for a nearby action=error for snapshot, or confirm the accessory is online."
+            )
+
+
 def _format_message(msg: dict[str, Any], show_raw: bool) -> str:
     ts = _now()
     action = msg.get("action", "<missing>")
@@ -71,44 +133,52 @@ def _format_message(msg: dict[str, Any], show_raw: bool) -> str:
             parts.append(f"  ack_for        : {ack_for}")
         if protocol:
             parts.append(f"  protocol       : {protocol}")
+        if ack_for == "hello":
+            devs = msg.get("devices")
+            if isinstance(devs, list) and devs:
+                parts.append(f"  devices        : {len(devs)} paired (metadata)")
+                for item in devs:
+                    if isinstance(item, dict):
+                        _append_list_device_item_lines(parts, item)
+            else:
+                dids = msg.get("device_ids")
+                if isinstance(dids, list):
+                    parts.append(f"  device_ids     : {len(dids)} paired")
+                    for x in dids:
+                        parts.append(f"    - {x}")
+            cap = msg.get("capabilities")
+            if isinstance(cap, dict):
+                acts = cap.get("actions")
+                if isinstance(acts, list):
+                    parts.append(f"  capabilities.actions: {', '.join(str(a) for a in acts)}")
+                if "auth" in cap:
+                    parts.append(f"  capabilities.auth: {cap.get('auth')}")
+                ev = cap.get("events")
+                if isinstance(ev, dict):
+                    mode = ev.get("mode")
+                    if mode is not None:
+                        parts.append(f"  capabilities.events.mode: {mode}")
+                    desc = ev.get("description")
+                    if isinstance(desc, str) and desc.strip():
+                        parts.append(f"  capabilities.events.description: {desc.strip()}")
+        elif ack_for in ("subscribe", "unsubscribe"):
+            parts.append(f"  device_id      : {msg.get('device_id')}")
+            parts.append(f"  aid/iid        : {msg.get('aid')}/{msg.get('iid')}")
     elif action == "error":
         parts.append(f"  message        : {msg.get('message')}")
         if "for" in msg:
             parts.append(f"  for            : {msg.get('for')}")
     elif action == "snapshot":
-        parts.append(f"  device_id      : {msg.get('device_id')}")
-        vals = msg.get("values")
-        if isinstance(vals, list):
-            parts.append(f"  values         : {len(vals)} characteristic(s)")
-            for item in vals:
-                if not isinstance(item, dict):
-                    continue
-                parts.append(
-                    "    - {char} ({aid}/{iid}) = {value!r}{status}".format(
-                        char=item.get("characteristic"),
-                        aid=item.get("aid"),
-                        iid=item.get("iid"),
-                        value=item.get("value"),
-                        status=(
-                            f" [status={item.get('status')}]"
-                            if "status" in item
-                            else ""
-                        ),
-                    )
-                )
-            if len(vals) == 0:
-                parts.append(
-                    "  note           : 0 values usually means the hub never loaded the HAP layout for this pairing "
-                    "(update udi-poly-homekit: snapshot now triggers /accessories first) or get_characteristics "
-                    "returned nothing; look for a nearby action=error for snapshot, or confirm the accessory is online."
-                )
+        _append_snapshot_like_values(parts, msg, source="snapshot")
+    elif action == "get":
+        _append_snapshot_like_values(parts, msg, source="get")
     elif action == "list_devices":
         devices = msg.get("devices")
         if isinstance(devices, list):
             parts.append(f"  devices        : {len(devices)}")
             for item in devices:
                 if isinstance(item, dict):
-                    parts.append(f"    - {item.get('device_id')}")
+                    _append_list_device_item_lines(parts, item)
             if len(devices) == 0:
                 parts.append(
                     "  note           : list_devices is empty at this moment. DISCOVER-only targets are not listed "
@@ -124,6 +194,86 @@ def _format_message(msg: dict[str, Any], show_raw: bool) -> str:
     return "\n".join(parts)
 
 
+def _interactive_help_text() -> str:
+    return (
+        "Interactive mode commands:\n"
+        "  - Enter a JSON object to send it as-is (example: {\"version\":\"1\",\"action\":\"list_devices\"})\n"
+        "  - /list        send {\"version\":\"1\",\"action\":\"list_devices\"}\n"
+        "  - /snapshot <device_id>\n"
+        "  - /get <device_id> <characteristic>\n"
+        "  - /quit        close client\n"
+        "  - /help        show this help"
+    )
+
+
+def _interactive_command_to_payload(line: str) -> tuple[bool, dict[str, Any] | None]:
+    """Parse interactive input into protocol payload.
+
+    Returns ``(should_quit, payload)``.
+    """
+    raw = line.strip()
+    if not raw:
+        return False, None
+    if raw in {"/q", "/quit", "/exit"}:
+        return True, None
+    if raw in {"/h", "/help"}:
+        print(_interactive_help_text())
+        return False, None
+    if raw == "/list":
+        return False, {"version": PROTOCOL_VERSION, "action": "list_devices"}
+    if raw.startswith("/snapshot "):
+        did = raw.split(" ", 1)[1].strip().lower()
+        if not did:
+            print(f"[{_now()}] interactive error: /snapshot requires device_id")
+            return False, None
+        return False, {"version": PROTOCOL_VERSION, "action": "snapshot", "device_id": did}
+    if raw.startswith("/get "):
+        rest = raw.split(" ", 1)[1].strip()
+        parts = rest.split(" ", 1)
+        if len(parts) != 2:
+            print(f"[{_now()}] interactive error: /get requires device_id and characteristic")
+            return False, None
+        did, characteristic = parts[0].strip().lower(), parts[1].strip()
+        if not did or not characteristic:
+            print(f"[{_now()}] interactive error: /get requires device_id and characteristic")
+            return False, None
+        return False, {
+            "version": PROTOCOL_VERSION,
+            "action": "get",
+            "device_id": did,
+            "characteristic": characteristic,
+        }
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as ex:
+        print(f"[{_now()}] interactive JSON error: {ex}")
+        return False, None
+    if not isinstance(payload, dict):
+        print(f"[{_now()}] interactive error: payload must be a JSON object")
+        return False, None
+    return False, payload
+
+
+async def _interactive_sender(ws: Any) -> None:
+    print(_interactive_help_text())
+    while True:
+        try:
+            line = await asyncio.to_thread(input, "ws> ")
+        except EOFError:
+            line = "/quit"
+        should_quit, payload = _interactive_command_to_payload(line)
+        if should_quit:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            return
+        if payload is None:
+            continue
+        await ws.send(json.dumps(payload))
+        print(f"[{_now()}] sent interactive payload: action={payload.get('action')}")
+
+
 async def _run(args: argparse.Namespace) -> None:
     uri = f"ws://{args.host}:{args.port}"
     print(f"[{_now()}] connecting to {uri}")
@@ -136,6 +286,8 @@ async def _run(args: argparse.Namespace) -> None:
             "action": "hello",
             "client": args.client_name,
         }
+        if args.token:
+            hello["token"] = args.token
         await ws.send(json.dumps(hello))
         print(f"[{_now()}] sent hello as {args.client_name!r}")
 
@@ -159,30 +311,41 @@ async def _run(args: argparse.Namespace) -> None:
             await ws.send(json.dumps(payload))
             print(f"[{_now()}] requested active device list")
 
-        async for raw in ws:
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                print(f"[{_now()}] non-JSON frame:\n{raw}")
-                continue
-            if args.snapshot_all and msg.get("action") == "list_devices":
-                devices = msg.get("devices")
-                if isinstance(devices, list):
-                    for item in devices:
-                        if not isinstance(item, dict):
-                            continue
-                        did = (item.get("device_id") or "").strip().lower()
-                        if not did:
-                            continue
-                        payload = {
-                            "version": PROTOCOL_VERSION,
-                            "action": "snapshot",
-                            "device_id": did,
-                        }
-                        await ws.send(json.dumps(payload))
-                        print(f"[{_now()}] requested snapshot for {did!r}")
-            print(_format_message(msg, show_raw=args.raw))
-            print("-" * 72)
+        sender_task = (
+            asyncio.create_task(_interactive_sender(ws)) if args.interactive else None
+        )
+        try:
+            async for raw in ws:
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    print(f"[{_now()}] non-JSON frame:\n{raw}")
+                    continue
+                if args.snapshot_all and msg.get("action") == "list_devices":
+                    devices = msg.get("devices")
+                    if isinstance(devices, list):
+                        for item in devices:
+                            if not isinstance(item, dict):
+                                continue
+                            did = (item.get("device_id") or "").strip().lower()
+                            if not did:
+                                continue
+                            payload = {
+                                "version": PROTOCOL_VERSION,
+                                "action": "snapshot",
+                                "device_id": did,
+                            }
+                            await ws.send(json.dumps(payload))
+                            print(f"[{_now()}] requested snapshot for {did!r}")
+                print(_format_message(msg, show_raw=args.raw))
+                print("-" * 72)
+        finally:
+            if sender_task is not None:
+                sender_task.cancel()
+                try:
+                    await sender_task
+                except asyncio.CancelledError:
+                    pass
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -203,8 +366,11 @@ examples:
   %(prog)s --command '{"version":"1","action":"list_devices"}'
       Send custom JSON once after hello (quote carefully in your shell).
 
-See PROTOCOL.md for actions: hello, command, snapshot, list_devices, and hub events.
-Hub ws_host / ws_port default to 127.0.0.1 and 8163 (Custom Params on the Polyglot node).
+  %(prog)s --interactive
+      Keep a command prompt open while connected; send JSON or shortcuts like /list.
+
+See PROTOCOL.md for actions (hello, command, snapshot, list_devices, get, subscribe, unsubscribe) and hub events.
+Hub ws_host / ws_port / optional ws_token are Custom Params on the Polyglot node (defaults 127.0.0.1:8163).
 """
     p = argparse.ArgumentParser(
         description="Debug client for udi-poly-homekit WebSocket stream.",
@@ -217,6 +383,11 @@ Hub ws_host / ws_port default to 127.0.0.1 and 8163 (Custom Params on the Polygl
         "--client-name",
         default="ws-debug-client",
         help="Value for hello.client (default: ws-debug-client)",
+    )
+    p.add_argument(
+        "--token",
+        default="",
+        help="Optional hello.token when hub Custom Param ws_token is set",
     )
     p.add_argument(
         "--raw",
@@ -238,6 +409,11 @@ Hub ws_host / ws_port default to 127.0.0.1 and 8163 (Custom Params on the Polygl
             "Request list_devices on connect and then snapshot each device_id. "
             "list_devices is paired accessories only (empty until pairing succeeds)."
         ),
+    )
+    p.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Interactive command prompt while connected (JSON input and shortcuts).",
     )
     return p
 

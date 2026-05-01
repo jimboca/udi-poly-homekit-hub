@@ -6,6 +6,7 @@
 |-----------|----------|-------------|
 | `ws_host` | No | WebSocket bind address. Default `127.0.0.1`. |
 | `ws_port` | No | WebSocket port. Default `8163`. |
+| `ws_token` | No | Optional shared secret for the WebSocket API. **Leave empty** (default) for no auth. When set, clients must send the same value on `hello` as JSON field **`token`** or **`ws_token`** before any other action; see `PROTOCOL.md`. |
 | `zeroconf_unicast` | No | `on` (default), `auto`, or `off`. **`on`** uses python-zeroconf unicast mode (typical on eISY and other hosts where UDP **5353** is already owned). **`auto`** tries multicast first, then falls back on “address in use”. **`off`** forces multicast only (fails if 5353 is taken). **Most installs never change this.** |
 | `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
 | `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |

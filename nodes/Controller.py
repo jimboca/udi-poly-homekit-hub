@@ -40,6 +40,8 @@ ERR_PAIRING_HEALTH = 11
 _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     "ws_host": "127.0.0.1",
     "ws_port": "8163",
+    # Optional shared secret: when non-empty, WebSocket clients must send it on ``hello`` (see PROTOCOL.md).
+    "ws_token": "",
     # Matches prior entrypoint default: unicast-friendly when mDNS 5353 is shared.
     "zeroconf_unicast": "on",
     "zeroconf_interfaces": "",

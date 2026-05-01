@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hmac
 import json
 import logging
 import os
 import socket
 import sys
+from enum import Enum
 from typing import Any, Callable, Optional
 
 import websockets
@@ -40,7 +42,22 @@ from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
 from aiohomekit.uuid import normalize_uuid
 
+try:
+    from aiohomekit.model.categories import Categories as _HapCategories
+except Exception:  # pragma: no cover - optional typing surface
+    _HapCategories = None
+
 PROTOCOL_VERSION = "1"
+# Client → hub actions supported by this build (advertised in hello ``ack.capabilities``).
+WS_PROTOCOL_ACTIONS: tuple[str, ...] = (
+    "hello",
+    "command",
+    "snapshot",
+    "list_devices",
+    "get",
+    "subscribe",
+    "unsubscribe",
+)
 TYPED_PAIRING_SLOTS_KEY = "pairing_slots"
 DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
@@ -525,6 +542,332 @@ def _readable_characteristics(pairing) -> list[tuple[int, int, str]]:
     return out
 
 
+# HAP Accessory Information characteristic labels → WebSocket ``list_devices`` JSON keys.
+_WS_DEVICE_META_BY_LABEL: dict[str, str] = {
+    "Name": "name",
+    "Manufacturer": "manufacturer",
+    "Model": "model",
+    "SerialNumber": "serial_number",
+    "FirmwareRevision": "firmware_revision",
+    "HardwareRevision": "hardware_revision",
+}
+
+
+def _build_accessory_info_uuid_to_label() -> dict[str, str]:
+    """Map normalized HAP characteristic UUID → logical label (Name, Manufacturer, …).
+
+    Some accessories advertise Accessory Information characteristics outside the standard
+    service UUID, or aiohomekit exposes ``characteristic_label`` as a raw UUID when the
+    type is unknown. UUID matching keeps ``list_devices`` metadata and HAP reads working.
+    """
+    m: dict[str, str] = {}
+    for ct_name, label in (
+        ("NAME", "Name"),
+        ("MANUFACTURER", "Manufacturer"),
+        ("MODEL", "Model"),
+        ("SERIAL_NUMBER", "SerialNumber"),
+        ("FIRMWARE_REVISION", "FirmwareRevision"),
+        ("HARDWARE_REVISION", "HardwareRevision"),
+        ("CATEGORY", "Category"),
+        ("CONFIGURED_NAME", "ConfiguredName"),
+    ):
+        if not hasattr(CharacteristicsTypes, ct_name):
+            continue
+        try:
+            m[normalize_uuid(getattr(CharacteristicsTypes, ct_name))] = label
+        except Exception:
+            continue
+    return m
+
+
+_ACCESSORY_INFO_UUID_TO_LABEL: dict[str, str] = _build_accessory_info_uuid_to_label()
+
+
+def _accessory_info_char_label(ch) -> Optional[str]:
+    """Return the logical Accessory Information label for ``ch``, or ``None``."""
+    try:
+        nu = normalize_uuid(ch.type)
+    except Exception:
+        return None
+    lab = _ACCESSORY_INFO_UUID_TO_LABEL.get(nu)
+    if lab:
+        return lab
+    try:
+        lab2 = characteristic_label(ch.type)
+    except Exception:
+        return None
+    if lab2 in _WS_DEVICE_META_BY_LABEL or lab2 in ("Category", "ConfiguredName"):
+        return lab2
+    return None
+
+
+def _hap_category_bridge_id() -> int:
+    if _HapCategories is None:
+        return 2
+    try:
+        return int(_HapCategories.BRIDGE)
+    except Exception:
+        return 2
+
+
+def _category_id_to_label(cat_id: int) -> str:
+    if _HapCategories is None:
+        return ""
+    for name in dir(_HapCategories):
+        if name.startswith("_"):
+            continue
+        val = getattr(_HapCategories, name, None)
+        if val == cat_id:
+            return name
+    return ""
+
+
+def _accessory_info_category_value(acc) -> Optional[int]:
+    """Read integer HAP **Category** from the Accessory Information service, if present."""
+    if not acc:
+        return None
+    for svc in acc.services:
+        for ch in svc.characteristics:
+            if _accessory_info_char_label(ch) != "Category":
+                continue
+            v = getattr(ch, "value", None)
+            if isinstance(v, bool):
+                return None
+            if isinstance(v, int):
+                return v
+            if isinstance(v, float) and v == int(v):
+                return int(v)
+            if isinstance(v, str) and v.strip().isdigit():
+                return int(v.strip())
+    return None
+
+
+def _representative_accessory(pairing) -> Any:
+    """Pick one accessory whose Accessory Information populates ``list_devices`` metadata.
+
+    For a standalone device this is typically ``aid`` 1. For a HomeKit **bridge** pairing,
+    skip accessories that advertise category **Bridge** when other accessories exist so
+    clients see the first non-bridge child (e.g. thermostat) when that heuristic applies.
+    """
+    accs = getattr(pairing, "accessories", None)
+    if not accs:
+        return None
+    ordered = sorted(accs, key=lambda a: int(getattr(a, "aid", 0) or 0))
+    if len(ordered) == 1:
+        return ordered[0]
+    bridge_id = _hap_category_bridge_id()
+    non_bridge: list[Any] = []
+    for a in ordered:
+        cat = _accessory_info_category_value(a)
+        if cat is not None and cat != bridge_id:
+            non_bridge.append(a)
+    if non_bridge:
+        return non_bridge[0]
+    return ordered[0]
+
+
+def _characteristic_display_string(ch) -> str:
+    v = getattr(ch, "value", None)
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        try:
+            return v.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return str(v).strip()
+    if isinstance(v, (dict, list)):
+        return ""
+    return str(v).strip()
+
+
+def _char_is_readable(ch) -> bool:
+    read_tokens = {
+        str(getattr(CharacteristicPermissions, "paired_read", "paired_read")),
+        str(getattr(CharacteristicPermissions, "read", "read")),
+        "pr",
+    }
+    perms = {str(p) for p in (getattr(ch, "perms", None) or [])}
+    return bool(perms & read_tokens)
+
+
+def _value_to_meta_string(val: Any) -> str:
+    """Normalize a HAP characteristic value for WebSocket metadata strings."""
+    if val is None:
+        return ""
+    if isinstance(val, Enum):
+        val = val.value
+    if isinstance(val, bytes):
+        try:
+            return val.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return str(val).strip()
+    if isinstance(val, (dict, list)):
+        return ""
+    if isinstance(val, bool):
+        return ""
+    return str(val).strip()
+
+
+def _accessory_information_metadata(acc) -> dict[str, Any]:
+    """Fields from the HAP Accessory Information service (cached model / last /accessories)."""
+    out: dict[str, Any] = {}
+    if not acc:
+        return out
+    for svc in acc.services:
+        for ch in svc.characteristics:
+            label = _accessory_info_char_label(ch)
+            if not label:
+                continue
+            if label == "Category":
+                v = getattr(ch, "value", None)
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, float) and v == int(v):
+                    v = int(v)
+                if isinstance(v, int):
+                    out["category"] = v
+                    cl = _category_id_to_label(v)
+                    if cl:
+                        out["category_label"] = cl
+                elif isinstance(v, str) and v.strip().isdigit():
+                    iv = int(v.strip())
+                    out["category"] = iv
+                    cl = _category_id_to_label(iv)
+                    if cl:
+                        out["category_label"] = cl
+                continue
+            json_key = _WS_DEVICE_META_BY_LABEL.get(label)
+            if not json_key:
+                continue
+            s = _characteristic_display_string(ch)
+            if s:
+                out[json_key] = s
+    return out
+
+
+async def _accessory_information_metadata_with_reads(
+    pairing, acc, log: Optional[logging.Logger] = None
+) -> dict[str, Any]:
+    """Accessory Information from the in-memory model, then HAP reads if **Manufacturer** is still empty.
+
+    Many accessories omit string values from the initial ``/accessories`` JSON; a
+    ``get_characteristics`` pass is required before **Manufacturer** / **Model** / **Name**
+    appear, which clients use for filtering (e.g. Ecobee thermostats).
+    """
+    static = _accessory_information_metadata(acc)
+    if not acc or not pairing:
+        return static
+    if static.get("manufacturer"):
+        return static
+
+    aid = acc.aid
+    pairs: list[tuple[int, int]] = []
+    labels: dict[tuple[int, int], str] = {}
+    for svc in acc.services:
+        for ch in svc.characteristics:
+            label = _accessory_info_char_label(ch)
+            if not label:
+                continue
+            key = (aid, ch.iid)
+            if key in labels:
+                continue
+            # Accessory Information strings are often readable even when perms omit
+            # ``paired_read`` / ``read`` in the cached model; still attempt HAP GET.
+            pairs.append(key)
+            labels[key] = label
+    if not pairs:
+        if log and not static.get("manufacturer"):
+            log.debug(
+                "list_devices metadata: no Accessory Information characteristics matched "
+                "for aid=%s (cached model may be incomplete)",
+                aid,
+            )
+        return static
+    try:
+        result = await pairing.get_characteristics(pairs)
+    except Exception:
+        if log:
+            log.debug(
+                "list_devices metadata: get_characteristics failed aid=%s count=%d",
+                aid,
+                len(pairs),
+                exc_info=True,
+            )
+        return static
+
+    merged: dict[str, Any] = dict(static)
+    configured_name: Optional[str] = None
+    for key, payload in result.items():
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        lab = labels.get(key)
+        if not lab or not isinstance(payload, dict) or "value" not in payload:
+            continue
+        val = payload.get("value")
+        if lab == "Category":
+            v = val
+            if isinstance(v, Enum):
+                v = v.value
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, float) and v == int(v):
+                v = int(v)
+            if isinstance(v, int):
+                merged["category"] = v
+                cl = _category_id_to_label(v)
+                if cl:
+                    merged["category_label"] = cl
+            elif isinstance(v, str) and v.strip().isdigit():
+                iv = int(v.strip())
+                merged["category"] = iv
+                cl = _category_id_to_label(iv)
+                if cl:
+                    merged["category_label"] = cl
+            continue
+        if lab == "ConfiguredName":
+            s = _value_to_meta_string(val)
+            if s:
+                configured_name = s
+            continue
+        json_key = _WS_DEVICE_META_BY_LABEL.get(lab)
+        if not json_key:
+            continue
+        s = _value_to_meta_string(val)
+        if s:
+            merged[json_key] = s
+    if configured_name and not merged.get("name"):
+        merged["name"] = configured_name
+    if log and not merged.get("manufacturer"):
+        log.debug(
+            "list_devices metadata: manufacturer still empty after read aid=%s "
+            "requested=%d static_keys=%s",
+            aid,
+            len(pairs),
+            list(static.keys()),
+        )
+    return merged
+
+
+async def _device_list_entry_resolved(
+    device_id: str, pairing, log: Optional[logging.Logger] = None
+) -> dict[str, Any]:
+    """One ``list_devices`` / hello ``devices[]`` row: ``device_id`` plus optional HAP identity."""
+    entry: dict[str, Any] = {"device_id": device_id}
+    if not pairing:
+        return entry
+    acc = _representative_accessory(pairing)
+    if not acc:
+        return entry
+    meta = await _accessory_information_metadata_with_reads(pairing, acc, log)
+    if meta:
+        entry.update(meta)
+    try:
+        entry["primary_aid"] = int(getattr(acc, "aid", 0) or 0)
+    except (TypeError, ValueError):
+        entry["primary_aid"] = 0
+    return entry
+
+
 class HomeKitHubBridge:
     """Multi-pairing HomeKit hub: WebSocket server + fan-out events."""
 
@@ -556,6 +899,10 @@ class HomeKitHubBridge:
         self._listeners: dict[str, Callable[[], None]] = {}
         # WebSocket client → (outbound text queue, sender task). Slow clients do not block others.
         self._client_out: dict[Any, tuple[asyncio.Queue[Optional[str]], asyncio.Task[None]]] = {}
+        # When Custom Param ``ws_token`` is set: clients must complete ``hello`` with matching token first.
+        self._ws_hello_authed: set[Any] = set()
+        # Optional per-connection HAP event filter: (device_id_lower, aid, iid). Missing key → no filter (all events).
+        self._ws_event_filters: dict[Any, set[tuple[str, int, int]]] = {}
         self._hap_evt_queue: Optional[asyncio.Queue[Optional[dict[str, Any]]]] = None
         self._hap_evt_worker: Optional[asyncio.Task[None]] = None
         self._pairing_probe_task: Optional[asyncio.Task[None]] = None
@@ -669,11 +1016,31 @@ class HomeKitHubBridge:
                 msg = await q.get()
                 if msg is None:
                     break
-                await self._broadcast(msg)
+                await self._broadcast_hap_event(msg)
         except asyncio.CancelledError:
             raise
         except Exception:
             self.log.exception("HAP event broadcast worker")
+
+    async def _broadcast_hap_event(self, msg: dict[str, Any]) -> None:
+        """Fan-out HAP ``event`` frames; respect optional per-WebSocket characteristic filters."""
+        if msg.get("action") != "event":
+            await self._broadcast(msg)
+            return
+        did = (msg.get("device_id") or "").strip().lower()
+        try:
+            aid_i = int(msg.get("aid"))
+            iid_i = int(msg.get("iid"))
+        except (TypeError, ValueError):
+            return
+        line = json.dumps(msg, default=str)
+        for ws in list(self._client_out.keys()):
+            filt = self._ws_event_filters.get(ws)
+            if not filt:
+                self._enqueue_ws_line(ws, line)
+                continue
+            if (did, aid_i, iid_i) in filt:
+                self._enqueue_ws_line(ws, line)
 
     def _enqueue_hap_broadcast(self, msg: dict[str, Any]) -> None:
         q = self._hap_evt_queue
@@ -732,6 +1099,8 @@ class HomeKitHubBridge:
                     pass
 
     async def _detach_ws_client(self, ws: Any) -> None:
+        self._ws_hello_authed.discard(ws)
+        self._ws_event_filters.pop(ws, None)
         tup = self._client_out.pop(ws, None)
         if not tup:
             return
@@ -1297,6 +1666,29 @@ class HomeKitHubBridge:
             port = 8163
         return host, port
 
+    def _ws_expected_token(self) -> str:
+        """Shared secret for WebSocket ``hello`` when Custom Param ``ws_token`` is non-empty."""
+        p = self._get_params()
+        raw = p.get("ws_token")
+        if raw is None:
+            return ""
+        return str(raw).strip()
+
+    def _ws_capabilities(self) -> dict[str, Any]:
+        need_token = bool(self._ws_expected_token())
+        return {
+            "actions": list(WS_PROTOCOL_ACTIONS),
+            "auth": "token" if need_token else "none",
+            "events": {
+                "mode": "filtered_after_subscribe",
+                "description": (
+                    "By default all HAP events are forwarded. After at least one successful "
+                    "`subscribe`, only matching (device_id, aid, iid) events are sent until "
+                    "the subscription set becomes empty (then defaults are restored)."
+                ),
+            },
+        }
+
     async def _start_websocket_server(self) -> None:
         host, port = self._ws_bind()
         self.log.info("WebSocket server listening on %s:%s", host, port)
@@ -1322,6 +1714,49 @@ class HomeKitHubBridge:
             self.log.exception("WebSocket handler error")
         finally:
             await self._detach_ws_client(ws)
+
+    async def _handle_ws_hello(self, ws: Any, msg: dict[str, Any]) -> bool:
+        """Validate optional ``ws_token`` and send hello ``ack`` + bootstrap. False → do not mark authed."""
+        expected = self._ws_expected_token()
+        if expected:
+            got_raw = msg.get("token")
+            if got_raw is None:
+                got_raw = msg.get("ws_token")
+            got = "" if got_raw is None else str(got_raw)
+            if not hmac.compare_digest(
+                got.encode("utf-8"),
+                expected.encode("utf-8"),
+            ):
+                await self._send_ws(
+                    ws,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "hello",
+                        "message": "invalid or missing token (use token or ws_token matching Custom Param ws_token)",
+                    },
+                )
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                return False
+        devices_payload = await self._build_list_devices_payload()
+        device_ids = [str(d.get("device_id") or "").strip().lower() for d in devices_payload]
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "ack",
+                "for": "hello",
+                "protocol": PROTOCOL_VERSION,
+                "device_ids": device_ids,
+                "devices": devices_payload,
+                "capabilities": self._ws_capabilities(),
+            },
+        )
+        await self._send_bootstrap_list_devices(ws, devices_payload)
+        return True
 
     async def _handle_ws_message(self, ws: Any, raw: str) -> None:
         try:
@@ -1349,16 +1784,27 @@ class HomeKitHubBridge:
             await ws.close()
             return
         action = msg.get("action")
+        if self._ws_expected_token() and ws not in self._ws_hello_authed:
+            if action != "hello":
+                await self._send_ws(
+                    ws,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "message": (
+                            "ws_token is configured on the hub: send action hello with a matching "
+                            "token field first"
+                        ),
+                    },
+                )
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                return
         if action == "hello":
-            await self._send_ws(
-                ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "ack",
-                    "protocol": PROTOCOL_VERSION,
-                },
-            )
-            await self._send_bootstrap_state(ws)
+            if await self._handle_ws_hello(ws, msg):
+                self._ws_hello_authed.add(ws)
             return
         if action == "command":
             await self._handle_command(ws, msg)
@@ -1369,6 +1815,15 @@ class HomeKitHubBridge:
         if action == "list_devices":
             await self._handle_list_devices(ws, msg)
             return
+        if action == "get":
+            await self._handle_get(ws, msg)
+            return
+        if action == "subscribe":
+            await self._handle_subscribe(ws, msg)
+            return
+        if action == "unsubscribe":
+            await self._handle_unsubscribe(ws, msg)
+            return
         await self._send_ws(
             ws,
             {
@@ -1378,21 +1833,40 @@ class HomeKitHubBridge:
             },
         )
 
-    async def _send_bootstrap_state(self, ws: Any) -> None:
-        """Send initial device membership to a newly handshaken client."""
+    async def _build_list_devices_payload(self) -> list[dict[str, Any]]:
+        """Paired hub rows for ``list_devices`` / hello, with optional Accessory Information metadata."""
         device_ids = await self._active_pairing_device_ids_stable()
+        out: list[dict[str, Any]] = []
+        for did in device_ids:
+            pairing = self._pairing_for_device_id(did)
+            if pairing and not pairing.accessories:
+                try:
+                    await pairing.list_accessories_and_characteristics()
+                except Exception:
+                    self.log.debug(
+                        "list_devices: list_accessories_and_characteristics failed for metadata device_id=%s",
+                        did,
+                        exc_info=True,
+                    )
+            out.append(await _device_list_entry_resolved(did, pairing, self.log))
+        return out
+
+    async def _send_bootstrap_list_devices(
+        self, ws: Any, devices_payload: list[dict[str, Any]]
+    ) -> None:
+        """Send initial ``list_devices`` after hello (same shape as proactive updates)."""
         await self._send_ws(
             ws,
             {
                 "version": PROTOCOL_VERSION,
                 "action": "list_devices",
-                "devices": [{"device_id": did} for did in device_ids],
+                "devices": devices_payload,
             },
         )
         self.log.debug(
             "hello bootstrap: sent list_devices count=%d ids=%s",
-            len(device_ids),
-            device_ids,
+            len(devices_payload),
+            [d.get("device_id") for d in devices_payload],
         )
 
     def _active_pairing_device_ids(self) -> list[str]:
@@ -1448,6 +1922,275 @@ class HomeKitHubBridge:
                 )
                 return ids
         return []
+
+    def _resolve_ws_aid_iid(self, pairing, msg: dict[str, Any]) -> Optional[tuple[int, int]]:
+        """Subscribe/unsubscribe body: ``aid``+``iid`` or ``characteristic`` name/UUID."""
+        aid = msg.get("aid")
+        iid = msg.get("iid")
+        if aid is not None and iid is not None:
+            try:
+                return int(aid), int(iid)
+            except (TypeError, ValueError):
+                return None
+        char_spec = msg.get("characteristic")
+        if isinstance(char_spec, str) and char_spec.strip():
+            return _resolve_aid_iid(pairing, char_spec.strip())
+        return None
+
+    async def _handle_get(self, ws: Any, msg: dict[str, Any]) -> None:
+        """Read a subset of characteristics (same ``values`` shape as ``snapshot``)."""
+        device_id = (msg.get("device_id") or "").strip().lower()
+        pairing = self._pairing_for_device_id(device_id) if device_id else None
+        if not pairing:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "get",
+                    "message": "unknown device_id or no active pairing",
+                },
+            )
+            return
+        specs: list[str] = []
+        ch_list = msg.get("characteristics")
+        if isinstance(ch_list, list):
+            for x in ch_list:
+                if isinstance(x, str) and x.strip():
+                    specs.append(x.strip())
+        one = msg.get("characteristic")
+        if isinstance(one, str) and one.strip():
+            specs.append(one.strip())
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for s in specs:
+            key = s.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(s)
+        specs = uniq
+        if not specs:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "get",
+                    "message": "provide characteristic (string) or characteristics (string array)",
+                },
+            )
+            return
+
+        pairs: list[tuple[int, int]] = []
+        labels: dict[tuple[int, int], str] = {}
+
+        def try_build() -> Optional[str]:
+            pairs.clear()
+            labels.clear()
+            for spec in specs:
+                resolved = _resolve_aid_iid(pairing, spec)
+                if not resolved:
+                    return spec
+                aid, iid = resolved
+                if (aid, iid) in labels:
+                    continue
+                pairs.append((aid, iid))
+                try:
+                    ch = pairing.accessories.aid(aid).characteristics.iid(iid)
+                    labels[(aid, iid)] = characteristic_label(ch.type)
+                except Exception:
+                    labels[(aid, iid)] = spec
+            return None
+
+        bad = try_build()
+        if bad is not None:
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception as ex:
+                self.log.exception("get: list_accessories_and_characteristics failed")
+                await self._send_ws(
+                    ws,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "get",
+                        "message": str(ex),
+                    },
+                )
+                return
+            bad = try_build()
+        if bad is not None:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "get",
+                    "message": f"unknown characteristic {bad!r}",
+                },
+            )
+            return
+
+        try:
+            result = await pairing.get_characteristics(pairs)
+        except Exception as ex:
+            self.log.exception("get: get_characteristics failed")
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "get",
+                    "message": str(ex),
+                },
+            )
+            return
+
+        values: list[dict[str, Any]] = []
+        for aid, iid in pairs:
+            payload = result.get((aid, iid), {})
+            if not isinstance(payload, dict):
+                payload = {}
+            item: dict[str, Any] = {
+                "aid": aid,
+                "iid": iid,
+                "characteristic": labels.get((aid, iid), f"{aid}.{iid}"),
+            }
+            if "value" in payload:
+                item["value"] = payload.get("value")
+            if "status" in payload:
+                item["status"] = payload.get("status")
+            values.append(item)
+
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "get",
+                "device_id": device_id,
+                "values": values,
+            },
+        )
+
+    async def _handle_subscribe(self, ws: Any, msg: dict[str, Any]) -> None:
+        """Register WebSocket-side filtering so only selected HAP events are forwarded."""
+        device_id = (msg.get("device_id") or "").strip().lower()
+        pairing = self._pairing_for_device_id(device_id) if device_id else None
+        if not pairing:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "subscribe",
+                    "message": "unknown device_id or no active pairing",
+                },
+            )
+            return
+        if not pairing.accessories:
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception as ex:
+                self.log.exception("subscribe: list_accessories_and_characteristics failed")
+                await self._send_ws(
+                    ws,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "subscribe",
+                        "message": str(ex),
+                    },
+                )
+                return
+        resolved = self._resolve_ws_aid_iid(pairing, msg)
+        if not resolved:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "subscribe",
+                    "message": "need aid+iid (integers) or characteristic (string)",
+                },
+            )
+            return
+        aid_i, iid_i = resolved
+        s = self._ws_event_filters.get(ws)
+        if s is None:
+            s = set()
+            self._ws_event_filters[ws] = s
+        s.add((device_id, aid_i, iid_i))
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "ack",
+                "for": "subscribe",
+                "device_id": device_id,
+                "aid": aid_i,
+                "iid": iid_i,
+            },
+        )
+
+    async def _handle_unsubscribe(self, ws: Any, msg: dict[str, Any]) -> None:
+        device_id = (msg.get("device_id") or "").strip().lower()
+        pairing = self._pairing_for_device_id(device_id) if device_id else None
+        if not pairing:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "unsubscribe",
+                    "message": "unknown device_id or no active pairing",
+                },
+            )
+            return
+        if not pairing.accessories:
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception as ex:
+                self.log.exception("unsubscribe: list_accessories_and_characteristics failed")
+                await self._send_ws(
+                    ws,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "unsubscribe",
+                        "message": str(ex),
+                    },
+                )
+                return
+        resolved = self._resolve_ws_aid_iid(pairing, msg)
+        if not resolved:
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "for": "unsubscribe",
+                    "message": "need aid+iid (integers) or characteristic (string)",
+                },
+            )
+            return
+        aid_i, iid_i = resolved
+        s = self._ws_event_filters.get(ws)
+        if s:
+            s.discard((device_id, aid_i, iid_i))
+            if not s:
+                self._ws_event_filters.pop(ws, None)
+        await self._send_ws(
+            ws,
+            {
+                "version": PROTOCOL_VERSION,
+                "action": "ack",
+                "for": "unsubscribe",
+                "device_id": device_id,
+                "aid": aid_i,
+                "iid": iid_i,
+            },
+        )
 
     async def _handle_command(self, ws: Any, msg: dict) -> None:
         device_id = (msg.get("device_id") or "").strip().lower()
@@ -1620,7 +2363,8 @@ class HomeKitHubBridge:
                 },
             )
             return
-        device_ids = await self._active_pairing_device_ids_stable()
+        devices_payload = await self._build_list_devices_payload()
+        device_ids = [str(d.get("device_id") or "") for d in devices_payload]
         pairings = getattr(self._hk, "pairings", None)
         aliases = getattr(self._hk, "aliases", None)
         pairings_keys = sorted(str(k).strip().lower() for k in pairings.keys()) if isinstance(pairings, dict) else []
@@ -1642,7 +2386,7 @@ class HomeKitHubBridge:
             {
                 "version": PROTOCOL_VERSION,
                 "action": "list_devices",
-                "devices": [{"device_id": did} for did in device_ids],
+                "devices": devices_payload,
             },
         )
 
@@ -1656,12 +2400,13 @@ class HomeKitHubBridge:
 
     async def _broadcast_device_list_update(self, *, reason: str) -> None:
         """Push latest paired device list to all connected clients."""
-        device_ids = await self._active_pairing_device_ids_stable()
+        devices_payload = await self._build_list_devices_payload()
+        device_ids = [str(d.get("device_id") or "") for d in devices_payload]
         await self._broadcast(
             {
                 "version": PROTOCOL_VERSION,
                 "action": "list_devices",
-                "devices": [{"device_id": did} for did in device_ids],
+                "devices": devices_payload,
             }
         )
         self.log.debug(

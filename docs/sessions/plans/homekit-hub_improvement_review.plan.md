@@ -37,16 +37,16 @@ todos:
     status: completed
   - id: ws-auth-token
     content: "P2: optional ws_token Custom Param; verify in hello"
-    status: pending
+    status: completed
   - id: ws-hello-capabilities
     content: "P2: hello reply includes paired device_ids and capabilities"
-    status: pending
+    status: completed
   - id: ws-get-subscribe
     content: "P2: add get / subscribe / unsubscribe actions to PROTOCOL.md and bridge"
-    status: pending
+    status: completed
   - id: ws-version-policy
     content: "P2: document PROTOCOL_VERSION bump policy in PROTOCOL.md"
-    status: pending
+    status: completed
   - id: isy-unpair-cmd
     content: "P3: ISY UNPAIR command (parameterized by slot) on the controller node"
     status: completed
