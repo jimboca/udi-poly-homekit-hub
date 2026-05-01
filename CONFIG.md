@@ -29,6 +29,7 @@ Each row has a **Slot** (optional) plus the pairing and filter fields:
 | **Accessory device id** (`accessory_id`) | **Optional.** If you leave it (and the name) **empty**, the Hub uses the **most recent DISCOVER** snapshot in custom data (`last_hap_discover`) to pick the target — you do not copy ids by hand. If **several** accessories are unpaired at once, set this field (or **name** below) on the row to choose one. |
 | **Substring of accessory name** (`accessory_name`) | **Optional** extra filter (same as id); use when you must disambiguate multiple unpaired devices. |
 | **Node key** (`node_key`) | Stable plugin-managed key used for IoX child node identity/address. Auto-assigned if missing. Leave it unchanged to keep the same IoX node address across unpair/re-pair, including when replacing with a different physical device in that row, so existing programs/scenes/references continue to target the same node. Auto-generated keys are monotonic and are not automatically reused later, even if old rows are deleted. |
+| **LAN host:port** (`discover_endpoint`) | Filled from **DISCOVER** when applicable; also **updated automatically** when a degraded IP pairing **recovers** after reboot or LAN/IP/port change (informational). |
 
 - There is **no fixed maximum** number of rows; use as many as you need.
 - **Remove** a row or **clear** its pairing code in the editor to disassociate that slot.

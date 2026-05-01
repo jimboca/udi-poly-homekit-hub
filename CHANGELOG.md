@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- When a **degraded** IP pairing slot **recovers** (health probe), the hub reports the live **LAN host:port** on the existing `pairing_health_notice` callback; the controller persists it to the matching Custom Typed row **`discover_endpoint`** (so the UI matches the resolved endpoint after reboot or IP/port change).
+
+### Fixed
+
+- **WebSocket `snapshot`**: if the pairing has no in-memory accessory layout yet (e.g. after reload or before a successful HAP fetch), the hub now **calls `/accessories` first** instead of returning **0 characteristics** with no explanation. If the accessory is unreachable, the client receives an **`error`** frame with the underlying message instead of an empty snapshot.
+- Pairing health probes now **force a HAP DNS-SD refresh and close the IP session** after a failed probe, then **retry with backoff and additional DNS-SD bumps** (accessories often need time to listen, and the HAP port can change twice during boot). This fixes **Degraded** sticking after power-cycle when a single immediate retry races the accessory or stale mDNS.
+- If soft recovery still fails, the hub now **reloads the slot’s saved pairing blob into a fresh aiohomekit `IpPairing`** (clears wedged connector tasks) and retries, with **settle delays** to avoid `CancelledError` races during reconnect.
+
 ## [0.1.14] - 2026-04-30
 
 ### Added
@@ -21,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Child-node default naming is now static (`HK Device <NODE_KEY>`) and no longer toggles between Candidate/Paired.
 - Child-node `UNPAIR` / `DELETE` flows now resolve by **`node_key`**, so IoX references can remain stable when slot assignments or physical devices change.
 - Auto-generated `node_key` allocation is now persistent/monotonic (`customdata` cursor), so keys are not automatically reused after row deletion.
+- Added periodic pairing health probes that detect accessory reconnects and refresh listeners/subscriptions after transient offline/reboot periods.
+- Pairing health degradation now surfaces in the controller via **ERRC-11** and clears automatically when all probed pairings recover.
+- Per-device node health is now exposed on **GV1** (`Healthy`/`Degraded`) so operators can identify which paired slot is failing probes.
 - Removed controller-level `UNPAIR` profile command exposure; unpair/delete actions are now on each paired-device node.
 - Documentation updated to clarify that `node_key` preserves IoX node-address continuity across unpair/re-pair and replacement devices.
 

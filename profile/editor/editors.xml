@@ -6,12 +6,15 @@
     <range uom="25" subset="0,1,2" nls="BRST"/>
   </editor>
   <editor id="errc">
-    <range uom="25" subset="0-10" nls="ERRC"/>
+    <range uom="25" subset="0-11" nls="ERRC"/>
   </editor>
   <editor id="pairst">
     <range uom="25" subset="0,1" nls="PAIRST"/>
   </editor>
   <editor id="slotnum">
     <range uom="56" subset="0-256"/>
+  </editor>
+  <editor id="hkhealth">
+    <range uom="25" subset="0,1" nls="HKHLTH"/>
   </editor>
 </editors>

@@ -25,16 +25,16 @@ todos:
     status: completed
   - id: per-client-ws-queue
     content: "P1: per-client send queue with bounded backlog for _broadcast"
-    status: pending
+    status: completed
   - id: event-backpressure
     content: "P1: route HAP events through bounded queues instead of unbounded create_task"
-    status: pending
+    status: completed
   - id: aiohomekit-isolation
     content: "P1: wrap aiohomekit transport.discoveries access; soft-fail with version warning"
-    status: pending
+    status: completed
   - id: pairing-reconnect
     content: "P1: add periodic pairing health probe to recover after device reboots"
-    status: pending
+    status: completed
   - id: ws-auth-token
     content: "P2: optional ws_token Custom Param; verify in hello"
     status: pending
@@ -49,16 +49,16 @@ todos:
     status: pending
   - id: isy-unpair-cmd
     content: "P3: ISY UNPAIR command (parameterized by slot) on the controller node"
-    status: pending
+    status: completed
   - id: protocol-example-client
     content: "P3: reference websockets client snippet in PROTOCOL.md"
-    status: pending
+    status: completed
   - id: qr-payload-helper
     content: "P3: tools/ helper to decode HomeKit X-HM:// QR payloads to setup code"
-    status: pending
+    status: completed
   - id: checkprofile-not-updateprofile
     content: "P3: replace updateProfile() with checkProfile() in homekit-poly.py"
-    status: pending
+    status: cancelled
   - id: pyproject-tooling
     content: "P4: pyproject.toml with ruff/black/pre-commit"
     status: pending

@@ -32,6 +32,7 @@ class PairedDeviceNode(Node):
         super().__init__(controller.poly, controller.address, address, name)
         self.setDriver("ST", 1 if self.paired else 0, report=False, force=True, uom=25)
         self.setDriver("GV0", self.slot, report=False, force=True, uom=56)
+        self.setDriver("GV1", 0, report=False, force=True, uom=25)
 
     def update_identity(self, slot: int, device_label: str, paired: bool) -> None:
         self.slot = int(slot)
@@ -51,6 +52,16 @@ class PairedDeviceNode(Node):
     def query(self):
         self.reportDrivers()
 
+    def update_health(self, unhealthy: bool) -> None:
+        try:
+            self.setDriver("GV1", 1 if unhealthy else 0, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception(
+                "paired node health update: key=%s unhealthy=%s",
+                self.node_key,
+                unhealthy,
+            )
+
     def cmd_unpair(self, command=None):
         del command
         self.controller._clear_node_key_pin_and_reload(self.node_key, source=self.address)
@@ -64,4 +75,5 @@ class PairedDeviceNode(Node):
     drivers = [
         {"driver": "ST", "value": 0, "uom": 25, "name": "Paired status"},
         {"driver": "GV0", "value": 0, "uom": 56, "name": "Pairing slot"},
+        {"driver": "GV1", "value": 0, "uom": 25, "name": "Health status"},
     ]

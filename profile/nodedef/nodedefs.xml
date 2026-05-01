@@ -23,6 +23,7 @@
     <sts>
       <st id="ST" editor="pairst" />
       <st id="GV0" editor="slotnum" />
+      <st id="GV1" editor="hkhealth" />
     </sts>
     <cmds>
       <sends />

@@ -32,9 +32,10 @@ from typing import Any, Callable, Optional
 
 import websockets
 from zeroconf import InterfaceChoice, IPVersion
-from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
+from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
 from aiohomekit import Controller as HKController
+from aiohomekit.controller.abstract import TransportType
 from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
 from aiohomekit.uuid import normalize_uuid
@@ -51,6 +52,16 @@ HAP_TYPE_UDP = "_hap._udp.local."
 WS_CLIENT_OUTBOUND_QUEUE_MAX = 256
 # HAP → hub broadcast: bounded queue before fan-out to clients (drop-oldest on overflow).
 HAP_EVENT_BROADCAST_QUEUE_MAX = 512
+PAIRING_HEALTH_PROBE_INTERVAL_SEC = 90.0
+PAIRING_HEALTH_PROBE_START_DELAY_SEC = 20.0
+# After power-cycle, HAP often needs a moment to listen; zeroconf port can also churn twice.
+PAIRING_HEALTH_POST_RESYNC_RETRIES = 6
+PAIRING_HEALTH_POST_RESYNC_DELAY_SEC = 2.0
+PAIRING_HEALTH_POST_RESYNC_INITIAL_SETTLE_SEC = 0.85
+PAIRING_HEALTH_RETRY_LIST_SLEEP_SEC = 0.45
+PAIRING_HEALTH_RELOAD_SETTLE_SEC = 1.1
+PAIRING_HEALTH_RELOAD_LIST_TRIES = 4
+PAIRING_HEALTH_ZEROCONF_REQUEST_MS = 5000
 
 # ISY **ERR** driver codes (must match profile NLS ``ERRC-*``).
 ERR_PAIRING_NO_TARGET = 8
@@ -286,6 +297,41 @@ def slot_alias(slot_num: int) -> str:
     return f"slot_{slot_num}"
 
 
+def slot_num_from_alias(alias: str) -> int | None:
+    """Parse ``slot_<n>`` pairing alias to a positive slot number."""
+    if not isinstance(alias, str) or not alias.startswith("slot_"):
+        return None
+    tail = alias[5:].strip()
+    if not tail.isdigit():
+        return None
+    n = int(tail)
+    if n < 1:
+        return None
+    return n
+
+
+def _ip_lan_endpoint_str(pairing: Any) -> str | None:
+    """Return ``host:port`` for IP pairings from aiohomekit zeroconf ``description``, or None."""
+    pdata = getattr(pairing, "pairing_data", None)
+    if not isinstance(pdata, dict) or pdata.get("Connection") != "IP":
+        return None
+    desc = getattr(pairing, "description", None)
+    if desc is None:
+        return None
+    host = getattr(desc, "address", None)
+    port = getattr(desc, "port", None)
+    if not host or port is None:
+        return None
+    h = str(host).strip()
+    if not h:
+        return None
+    try:
+        p = int(port)
+    except (TypeError, ValueError):
+        return None
+    return f"{h}:{p}"
+
+
 def _parse_slot_value(raw: Any) -> Optional[int]:
     """Return positive int slot, or None if empty / invalid / must be auto-assigned."""
     if raw is None:
@@ -492,6 +538,9 @@ class HomeKitHubBridge:
         pairing_notice: Optional[
             Callable[[int, str, str, Optional[Exception]], None]
         ] = None,
+        pairing_health_notice: Optional[
+            Callable[[bool, str, list[str], dict[str, str], bool], None]
+        ] = None,
     ) -> None:
         self.log = logger
         self._get_params = get_params
@@ -499,6 +548,7 @@ class HomeKitHubBridge:
         self._get_custom_data = get_custom_data
         self._set_custom_data = set_custom_data
         self._pairing_notice = pairing_notice
+        self._pairing_health_notice = pairing_health_notice
 
         self._hk: Optional[HKController] = None
         self._async_zeroconf: Optional[AsyncZeroconf] = None
@@ -508,6 +558,9 @@ class HomeKitHubBridge:
         self._client_out: dict[Any, tuple[asyncio.Queue[Optional[str]], asyncio.Task[None]]] = {}
         self._hap_evt_queue: Optional[asyncio.Queue[Optional[dict[str, Any]]]] = None
         self._hap_evt_worker: Optional[asyncio.Task[None]] = None
+        self._pairing_probe_task: Optional[asyncio.Task[None]] = None
+        self._pairing_unhealthy_aliases: set[str] = set()
+        self._pairing_health_fault_active = False
         self._transport_discovery_warned = False
         self._ws_server: Any = None
         self._running = False
@@ -515,6 +568,7 @@ class HomeKitHubBridge:
     async def _abort_start(self) -> None:
         """Undo partial startup (used when async_start or later steps fail)."""
         self._running = False
+        await self._stop_pairing_probe_worker()
         await self._stop_hap_event_worker()
         await self._detach_all_ws_clients()
         if self._ws_server is not None:
@@ -556,6 +610,55 @@ class HomeKitHubBridge:
                 pass
             except Exception:
                 self.log.exception("HAP event broadcast worker stop")
+
+    async def _stop_pairing_probe_worker(self) -> None:
+        t = self._pairing_probe_task
+        self._pairing_probe_task = None
+        if t is not None:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self.log.exception("pairing health probe worker stop")
+        self._emit_pairing_health_state(False)
+        self._pairing_unhealthy_aliases.clear()
+
+    def _dispatch_pairing_health_notice(
+        self,
+        *,
+        fault_active: bool,
+        recovered_lan: dict[str, str],
+        unhealthy_aliases_for_nodes: list[str],
+        fault_transition: bool,
+    ) -> None:
+        """Notify controller: optional fault transition + optional recovered LAN endpoints per alias."""
+        if fault_transition:
+            self._pairing_health_fault_active = fault_active
+        if not self._pairing_health_notice:
+            return
+        if not fault_transition and not recovered_lan:
+            return
+        if fault_active:
+            aliases_txt = ", ".join(unhealthy_aliases_for_nodes)
+            detail = (
+                f"Unhealthy pairing aliases: {aliases_txt}"
+                if aliases_txt
+                else "Pairing health probe failure"
+            )
+        else:
+            detail = "All pairing probes recovered"
+        try:
+            self._pairing_health_notice(
+                fault_active,
+                detail,
+                unhealthy_aliases_for_nodes,
+                recovered_lan,
+                fault_transition,
+            )
+        except Exception:
+            self.log.exception("pairing health notice callback")
 
     async def _hap_event_broadcast_worker(self) -> None:
         q = self._hap_evt_queue
@@ -663,6 +766,7 @@ class HomeKitHubBridge:
             # ``list_devices`` runs while ``self._hk.pairings`` is still empty (events
             # appear only after ``_sync_pairing_from_params`` finishes).
             await self._sync_pairing_from_params()
+            self._pairing_probe_task = asyncio.create_task(self._pairing_health_probe_loop())
             self._hap_evt_queue = asyncio.Queue(maxsize=HAP_EVENT_BROADCAST_QUEUE_MAX)
             self._hap_evt_worker = asyncio.create_task(self._hap_event_broadcast_worker())
             await self._start_websocket_server()
@@ -672,6 +776,7 @@ class HomeKitHubBridge:
 
     async def stop(self) -> None:
         self._running = False
+        await self._stop_pairing_probe_worker()
         self._clear_all_listeners()
         await self._stop_hap_event_worker()
         await self._shutdown_all_pairings()
@@ -693,8 +798,278 @@ class HomeKitHubBridge:
         if not self._running or not self._hk:
             return
         self._clear_all_listeners()
+        self._emit_pairing_health_state(False)
+        self._pairing_unhealthy_aliases.clear()
         await self._shutdown_all_pairings()
         await self._sync_pairing_from_params()
+
+    def _emit_pairing_health_state(self, unhealthy: bool) -> None:
+        """Force-clear or sync fault notification (probe worker stop / session restart)."""
+        fault_active = bool(unhealthy)
+        if fault_active:
+            self._dispatch_pairing_health_notice(
+                fault_active=True,
+                recovered_lan={},
+                unhealthy_aliases_for_nodes=sorted(self._pairing_unhealthy_aliases),
+                fault_transition=self._pairing_health_fault_active != fault_active,
+            )
+            return
+        self._dispatch_pairing_health_notice(
+            fault_active=False,
+            recovered_lan={},
+            unhealthy_aliases_for_nodes=[],
+            fault_transition=self._pairing_health_fault_active,
+        )
+
+    async def _pairing_health_probe_loop(self) -> None:
+        try:
+            await asyncio.sleep(PAIRING_HEALTH_PROBE_START_DELAY_SEC)
+            while self._running:
+                await self._probe_pairings_health_once()
+                await asyncio.sleep(PAIRING_HEALTH_PROBE_INTERVAL_SEC)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.log.exception("pairing health probe loop")
+
+    def _ip_hap_service_name(self, hk: HKController, device_id: str) -> str | None:
+        """Return full HAP DNS-SD instance name (``Name._hap._tcp.local.``) or None."""
+        ip_ctrl = hk.transports.get(TransportType.IP)
+        if not ip_ctrl:
+            return None
+        discovery = ip_ctrl.discoveries.get(device_id)
+        if not discovery or not getattr(discovery, "description", None):
+            return None
+        return f"{discovery.description.name}.{ip_ctrl.hap_type}"
+
+    async def _bump_ip_pairing_zeroconf(
+        self, hk: HKController, alias: str, pairing, *, log_failures: bool
+    ) -> bool:
+        """Re-query HAP DNS-SD and push ServiceInfo into aiohomekit (no TCP close).
+
+        Returns True if a record was applied. Safe to call repeatedly while the accessory
+        is booting or flapping ports.
+        """
+        pdata = getattr(pairing, "pairing_data", None)
+        if not isinstance(pdata, dict) or pdata.get("Connection") != "IP":
+            return False
+        ip_ctrl = hk.transports.get(TransportType.IP)
+        if not ip_ctrl:
+            return False
+        zc_inst = getattr(ip_ctrl, "_async_zeroconf_instance", None)
+        zc = getattr(zc_inst, "zeroconf", None) if zc_inst else None
+        if not zc:
+            return False
+        pid = getattr(pairing, "id", None)
+        if not pid:
+            return False
+        device_id = str(pid).lower()
+        service_full = self._ip_hap_service_name(hk, device_id)
+        if not service_full:
+            try:
+                await hk.async_find(device_id, timeout=8.0)
+            except Exception:
+                if log_failures:
+                    self.log.debug(
+                        "zeroconf bump: async_find failed for %s (%s)",
+                        alias,
+                        device_id,
+                        exc_info=True,
+                    )
+                return False
+            service_full = self._ip_hap_service_name(hk, device_id)
+        if not service_full:
+            return False
+        try:
+            info = AsyncServiceInfo(ip_ctrl.hap_type, service_full)
+            await info.async_request(zc, PAIRING_HEALTH_ZEROCONF_REQUEST_MS)
+            ip_ctrl._async_handle_loaded_service_info(info)
+            return True
+        except Exception:
+            if log_failures:
+                self.log.debug(
+                    "zeroconf bump failed for %s (%s)", alias, service_full, exc_info=True
+                )
+            return False
+
+    async def _resync_ip_pairing_zeroconf(self, alias: str, pairing) -> None:
+        """Close stale TCP session and re-resolve HAP DNS-SD so IP/port match the accessory.
+
+        After power loss or reboot, accessories often advertise a new port while aiohomekit
+        may still target the previous endpoint until fresh ServiceInfo is processed.
+        """
+        hk = self._hk
+        if not hk or pairing is None:
+            return
+        pdata = getattr(pairing, "pairing_data", None)
+        if not isinstance(pdata, dict) or pdata.get("Connection") != "IP":
+            return
+
+        try:
+            await pairing.close()
+        except Exception:
+            self.log.debug(
+                "pairing close before zeroconf resync failed for %s", alias, exc_info=True
+            )
+
+        await asyncio.sleep(0.15)
+        if await self._bump_ip_pairing_zeroconf(hk, alias, pairing, log_failures=True):
+            await asyncio.sleep(0.2)
+            await self._bump_ip_pairing_zeroconf(hk, alias, pairing, log_failures=False)
+
+    async def _reload_saved_pairing_for_alias(self, alias: str) -> bool:
+        """Replace in-memory pairing with a fresh ``IpPairing`` from saved blob.
+
+        Zeroconf bumps alone cannot reset a wedged ``SecureHomeKitConnection`` / connector
+        task graph; reloading clears stale asyncio state while preserving keys.
+        """
+        hk = self._hk
+        if not hk:
+            return False
+        slot_num = slot_num_from_alias(alias)
+        if slot_num is None:
+            return False
+        blob = self._get_pairings_blob()
+        saved = blob.get(str(slot_num))
+        if not isinstance(saved, dict) or not saved.get("AccessoryPairingID"):
+            return False
+        self.log.info(
+            "pairing health: reloading %s from saved pairing blob (fresh session)",
+            alias,
+        )
+        await self._close_alias_if_present(alias)
+        await asyncio.sleep(0.45)
+        try:
+            hk.load_pairing(alias, dict(saved))
+        except Exception:
+            self.log.exception("pairing health: load_pairing failed for %s", alias)
+            return False
+        pairing = hk.aliases.get(alias)
+        if not pairing:
+            return False
+        await self._bump_ip_pairing_zeroconf(hk, alias, pairing, log_failures=True)
+        await asyncio.sleep(0.35)
+        await self._bump_ip_pairing_zeroconf(hk, alias, pairing, log_failures=False)
+        return True
+
+    async def _probe_pairings_health_once(self) -> None:
+        hk = self._hk
+        if not self._running or not hk:
+            return
+        aliases = getattr(hk, "aliases", None)
+        if not isinstance(aliases, dict) or not aliases:
+            return
+        recovered_lan: dict[str, str] = {}
+        for alias, pairing in list(aliases.items()):
+            if pairing is None:
+                continue
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception:
+                await self._resync_ip_pairing_zeroconf(alias, pairing)
+                await asyncio.sleep(PAIRING_HEALTH_POST_RESYNC_INITIAL_SETTLE_SEC)
+                probe_ok = False
+                last_exc: BaseException | None = None
+                for attempt in range(PAIRING_HEALTH_POST_RESYNC_RETRIES):
+                    if attempt:
+                        await asyncio.sleep(PAIRING_HEALTH_POST_RESYNC_DELAY_SEC)
+                        pdata = getattr(pairing, "pairing_data", None)
+                        if (
+                            isinstance(pdata, dict)
+                            and pdata.get("Connection") == "IP"
+                        ):
+                            await self._bump_ip_pairing_zeroconf(
+                                hk, alias, pairing, log_failures=False
+                            )
+                            await asyncio.sleep(0.2)
+                    pairing = hk.aliases.get(alias)
+                    if pairing is None:
+                        last_exc = RuntimeError(f"pairing missing for {alias!r} after resync")
+                        break
+                    try:
+                        await pairing.list_accessories_and_characteristics()
+                        probe_ok = True
+                        break
+                    except Exception as ex:
+                        last_exc = ex
+                        await asyncio.sleep(PAIRING_HEALTH_RETRY_LIST_SLEEP_SEC)
+                if not probe_ok and await self._reload_saved_pairing_for_alias(alias):
+                    pairing = hk.aliases.get(alias)
+                    await asyncio.sleep(PAIRING_HEALTH_RELOAD_SETTLE_SEC)
+                    for reopen_try in range(PAIRING_HEALTH_RELOAD_LIST_TRIES):
+                        if reopen_try:
+                            await asyncio.sleep(PAIRING_HEALTH_POST_RESYNC_DELAY_SEC)
+                            if pairing and isinstance(
+                                getattr(pairing, "pairing_data", None), dict
+                            ):
+                                if pairing.pairing_data.get("Connection") == "IP":
+                                    await self._bump_ip_pairing_zeroconf(
+                                        hk, alias, pairing, log_failures=False
+                                    )
+                                    await asyncio.sleep(0.2)
+                        pairing = hk.aliases.get(alias)
+                        if pairing is None:
+                            break
+                        try:
+                            await pairing.list_accessories_and_characteristics()
+                            probe_ok = True
+                            last_exc = None
+                            break
+                        except Exception as ex:
+                            last_exc = ex
+                if not probe_ok:
+                    self._pairing_unhealthy_aliases.add(alias)
+                    if last_exc is not None:
+                        self.log.warning(
+                            "pairing health probe failed for %s; will retry and recover when reachable",
+                            alias,
+                            exc_info=(type(last_exc), last_exc, last_exc.__traceback__),
+                        )
+                    else:
+                        self.log.warning(
+                            "pairing health probe failed for %s; will retry and recover when reachable",
+                            alias,
+                        )
+                    continue
+
+            pairing = hk.aliases.get(alias)
+            if pairing is None:
+                self.log.warning(
+                    "pairing health: no in-memory pairing for %s after probe; skipping listener refresh",
+                    alias,
+                )
+                continue
+
+            if alias not in self._pairing_unhealthy_aliases:
+                continue
+
+            self._attach_listener(alias, pairing)
+            to_sub = _subscribable_characteristics(pairing)
+            if to_sub:
+                try:
+                    await pairing.subscribe(to_sub)
+                except Exception:
+                    self.log.exception(
+                        "pairing health recovery subscribe failed for %s", alias
+                    )
+                    continue
+            self._pairing_unhealthy_aliases.discard(alias)
+            ep = _ip_lan_endpoint_str(pairing)
+            if ep:
+                recovered_lan[alias] = ep
+            self.log.info(
+                "pairing health probe recovered %s; listener/subscriptions refreshed",
+                alias,
+            )
+        new_fault = bool(self._pairing_unhealthy_aliases)
+        fault_transition = self._pairing_health_fault_active != new_fault
+        unhealthy_out = [] if not new_fault else sorted(self._pairing_unhealthy_aliases)
+        self._dispatch_pairing_health_notice(
+            fault_active=new_fault,
+            recovered_lan=recovered_lan,
+            unhealthy_aliases_for_nodes=unhealthy_out,
+            fault_transition=fault_transition,
+        )
 
     async def full_restart(self) -> None:
         """Full hub recycle (zeroconf + WebSocket + pairings)."""
@@ -1161,13 +1536,30 @@ class HomeKitHubBridge:
 
         readable = _readable_characteristics(pairing)
         if not readable:
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception as ex:
+                self.log.exception("snapshot: list_accessories_and_characteristics failed")
+                await self._send_ws(
+                    ws,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "snapshot",
+                        "message": str(ex),
+                    },
+                )
+                return
+            readable = _readable_characteristics(pairing)
+
+        if not readable:
             await self._send_ws(
                 ws,
                 {
                     "version": PROTOCOL_VERSION,
-                    "action": "snapshot",
-                    "device_id": device_id,
-                    "values": [],
+                    "action": "error",
+                    "for": "snapshot",
+                    "message": "no readable characteristics after HAP /accessories refresh",
                 },
             )
             return

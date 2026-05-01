@@ -34,6 +34,7 @@ ERR_BRIDGE_STOP = 6
 ERR_STATUS_UPDATE = 7
 # 8–9: pairing (see profile NLS)
 ERR_ASYNC_LOOP_DEAD = 10
+ERR_PAIRING_HEALTH = 11
 
 # Merged into Custom Params before the bridge reads them (PG3 may omit unset keys).
 _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
@@ -236,6 +237,113 @@ class Controller(Node):
             extra_html=extra_html,
         )
 
+    @staticmethod
+    def _slot_from_alias(alias: str) -> Optional[int]:
+        if not isinstance(alias, str):
+            return None
+        if not alias.startswith("slot_"):
+            return None
+        try:
+            n = int(alias[5:])
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+
+    def _set_paired_nodes_health(self, unhealthy_aliases: list[str]) -> None:
+        unhealthy_slots = {
+            s for s in (self._slot_from_alias(a) for a in unhealthy_aliases) if s is not None
+        }
+        for node in self._paired_nodes.values():
+            node.update_health(node.slot in unhealthy_slots)
+
+    def _persist_typed_discover_from_recovered_lan(
+        self, by_alias: dict[str, str]
+    ) -> None:
+        """Update ``discover_endpoint`` on pairing rows when hub reports recovered LAN host:port."""
+        slots_eps: dict[int, str] = {}
+        for alias, endpoint in by_alias.items():
+            slot = self._slot_from_alias(alias)
+            if slot is None:
+                continue
+            ep = (endpoint or "").strip()
+            if not ep:
+                continue
+            slots_eps[slot] = ep
+        if not slots_eps:
+            return
+        try:
+            raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return
+        if not isinstance(raw_rows, list):
+            return
+        rows = [dict(x) if isinstance(x, dict) else x for x in raw_rows]
+        changed = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sn = _parse_slot_value(row.get("slot"))
+            if sn is None or sn not in slots_eps:
+                continue
+            want = slots_eps[sn]
+            if (row.get("discover_endpoint") or "").strip() == want:
+                continue
+            row["discover_endpoint"] = want
+            changed = True
+        if not changed:
+            return
+        try:
+            td = self._typed_data_dict()
+            td[TYPED_PAIRING_SLOTS_KEY] = rows
+            self.TypedData.load(td, save=True)
+        except Exception:
+            LOGGER.exception(
+                "Failed to persist recovered LAN endpoints to Custom Typed pairing rows"
+            )
+            return
+        LOGGER.info(
+            "Updated Custom Typed discover_endpoint after pairing recovery for slot(s): %s",
+            ", ".join(str(s) for s in sorted(slots_eps.keys())),
+        )
+
+    def _pairing_health_notice_callback(
+        self,
+        unhealthy: bool,
+        detail: str,
+        unhealthy_aliases: list[str],
+        recovered_lan_endpoints: dict[str, str],
+        fault_transition: bool,
+    ) -> None:
+        if recovered_lan_endpoints:
+            self._persist_typed_discover_from_recovered_lan(recovered_lan_endpoints)
+        self._set_paired_nodes_health(unhealthy_aliases)
+        if not fault_transition:
+            return
+        if unhealthy:
+            self.Notices["homekit_pairing_health"] = (
+                "<b>HomeKit pairing health degraded</b><br/>"
+                f"{html.escape(detail)}<br/>"
+                "The hub will keep probing and auto-recover listeners/subscriptions when reachable."
+            )
+            try:
+                self.setDriver("ERR", ERR_PAIRING_HEALTH, report=True, force=True, uom=25)
+            except Exception:
+                LOGGER.exception("setDriver ERR for pairing health degrade")
+            return
+        try:
+            self.Notices.delete("homekit_pairing_health")
+        except Exception:
+            try:
+                del self.Notices["homekit_pairing_health"]
+            except Exception:
+                pass
+        try:
+            cur = self.getDriver("ERR")
+            if cur is not None and int(cur) == ERR_PAIRING_HEALTH:
+                self.setDriver("ERR", ERR_OK, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("clear pairing health ERR state")
+
     def _config_restart_snap(self) -> dict[str, Any]:
         p = self._bridge_get_params()
         snap = {
@@ -374,6 +482,7 @@ class Controller(Node):
             self._bridge_get_data,
             self._bridge_set_data,
             pairing_notice=self._pairing_notice_callback,
+            pairing_health_notice=self._pairing_health_notice_callback,
         )
         self._config_snap = self._config_restart_snap()
         fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)

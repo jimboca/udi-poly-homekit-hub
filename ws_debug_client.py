@@ -96,6 +96,12 @@ def _format_message(msg: dict[str, Any], show_raw: bool) -> str:
                         ),
                     )
                 )
+            if len(vals) == 0:
+                parts.append(
+                    "  note           : 0 values usually means the hub never loaded the HAP layout for this pairing "
+                    "(update udi-poly-homekit: snapshot now triggers /accessories first) or get_characteristics "
+                    "returned nothing; look for a nearby action=error for snapshot, or confirm the accessory is online."
+                )
     elif action == "list_devices":
         devices = msg.get("devices")
         if isinstance(devices, list):
