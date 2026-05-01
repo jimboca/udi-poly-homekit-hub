@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Paired device Health (GV1):** **`Healthy`** / **`Degraded`** only apply while the slot is paired. When there is no active pairing (including after **UNPAIR** once custom data syncs), **GV1** is **`Not paired`** (index **2**; profile **`HKHLTH-2`** / editor subset updated). **`update_health`** no longer forces **`Healthy`** on unpaired nodes.
 - **`zip_exclude.lst`**: exclude Polyglot **`*.cert`**, **`*.key`**, **`*.lock`**, and **`snapshot-all.txt`** so store zips do not bundle host secrets or debug artifacts. **`make zip`** now removes an existing **`HomeKitHub.zip`** first so **`zip -r`** cannot leave stale entries from older builds.
 
 ## [0.2.0] - 2026-05-01

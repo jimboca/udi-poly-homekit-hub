@@ -47,7 +47,14 @@ class PairedDeviceNode(Node):
         super().__init__(controller.poly, controller.address, address, title)
         self.setDriver("ST", 1 if self.paired else 0, report=False, force=True, uom=25)
         self.setDriver("GV0", self.slot, report=False, force=True, uom=56)
-        self.setDriver("GV1", 0, report=False, force=True, uom=25)
+        # GV1: 0=Healthy, 1=Degraded (paired transport), 2=Not paired (no active pairing)
+        self.setDriver(
+            "GV1",
+            0 if self.paired else 2,
+            report=False,
+            force=True,
+            uom=25,
+        )
 
     def _requested_title(self) -> str:
         return self._node_title(self.node_key, self.display_name)
@@ -104,6 +111,13 @@ class PairedDeviceNode(Node):
         try:
             self.setDriver("ST", 1 if self.paired else 0, report=True, force=True, uom=25)
             self.setDriver("GV0", self.slot, report=True, force=True, uom=56)
+            self.setDriver(
+                "GV1",
+                0 if self.paired else 2,
+                report=True,
+                force=True,
+                uom=25,
+            )
         except Exception:
             LOGGER.exception(
                 "paired node update: key=%s slot=%s display=%s",
@@ -117,7 +131,8 @@ class PairedDeviceNode(Node):
 
     def update_health(self, unhealthy: bool) -> None:
         try:
-            self.setDriver("GV1", 1 if unhealthy else 0, report=True, force=True, uom=25)
+            val = 2 if not self.paired else (1 if unhealthy else 0)
+            self.setDriver("GV1", val, report=True, force=True, uom=25)
         except Exception:
             LOGGER.exception(
                 "paired node health update: key=%s unhealthy=%s",

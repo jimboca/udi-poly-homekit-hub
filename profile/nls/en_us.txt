@@ -44,3 +44,4 @@ PAIRST-0 = Unpaired
 PAIRST-1 = Paired
 HKHLTH-0 = Healthy
 HKHLTH-1 = Degraded
+HKHLTH-2 = Not paired

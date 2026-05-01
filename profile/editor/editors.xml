@@ -15,6 +15,6 @@
     <range uom="56" subset="0-256"/>
   </editor>
   <editor id="hkhealth">
-    <range uom="25" subset="0,1" nls="HKHLTH"/>
+    <range uom="25" subset="0,1,2" nls="HKHLTH"/>
   </editor>
 </editors>
