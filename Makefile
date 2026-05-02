@@ -9,6 +9,10 @@
 #
 # If accessories show live data but ws_* / integration tests look empty, restart the plugin node on IoX/PG3
 # so the hub reloads pairings before re-running make/pytest.
+#
+# PG3 git tracks (clean tree; commit first): prefer **`make release`** then **`make beta`** so the **`beta`**
+# branch always matches an annotated tag (**`v`<VERSION>**). Running both without local commits yields the
+# same remote refs regardless of order.
 
 PYTHON ?= python3
 PYTEST ?= $(PYTHON) -m pytest
