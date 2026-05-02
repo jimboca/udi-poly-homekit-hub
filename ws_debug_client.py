@@ -31,6 +31,14 @@ Usage (from the Node Server repo root, with ``websockets`` installed):
 ``list_devices`` / ``--snapshot-all`` only enumerate **paired** accessories
 (aiohomekit active pairings). Unpaired devices seen via DISCOVER / mDNS do not
 appear until pairing completes and the hub loads that pairing.
+
+If ``list_devices`` is briefly empty while the IP session is still coming up,
+``--snapshot-all`` will **also** request a ``snapshot`` for each distinct
+``device_id`` seen on ``event`` frames (same ids events use), so you still get
+full snapshots without passing ``--snapshot-device-id`` by hand.
+
+Use ``--max-messages N`` or ``--oneshot`` to stop after N inbound frames instead
+of monitoring until Ctrl+C (scripts and ``make ws-*`` targets rely on this).
 """
 
 from __future__ import annotations
@@ -46,6 +54,77 @@ from websockets.exceptions import ConnectionClosed
 
 
 PROTOCOL_VERSION = "1"
+
+
+class _SnapshotAllState:
+    """Mutable state for ``--snapshot-all`` (list_devices + event fallback)."""
+
+    __slots__ = ("snap_done", "snap_event_fallback", "snap_fallback_notice")
+
+    def __init__(self) -> None:
+        self.snap_done: set[str] = set()
+        self.snap_event_fallback = False
+        self.snap_fallback_notice = False
+
+
+def snapshot_all_handle_inbound(
+    msg: dict[str, Any], state: _SnapshotAllState
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Compute outbound snapshot payloads and log lines for ``--snapshot-all``.
+
+    Pure helper used by :func:`_run` and unit tests (no WebSocket I/O).
+
+    Returns ``(outbound_snapshots, extra_print_lines)``.
+    """
+    outbound: list[dict[str, Any]] = []
+    lines: list[str] = []
+
+    if msg.get("action") == "list_devices":
+        devices = msg.get("devices")
+        if isinstance(devices, list):
+            if len(devices) == 0:
+                state.snap_event_fallback = True
+                if not state.snap_fallback_notice:
+                    state.snap_fallback_notice = True
+                    lines.append(
+                        f"[{_now()}] snapshot-all: list_devices returned 0 devices; "
+                        "will request snapshot for each device_id seen on event frames"
+                    )
+            else:
+                state.snap_event_fallback = False
+            for item in devices:
+                if not isinstance(item, dict):
+                    continue
+                did = (item.get("device_id") or "").strip().lower()
+                if not did or did in state.snap_done:
+                    continue
+                outbound.append(
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "snapshot",
+                        "device_id": did,
+                    }
+                )
+                state.snap_done.add(did)
+                lines.append(f"[{_now()}] requested snapshot for {did!r}")
+
+    if state.snap_event_fallback and msg.get("action") == "event":
+        did = (msg.get("device_id") or "").strip().lower()
+        if did and did not in state.snap_done:
+            outbound.append(
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "snapshot",
+                    "device_id": did,
+                }
+            )
+            state.snap_done.add(did)
+            lines.append(
+                f"[{_now()}] snapshot-all: requested snapshot for {did!r} "
+                "(fallback from event; list_devices was empty)"
+            )
+
+    return outbound, lines
 
 
 def _now() -> str:
@@ -303,32 +382,36 @@ async def _run(args: argparse.Namespace) -> None:
             await ws.send(json.dumps(payload))
             print(f"[{_now()}] requested active device list")
 
+        snap_state = _SnapshotAllState()
+
+        max_rx: int | None = getattr(args, "max_messages", None)
+        if getattr(args, "oneshot", False) and max_rx is None:
+            max_rx = 1
+
         sender_task = asyncio.create_task(_interactive_sender(ws)) if args.interactive else None
+        received = 0
         try:
             async for raw in ws:
+                received += 1
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     print(f"[{_now()}] non-JSON frame:\n{raw}")
+                    if max_rx is not None and received >= max_rx:
+                        print(f"[{_now()}] --max-messages {max_rx} reached; exiting")
+                        break
                     continue
-                if args.snapshot_all and msg.get("action") == "list_devices":
-                    devices = msg.get("devices")
-                    if isinstance(devices, list):
-                        for item in devices:
-                            if not isinstance(item, dict):
-                                continue
-                            did = (item.get("device_id") or "").strip().lower()
-                            if not did:
-                                continue
-                            payload = {
-                                "version": PROTOCOL_VERSION,
-                                "action": "snapshot",
-                                "device_id": did,
-                            }
-                            await ws.send(json.dumps(payload))
-                            print(f"[{_now()}] requested snapshot for {did!r}")
+                if args.snapshot_all:
+                    outbound, extra_lines = snapshot_all_handle_inbound(msg, snap_state)
+                    for line in extra_lines:
+                        print(line)
+                    for payload in outbound:
+                        await ws.send(json.dumps(payload))
                 print(_format_message(msg, show_raw=args.raw))
                 print("-" * 72)
+                if max_rx is not None and received >= max_rx:
+                    print(f"[{_now()}] --max-messages {max_rx} reached; exiting")
+                    break
         finally:
             if sender_task is not None:
                 sender_task.cancel()
@@ -358,6 +441,12 @@ examples:
 
   %(prog)s --interactive
       Keep a command prompt open while connected; send JSON or shortcuts like /list.
+
+  %(prog)s --oneshot
+      Receive one inbound frame (typically hello ack), then exit (same as --max-messages 1).
+
+  %(prog)s --snapshot-all --max-messages 30
+      Bounded run for scripts/CI: stop after 30 inbound frames instead of monitoring forever.
 
 See PROTOCOL.md for actions (hello, command, snapshot, list_devices, get, subscribe, unsubscribe) and hub events.
 Hub ws_host / ws_port / optional ws_token are Custom Params on the Polyglot node (defaults 127.0.0.1:8163).
@@ -405,12 +494,31 @@ Hub ws_host / ws_port / optional ws_token are Custom Params on the Polyglot node
         action="store_true",
         help="Interactive command prompt while connected (JSON input and shortcuts).",
     )
+    p.add_argument(
+        "--max-messages",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Exit after receiving N inbound WebSocket frames (JSON or not). "
+            "Default: unlimited (monitor until disconnect/Ctrl+C). "
+            "Use 1 with no other actions for a quick hello/ack check."
+        ),
+    )
+    p.add_argument(
+        "--oneshot",
+        action="store_true",
+        help="Short for --max-messages 1 (single inbound frame, then exit).",
+    )
     return p
 
 
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    if args.max_messages is not None and args.max_messages < 1:
+        print(f"[{_now()}] --max-messages must be >= 1 (got {args.max_messages})")
+        return 2
     try:
         asyncio.run(_run(args))
         return 0

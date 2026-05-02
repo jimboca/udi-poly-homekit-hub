@@ -1886,9 +1886,32 @@ class HomeKitHubBridge:
                 s = str(k).strip().lower()
                 if s:
                     ids.add(s)
+            # Values carry Pairing objects; ``id`` may match event ``device_id`` even if
+            # keys are alias-shaped or lag behind during IP session setup.
+            for p in pr.values():
+                if p is None:
+                    continue
+                pid = getattr(p, "id", None)
+                if pid is None:
+                    continue
+                s = str(pid).strip().lower()
+                if s:
+                    ids.add(s)
         al = getattr(hk, "aliases", None)
         if isinstance(al, dict):
             for pairing in al.values():
+                if pairing is None:
+                    continue
+                pid = getattr(pairing, "id", None)
+                if pid is None:
+                    continue
+                s = str(pid).strip().lower()
+                if s:
+                    ids.add(s)
+        # Active HAP listeners imply a live pairing; include ids in case maps are momentarily inconsistent.
+        if isinstance(al, dict):
+            for alias in list(self._listeners.keys()):
+                pairing = al.get(alias)
                 if pairing is None:
                     continue
                 pid = getattr(pairing, "id", None)
@@ -1902,7 +1925,23 @@ class HomeKitHubBridge:
     def _pairing_for_device_id(self, device_id: str):
         if not self._hk:
             return None
-        return self._hk.pairings.get(device_id)
+        did = str(device_id or "").strip().lower()
+        if not did:
+            return None
+        p = self._hk.pairings.get(did)
+        if p is not None:
+            return p
+        al = getattr(self._hk, "aliases", None)
+        if isinstance(al, dict):
+            for pairing in al.values():
+                if pairing is None:
+                    continue
+                pid = getattr(pairing, "id", None)
+                if pid is None:
+                    continue
+                if str(pid).strip().lower() == did:
+                    return pairing
+        return None
 
     async def _active_pairing_device_ids_stable(self) -> list[str]:
         """Retry briefly before returning an empty paired-device list."""
@@ -1911,7 +1950,7 @@ class HomeKitHubBridge:
             return ids
         if not self._hk:
             return []
-        for delay_s in (0.25, 0.35, 0.45):
+        for delay_s in (0.25, 0.35, 0.45, 1.0, 1.5, 2.0):
             await asyncio.sleep(delay_s)
             ids = self._active_pairing_device_ids()
             if ids:

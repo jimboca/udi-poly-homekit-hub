@@ -7,14 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-01
+
+### Added
+
+- **`ws_debug_client`**: **`--max-messages`** / **`--oneshot`** for bounded runs from **`Makefile`** / scripts; **`snapshot_all`** can fall back to per-device **`snapshot`** requests when **`list_devices`** is empty but **`event`** frames carry **`device_id`**.
+- **Tests:** unit coverage for **`ws_debug_client`** (including extracted **`snapshot_all_handle_inbound`**); optional **`integration`**-marked live hub exercises in **`tests/test_ws_live.py`** with **`live_hub`** fixture / **`HOMEKIT_WS_*`** env (**`pytest -m integration`**).
+- **`Makefile`**: restores **`beta`**, **`production`**, **`release`**, **`zip`**, **`xml-check`**, **`check`**, **`clean`**, **`format-check`**, **`black-check`**, plus **`test-unit`**, **`test-integration`**, **`help`**, and **`ws-*`** smoke targets alongside **`ruff check .`**.
+
 ### Changed
 
-- **Releases / PG3 install:** delivery is **`beta`** and **`production`** git branches (**`make beta`**, **`make production`**, **`make release`** updates **`production`** + annotated tag). **`make release`** no longer builds **`HomeKitHub.zip`**; **`make zip`** is kept for optional local archives only.
+- **Releases / PG3 install:** delivery is **`beta`** and **`production`** git branches (**`make beta`**, **`make production`**, **`make release`** updates **`production`** + annotated tag). **`make release`** does not build **`HomeKitHub.zip`**; **`make zip`** is optional.
 
 ### Fixed
 
+- **Hub WebSocket `list_devices` / pairing resolution:** collect active pairing ids from pairing values and listener aliases; **`_pairing_for_device_id`** resolves by accessory **`id`** when the map key differs; extend short settle retries before treating the paired list as empty.
 - **Paired device Health (GV1):** **`Healthy`** / **`Degraded`** only apply while the slot is paired. When there is no active pairing (including after **UNPAIR** once custom data syncs), **GV1** is **`Not paired`** (index **2**; profile **`HKHLTH-2`** / editor subset updated). **`update_health`** no longer forces **`Healthy`** on unpaired nodes.
-- **`zip_exclude.lst`**: exclude Polyglot **`*.cert`**, **`*.key`**, **`*.lock`**, and **`snapshot-all.txt`** so store zips do not bundle host secrets or debug artifacts. **`make zip`** now removes an existing **`HomeKitHub.zip`** first so **`zip -r`** cannot leave stale entries from older builds.
+- **`zip_exclude.lst`**: exclude Polyglot **`*.cert`**, **`*.key`**, **`*.lock`**, and **`snapshot-all.txt`** so store zips do not bundle host secrets or debug artifacts. **`make zip`** removes an existing **`HomeKitHub.zip`** first so **`zip -r`** cannot leave stale entries from older builds.
 
 ## [0.2.0] - 2026-05-01
 

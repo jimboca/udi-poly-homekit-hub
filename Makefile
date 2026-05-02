@@ -1,4 +1,17 @@
+# udi-poly-homekit — lint/test, PG3 release pushes (beta / production / tag), and bounded ws_debug_client smoke checks.
+#
+# Quick tests:
+#   make test / make test-unit / make test-integration
+# WebSocket smoke (hub on WS_HOST:WS_PORT):
+#   make ws-smoke WS_HOST=127.0.0.1 WS_PORT=8163
+# Optional hub Custom Param ws_token:
+#   make ws-hello WS_EXTRA='--token your-secret'
+#
+# If accessories show live data but ws_* / integration tests look empty, restart the plugin node on IoX/PG3
+# so the hub reloads pairings before re-running make/pytest.
+
 PYTHON ?= python3
+PYTEST ?= $(PYTHON) -m pytest
 NAME = HomeKitHub
 STORE_INFO := release-pg3-store.txt
 GIT_REMOTE ?= origin
@@ -7,6 +20,13 @@ BRANCH_BETA ?= beta
 BRANCH_PRODUCTION ?= production
 XML_FILES = profile/*/*.xml
 
+WS_HOST ?= 127.0.0.1
+WS_PORT ?= 8163
+# Extra args for every ws_debug_client invocation (e.g. --token …).
+WS_EXTRA ?=
+
+WS := $(PYTHON) ws_debug_client.py --host $(WS_HOST) --port $(WS_PORT) $(WS_EXTRA)
+
 # apt: sudo apt-get install libxml2-utils libxml2-dev
 check: xml-check
 
@@ -14,19 +34,45 @@ xml-check:
 	xmllint --noout $(XML_FILES)
 
 lint:
-	python3 -m ruff check .
+	$(PYTHON) -m ruff check .
 
 format-check:
-	python3 -m ruff format --check .
+	$(PYTHON) -m ruff format --check .
 
 black-check:
-	python3 -m black --check .
+	$(PYTHON) -m black --check .
 
 test:
-	python3 -m pytest -q
+	$(PYTEST) -q
+
+test-unit:
+	$(PYTEST) -q -m "not integration"
+
+test-integration:
+	HOMEKIT_WS_HOST=$(WS_HOST) HOMEKIT_WS_PORT=$(WS_PORT) HOMEKIT_WS_INTEGRATION=1 $(PYTEST) tests/test_ws_live.py -v -m integration
+
+help:
+	@echo "Quality"
+	@echo "  make check / xml-check   Validate profile XML"
+	@echo "  make lint / format-check / black-check"
+	@echo "  make test                Full pytest suite"
+	@echo "  make test-unit           Exclude live WebSocket integration tests"
+	@echo "  make test-integration    Live hub tests (HOMEKIT_WS_* / hub)"
+	@echo ""
+	@echo "PG3 release (clean tree; not detached HEAD)"
+	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA)"
+	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION)"
+	@echo "  make release             Tag v\$$VERSION, push branch + tag + $(BRANCH_PRODUCTION)"
+	@echo "  make zip                 Optional local $(NAME).zip"
+	@echo ""
+	@echo "WebSocket smoke (bounded via --max-messages / --oneshot)"
+	@echo "  make ws-smoke            All ws-* targets"
+	@echo "  make ws-hello … ws-snapshot-all, ws-raw"
+	@echo ""
+	@echo "Variables: PYTHON WS_HOST WS_PORT WS_EXTRA GIT_REMOTE BRANCH_BETA BRANCH_PRODUCTION"
 
 clean:
-	python3 -c "import pathlib, shutil; r = pathlib.Path('.'); [shutil.rmtree(p, ignore_errors=True) for p in r.rglob('__pycache__') if p.is_dir()]; shutil.rmtree('.pytest_cache', ignore_errors=True); shutil.rmtree('.ruff_cache', ignore_errors=True)"
+	$(PYTHON) -c "import pathlib, shutil; r = pathlib.Path('.'); [shutil.rmtree(p, ignore_errors=True) for p in r.rglob('__pycache__') if p.is_dir()]; shutil.rmtree('.pytest_cache', ignore_errors=True); shutil.rmtree('.ruff_cache', ignore_errors=True)"
 	rm -f $(NAME).zip
 
 # Legacy / reference: local archive for manual upload or testing. Primary PG3 delivery is git branches (beta / production).
@@ -129,4 +175,34 @@ release:
 	cat "$$ROOT/$(STORE_INFO)"; \
 	echo ""
 
-.PHONY: check xml-check lint format-check black-check test clean zip beta production release
+# --- ws_debug_client exercises (exit after N inbound frames; no infinite monitor) ---
+
+ws-hello:
+	$(WS) --oneshot
+
+ws-list:
+	$(WS) --command '{"version":"1","action":"list_devices"}' --max-messages 2
+
+ws-get:
+	$(WS) --command '{"version":"1","action":"get","device_id":"00:00:00:00:00:00","characteristic":"ON"}' --max-messages 3
+
+ws-subscribe:
+	$(WS) --command '{"version":"1","action":"subscribe","device_id":"00:00:00:00:00:00","aid":1,"iid":1}' --max-messages 3
+
+ws-unsubscribe:
+	$(WS) --command '{"version":"1","action":"unsubscribe","device_id":"00:00:00:00:00:00","aid":1,"iid":1}' --max-messages 3
+
+ws-snapshot-device:
+	$(WS) --snapshot-device-id 00:00:00:00:00:00 --max-messages 4
+
+ws-snapshot-all:
+	$(WS) --snapshot-all --max-messages 25
+
+ws-raw:
+	$(WS) --raw --oneshot
+
+ws-smoke: ws-hello ws-list ws-get ws-subscribe ws-unsubscribe ws-snapshot-device ws-snapshot-all ws-raw
+	@echo "ws-smoke: finished ($(WS_HOST):$(WS_PORT))"
+
+.PHONY: check xml-check lint format-check black-check test test-unit test-integration help clean zip beta production release \
+	ws-smoke ws-hello ws-list ws-get ws-subscribe ws-unsubscribe ws-snapshot-device ws-snapshot-all ws-raw
