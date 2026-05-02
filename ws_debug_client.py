@@ -39,6 +39,10 @@ full snapshots without passing ``--snapshot-device-id`` by hand.
 
 Use ``--max-messages N`` or ``--oneshot`` to stop after N inbound frames instead
 of monitoring until Ctrl+C (scripts and ``make ws-*`` targets rely on this).
+
+Stdout/stderr are configured for line buffering (and write-through when the
+interpreter supports it) so output is timely when redirected to a file or pipe
+(``tee``, ``tail -f``).
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from datetime import datetime
 from typing import Any
 
@@ -54,6 +59,26 @@ from websockets.exceptions import ConnectionClosed
 
 
 PROTOCOL_VERSION = "1"
+
+
+def _configure_stdio_line_buffered() -> None:
+    """Use line-buffered (and write-through) text streams when supported.
+
+    Python block-buffers stdout when it is not a TTY (e.g. ``> log.txt``), which
+    delays what operators see in a file or downstream process. Prefer flushing
+    after each line / write when :meth:`io.TextIOWrapper.reconfigure` is available.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(line_buffering=True, write_through=True)
+        except (OSError, ValueError):
+            try:
+                reconfigure(line_buffering=True)
+            except (OSError, ValueError):
+                pass
 
 
 class _SnapshotAllState:
@@ -514,6 +539,7 @@ Hub ws_host / ws_port / optional ws_token are Custom Params on the Polyglot node
 
 
 def main() -> int:
+    _configure_stdio_line_buffered()
     parser = _build_parser()
     args = parser.parse_args()
     if args.max_messages is not None and args.max_messages < 1:
