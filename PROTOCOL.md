@@ -12,6 +12,16 @@ The hub may pair **multiple** HomeKit accessories at once. Every `event` include
 
 When this protocol includes all three keys (`device_id`, `aid`, `iid`), they identify one concrete HomeKit characteristic endpoint.
 
+## Request correlation (`id`) — multiplexed RPC
+
+Clients may send an optional **`id`** field on **`command`**, **`snapshot`**, and **`get`** (string or number; the hub echoes the same JSON value on replies).
+
+- When **`id`** is present, the hub **must** include the same **`id`** on the matching success payload (`ack` for command, `snapshot` / `get` bodies) **and** on **`error`** responses where **`for`** is `command`, `snapshot`, or `get`.
+- This allows **multiple in-flight** hub operations on one WebSocket without head-of-line blocking.
+- When **`id`** is omitted, behavior matches older hubs (replies also omit **`id`**); clients that issue concurrent RPCs without **`id`** cannot disambiguate responses and should serialize calls instead.
+
+Hello **`ack.capabilities.rpc`** (when present) advertises support: **`multiplex`** (boolean) and a short **`id_echo`** description.
+
 ## Protocol version policy
 
 - **`version`** (per message) and the hello **`ack.protocol`** field track the wire format. They stay aligned with the hub’s `PROTOCOL_VERSION` constant.
@@ -26,7 +36,7 @@ When the Node Server Custom Param **`ws_token`** is **non-empty**, the hub requi
 1. The first client message must be **`hello`** with a matching secret in field **`token`** or **`ws_token`** (string, compared in constant time).
 2. Any other message before a successful hello is rejected with **`error`** and the connection is closed.
 
-When **`ws_token`** is empty or unset, behavior matches older hubs: any action may be sent without hello ordering (though clients should still send **`hello`** to receive the bootstrap stream and capability advertisement).
+When **`ws_token`** is empty or unset, behavior matches older hubs: any action may be sent without hello ordering (though clients should still send **`hello`** to receive capability advertisement and the current pairing list on the **`ack`**).
 
 ## Client → Hub (`hello`)
 
@@ -81,6 +91,10 @@ When **`ws_token`** is empty or unset, behavior matches older hubs: any action m
   "capabilities": {
     "actions": ["hello", "command", "snapshot", "list_devices", "get", "subscribe", "unsubscribe"],
     "auth": "none",
+    "rpc": {
+      "multiplex": true,
+      "id_echo": "Optional client id on command/snapshot/get is echoed on matching replies."
+    },
     "events": {
       "mode": "filtered_after_subscribe",
       "description": "By default all HAP events are forwarded. After at least one successful subscribe, only matching (device_id, aid, iid) events are sent until the subscription set becomes empty (then defaults are restored)."
@@ -98,12 +112,13 @@ When **`ws_token`** is empty or unset, behavior matches older hubs: any action m
 }
 ```
 
-- **`warnings`** (optional): when present and non-empty, an array of structured notices so clients can log or surface hub-side issues in their own UI. Each object has **`level`** (`warning` or `error`), **`code`** (stable machine id), **`message`**, and optionally **`device_id`** and **`primary_aid`** when the notice applies to one pairing row. Omitted when there are no notices. The same array may be repeated on the bootstrap **`list_devices`** (see below).
-- **`device_ids`**: sorted list of paired accessories (same membership as `list_devices`), included for quick client startup without waiting for the bootstrap `list_devices` frame.
-- **`devices`**: same objects as in **`list_devices`** (see below): HAP **Accessory Information** metadata when the hub has loaded `/accessories` for that pairing. Optional keys may be omitted if unknown or not yet fetched.
+- **`warnings`** (optional): when present and non-empty, an array of structured notices so clients can log or surface hub-side issues in their own UI. Each object has **`level`** (`warning` or `error`), **`code`** (stable machine id), **`message`**, and optionally **`device_id`** and **`primary_aid`** when the notice applies to one pairing row. Omitted when there are no notices. The same array may be repeated on a client-requested or hub-initiated **`list_devices`** (see below).
+- **`device_ids`**: sorted list of paired accessories (same membership as **`devices`** and as **`list_devices`** when you request it).
+- **`devices`**: same objects as in **`list_devices`** (see below): HAP **Accessory Information** metadata when the hub has loaded `/accessories` for that pairing. Optional keys may be omitted if unknown or not yet fetched. Use this array at connect time; the hub does **not** send a separate **`list_devices`** message unless you request **`action: list_devices`** or the hub pushes one after pairing changes.
 - **`capabilities.auth`**: **`none`** if the hub does not require a token; **`token`** when `ws_token` is configured.
+- **`capabilities.rpc`** (optional): when present, **`multiplex`** indicates the hub echoes client **`id`** on `command` / `snapshot` / `get` replies; **`id_echo`** is a short human description.
 
-After this `ack`, the hub sends one **`list_devices`** message (current active pairings) on the same connection. It does **not** auto-send **`snapshot`** / **`get`**; clients request those for the devices they care about.
+After this **`ack`**, the hub does **not** automatically send **`list_devices`**; pairing membership and device rows are already in **`device_ids`** / **`devices`**. It does **not** auto-send **`snapshot`** / **`get`**; clients request those for the devices they care about. Send **`action: list_devices`** when you need a fresh **`list_devices`** message (same payload shape as below) or to align with proactive hub pushes after pairing changes.
 
 ## Hub → Client (`event`)
 
@@ -139,7 +154,8 @@ HomeKit accessory subscriptions/listeners are managed by the hub per pairing; `s
   "action": "command",
   "device_id": "<AccessoryPairingID lowercase>",
   "characteristic": "<enum name or UUID>",
-  "value": true
+  "value": true,
+  "id": "<optional client correlation id>"
 }
 ```
 
@@ -151,7 +167,8 @@ Success:
 {
   "version": "1",
   "action": "ack",
-  "for": "command"
+  "for": "command",
+  "id": "<echo when request included id>"
 }
 ```
 
@@ -162,7 +179,8 @@ Failure:
   "version": "1",
   "action": "error",
   "message": "reason",
-  "for": "command"
+  "for": "command",
+  "id": "<echo when request included id>"
 }
 ```
 
@@ -176,7 +194,8 @@ Request current readable values for a paired accessory (use at client startup to
 {
   "version": "1",
   "action": "snapshot",
-  "device_id": "<AccessoryPairingID lowercase>"
+  "device_id": "<AccessoryPairingID lowercase>",
+  "id": "<optional client correlation id>"
 }
 ```
 
@@ -189,6 +208,7 @@ Success:
   "version": "1",
   "action": "snapshot",
   "device_id": "<AccessoryPairingID lowercase>",
+  "id": "<echo when request included id>",
   "values": [
     {
       "characteristic": "CurrentTemperature",
@@ -209,7 +229,8 @@ Failure:
   "version": "1",
   "action": "error",
   "for": "snapshot",
-  "message": "reason"
+  "message": "reason",
+  "id": "<echo when request included id>"
 }
 ```
 
@@ -222,7 +243,8 @@ Read **selected** characteristics in one round trip (response shape matches `sna
   "version": "1",
   "action": "get",
   "device_id": "<AccessoryPairingID lowercase>",
-  "characteristics": ["On", "Brightness"]
+  "characteristics": ["On", "Brightness"],
+  "id": "<optional client correlation id>"
 }
 ```
 
@@ -237,6 +259,7 @@ Success:
   "version": "1",
   "action": "get",
   "device_id": "<AccessoryPairingID lowercase>",
+  "id": "<echo when request included id>",
   "values": [
     {
       "characteristic": "On",
@@ -279,7 +302,7 @@ Success: `action` `ack`, `for` `unsubscribe`, echoing `device_id`, `aid`, `iid`.
 
 ## Client → Hub (`list_devices`)
 
-Request the set of currently active paired accessories.
+Request the set of currently active paired accessories (same **`devices[]`** shape as hello **`ack`**). At connect time that list is already on the hello **`ack`**; send this when you need a fresh **`list_devices`** message (for example to align with proactive hub pushes after pair/unpair, or to re-fetch **`warnings`**).
 
 ```json
 {
@@ -368,13 +391,13 @@ When the layout exists but Accessory Information strings are still empty in the 
 
 The hub may also send `list_devices` proactively after pairing/unpairing state changes so connected clients can refresh membership without polling.
 
-The hub sends `list_devices` after `hello`/`ack` (bootstrap). Clients should request `snapshot` or `get` only for device(s) they care about.
+Clients should request `snapshot` or `get` only for device(s) they care about. Use hello **`ack`** **`devices`** (or an explicit **`list_devices`** request) for membership and metadata.
 
 ## Client guide: device type + capability discovery
 
 Clients that want "all thermostats", "all lights", "all switches/plugs", etc. should use a two-stage approach:
 
-1. **Membership + identity** (`hello` -> bootstrap `list_devices`):
+1. **Membership + identity** (hello **`ack`** **`devices`**, or explicit **`list_devices`** when you need a refresh):
    - Use `device_id` as the stable pairing key.
    - Use optional `manufacturer`, `model`, `name` on the pairing row for vendor/model filtering.
    - Use optional **`accessories[]`** to locate specific HAP classes by **`aid`** (e.g. `category` **9** or **`thermostat_like`**) on bridge/composite accessories.
@@ -397,7 +420,7 @@ Clients that want "all thermostats", "all lights", "all switches/plugs", etc. sh
 ### Suggested startup flow
 
 1. Send `hello`.
-2. Read bootstrap `list_devices`.
+2. Read the **`ack`** and use **`devices`** (or send **`list_devices`** and read that response if you prefer that message shape).
 3. For each candidate row, send `snapshot` (or `get` for a small characteristic set) and cache:
    - characteristic -> `(aid, iid)` mapping,
    - supported commandable characteristics,
@@ -435,12 +458,13 @@ async def main() -> None:
         ack = json.loads(await ws.recv())
         print("hello ack:", ack)
 
-        # Hub auto-sends list_devices after ack
-        devices = json.loads(await ws.recv())
-        print("bootstrap devices:", devices)
+        # Pairing list and metadata: use ack["devices"] at connect time.
+        # Optional: {"action": "list_devices"} if you need a dedicated list_devices frame
+        # (e.g. to match proactive hub pushes after pair/unpair).
+        devices_rows = ack.get("devices", [])
 
         # Request snapshots only for device(s) you care about.
-        for item in devices.get("devices", []):
+        for item in devices_rows:
             did = (item.get("device_id") or "").strip().lower()
             if not did:
                 continue

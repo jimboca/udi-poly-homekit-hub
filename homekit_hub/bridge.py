@@ -2068,11 +2068,28 @@ class HomeKitHubBridge:
             return ""
         return str(raw).strip()
 
+    @staticmethod
+    def _ws_merge_request_id(request: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        """Echo client ``id`` on RPC replies (``command`` / ``snapshot`` / ``get``) for multiplexed in-flight calls."""
+        rid = request.get("id")
+        if rid is None or rid == "":
+            return payload
+        merged = dict(payload)
+        merged["id"] = rid
+        return merged
+
     def _ws_capabilities(self) -> dict[str, Any]:
         need_token = bool(self._ws_expected_token())
         return {
             "actions": list(WS_PROTOCOL_ACTIONS),
             "auth": "token" if need_token else "none",
+            "rpc": {
+                "multiplex": True,
+                "id_echo": (
+                    "Optional client `id` (string or number, echoed as sent) on `command`, "
+                    "`snapshot`, and `get` is included on every matching success or `error` reply."
+                ),
+            },
             "events": {
                 "mode": "filtered_after_subscribe",
                 "description": (
@@ -2090,8 +2107,8 @@ class HomeKitHubBridge:
             self._ws_connection,
             host,
             port,
-            ping_interval=20,
-            ping_timeout=20,
+            ping_interval=45,
+            ping_timeout=90,
         )
 
     async def _ws_connection(self, ws: Any) -> None:
@@ -2110,7 +2127,7 @@ class HomeKitHubBridge:
             await self._detach_ws_client(ws)
 
     async def _handle_ws_hello(self, ws: Any, msg: dict[str, Any]) -> bool:
-        """Validate optional ``ws_token`` and send hello ``ack`` + bootstrap. False → do not mark authed."""
+        """Validate optional ``ws_token`` and send hello ``ack`` (``devices[]`` on the ack). False → not authed."""
         expected = self._ws_expected_token()
         if expected:
             got_raw = msg.get("token")
@@ -2155,7 +2172,6 @@ class HomeKitHubBridge:
         if list_warnings:
             ack_body["warnings"] = list_warnings
         await self._send_ws(ws, ack_body)
-        await self._send_bootstrap_list_devices(ws, devices_payload, list_warnings)
         return True
 
     async def _handle_ws_message(self, ws: Any, raw: str) -> None:
@@ -2307,20 +2323,6 @@ class HomeKitHubBridge:
             warnings.extend(row_warnings)
         return out, warnings
 
-    async def _send_bootstrap_list_devices(
-        self,
-        ws: Any,
-        devices_payload: list[dict[str, Any]],
-        warnings: list[dict[str, Any]],
-    ) -> None:
-        """Send initial ``list_devices`` after hello (same shape as proactive updates)."""
-        await self._send_ws(ws, _list_devices_ws_message(devices_payload, warnings))
-        self.log.debug(
-            "hello bootstrap: sent list_devices count=%d ids=%s",
-            len(devices_payload),
-            [d.get("device_id") for d in devices_payload],
-        )
-
     def _active_pairing_device_ids(self) -> list[str]:
         """Sorted AccessoryPairingID values for aiohomekit pairings in memory.
 
@@ -2435,12 +2437,15 @@ class HomeKitHubBridge:
         if not pairing:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "get",
-                    "message": "unknown device_id or no active pairing",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "get",
+                        "message": "unknown device_id or no active pairing",
+                    },
+                ),
             )
             return
         specs: list[str] = []
@@ -2464,12 +2469,15 @@ class HomeKitHubBridge:
         if not specs:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "get",
-                    "message": "provide characteristic (string) or characteristics (string array)",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "get",
+                        "message": "provide characteristic (string) or characteristics (string array)",
+                    },
+                ),
             )
             return
 
@@ -2502,24 +2510,30 @@ class HomeKitHubBridge:
                 self.log.exception("get: list_accessories_and_characteristics failed")
                 await self._send_ws(
                     ws,
-                    {
-                        "version": PROTOCOL_VERSION,
-                        "action": "error",
-                        "for": "get",
-                        "message": str(ex),
-                    },
+                    self._ws_merge_request_id(
+                        msg,
+                        {
+                            "version": PROTOCOL_VERSION,
+                            "action": "error",
+                            "for": "get",
+                            "message": str(ex),
+                        },
+                    ),
                 )
                 return
             bad = try_build()
         if bad is not None:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "get",
-                    "message": f"unknown characteristic {bad!r}",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "get",
+                        "message": f"unknown characteristic {bad!r}",
+                    },
+                ),
             )
             return
 
@@ -2529,12 +2543,15 @@ class HomeKitHubBridge:
             self.log.exception("get: get_characteristics failed")
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "get",
-                    "message": str(ex),
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "get",
+                        "message": str(ex),
+                    },
+                ),
             )
             return
 
@@ -2556,12 +2573,15 @@ class HomeKitHubBridge:
 
         await self._send_ws(
             ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "get",
-                "device_id": device_id,
-                "values": values,
-            },
+            self._ws_merge_request_id(
+                msg,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "get",
+                    "device_id": device_id,
+                    "values": values,
+                },
+            ),
         )
 
     async def _handle_subscribe(self, ws: Any, msg: dict[str, Any]) -> None:
@@ -2691,35 +2711,44 @@ class HomeKitHubBridge:
         if not pairing:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "command",
-                    "message": "unknown device_id or no active pairing",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "command",
+                        "message": "unknown device_id or no active pairing",
+                    },
+                ),
             )
             return
         if not isinstance(char_spec, str):
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "command",
-                    "message": "characteristic must be string",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "command",
+                        "message": "characteristic must be string",
+                    },
+                ),
             )
             return
         resolved = _resolve_aid_iid(pairing, char_spec)
         if not resolved:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "command",
-                    "message": f"unknown characteristic {char_spec!r}",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "command",
+                        "message": f"unknown characteristic {char_spec!r}",
+                    },
+                ),
             )
             return
         aid, iid = resolved
@@ -2728,29 +2757,38 @@ class HomeKitHubBridge:
             if err:
                 await self._send_ws(
                     ws,
-                    {
-                        "version": PROTOCOL_VERSION,
-                        "action": "error",
-                        "for": "command",
-                        "message": str(err),
-                    },
+                    self._ws_merge_request_id(
+                        msg,
+                        {
+                            "version": PROTOCOL_VERSION,
+                            "action": "error",
+                            "for": "command",
+                            "message": str(err),
+                        },
+                    ),
                 )
                 return
         except Exception as ex:
             self.log.exception("put_characteristics failed")
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "command",
-                    "message": str(ex),
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "command",
+                        "message": str(ex),
+                    },
+                ),
             )
             return
         await self._send_ws(
             ws,
-            {"version": PROTOCOL_VERSION, "action": "ack", "for": "command"},
+            self._ws_merge_request_id(
+                msg,
+                {"version": PROTOCOL_VERSION, "action": "ack", "for": "command"},
+            ),
         )
 
     async def _handle_snapshot(self, ws: Any, msg: dict) -> None:
@@ -2759,12 +2797,15 @@ class HomeKitHubBridge:
         if not pairing:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "snapshot",
-                    "message": "unknown device_id or no active pairing",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "snapshot",
+                        "message": "unknown device_id or no active pairing",
+                    },
+                ),
             )
             return
 
@@ -2776,12 +2817,15 @@ class HomeKitHubBridge:
                 self.log.exception("snapshot: list_accessories_and_characteristics failed")
                 await self._send_ws(
                     ws,
-                    {
-                        "version": PROTOCOL_VERSION,
-                        "action": "error",
-                        "for": "snapshot",
-                        "message": str(ex),
-                    },
+                    self._ws_merge_request_id(
+                        msg,
+                        {
+                            "version": PROTOCOL_VERSION,
+                            "action": "error",
+                            "for": "snapshot",
+                            "message": str(ex),
+                        },
+                    ),
                 )
                 return
             readable = _readable_characteristics(pairing)
@@ -2789,12 +2833,15 @@ class HomeKitHubBridge:
         if not readable:
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "snapshot",
-                    "message": "no readable characteristics after HAP /accessories refresh",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "snapshot",
+                        "message": "no readable characteristics after HAP /accessories refresh",
+                    },
+                ),
             )
             return
 
@@ -2806,12 +2853,15 @@ class HomeKitHubBridge:
             self.log.exception("get_characteristics failed")
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "snapshot",
-                    "message": str(ex),
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "snapshot",
+                        "message": str(ex),
+                    },
+                ),
             )
             return
 
@@ -2833,12 +2883,15 @@ class HomeKitHubBridge:
 
         await self._send_ws(
             ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "snapshot",
-                "device_id": device_id,
-                "values": values,
-            },
+            self._ws_merge_request_id(
+                msg,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "snapshot",
+                    "device_id": device_id,
+                    "values": values,
+                },
+            ),
         )
 
     async def _handle_list_devices(self, ws: Any, msg: dict) -> None:
@@ -3237,7 +3290,7 @@ class HomeKitHubBridge:
 
         Fresh PIN pairing never goes through ``load_pairing``, so without mirroring here
         ``self._hk.pairings`` and ``self._hk.aliases`` stay empty: ``list_devices`` reports
-        no devices, WebSocket hello bootstrap sends ``count=0``, and shutdown paths that
+        no devices, hello ``ack`` carries an empty ``devices[]``, and shutdown paths that
         walk top-level aliases miss the session even though it is active.
         """
         if not self._hk or not pairing:

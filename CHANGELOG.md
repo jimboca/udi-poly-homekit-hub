@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-02
+
+### Added
+
+- **WebSocket request correlation:** optional **`id`** on **`command`**, **`snapshot`**, and **`get`**; the hub echoes it on matching **`ack`**, **`snapshot`**, **`get`**, and **`error`** (`for` those actions) so clients can multiplex concurrent RPCs on one connection. Hello **`ack.capabilities.rpc`** may advertise **`multiplex`**. Documented in **`PROTOCOL.md`**.
+
+### Changed
+
+- **WebSocket hello:** the hub no longer sends an automatic **`list_devices`** frame immediately after hello **`ack`**. Pairing membership and **`devices[]`** metadata are on the **`ack`** (`device_ids` + `devices`). Clients that waited for a second inbound **`list_devices`** should use **`ack["devices"]`** or send **`action: list_devices`**. Proactive **`list_devices`** after pairing changes is unchanged.
+
 ## [0.2.3] - 2026-05-01
 
 ### Added
