@@ -96,6 +96,7 @@ Runtime logs under `logs/` are **local-only**: the directory is listed in `.giti
 
 - **`handler_params`** only applies to **this** Node Server’s Polyglot **Custom Configuration Parameters**. It does not register remote plugins.
 - **Other Node Servers** connect as **WebSocket clients**. The hub **fan-outs** each HAP `event` to **all** connected clients. Each client filters by `device_id` (and characteristic) in its own code.
+- **`hello` `ack`** and proactive **`list_devices`** **`devices[]`** rows include HAP **Accessory Information** when the accessory responds: **`category`** (integer, e.g. **9** = thermostat) and **`category_label`** (HAP enum name when known), plus **`manufacturer`**, **`model`**, **`name`**, **`serial_number`**, etc. The hub issues **reads** and may **refresh `/accessories`** so **category** is populated for healthy pairings; downstream Node Servers (e.g. **udi-poly-ecobee** in HomeKit mode) can rely on **`category`** / **`category_label`** for device-type filtering after pairing succeeds.
 
 ## References
 

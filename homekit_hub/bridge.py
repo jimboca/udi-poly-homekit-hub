@@ -40,6 +40,7 @@ from aiohomekit import Controller as HKController
 from aiohomekit.controller.abstract import TransportType
 from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
+from aiohomekit.model.services.service_types import ServicesTypes
 from aiohomekit.uuid import normalize_uuid
 
 try:
@@ -48,6 +49,38 @@ except Exception:  # pragma: no cover - optional typing surface
     _HapCategories = None
 
 PROTOCOL_VERSION = "1"
+
+# Optional ``warnings`` on hello ``ack`` / ``list_devices`` (additive; clients may ignore).
+WS_NOTICE_LEVEL_WARNING = "warning"
+WS_NOTICE_LEVEL_ERROR = "error"
+WS_NOTICE_CODE_ACCESSORIES_LOAD_FAILED = "accessories_load_failed"
+WS_NOTICE_CODE_ACCESSORIES_REFRESH_FAILED = "accessories_refresh_failed"
+WS_NOTICE_CODE_GET_CHARACTERISTICS_FAILED = "get_characteristics_failed"
+WS_NOTICE_CODE_METADATA_CATEGORY_MISSING = "metadata_category_missing"
+WS_NOTICE_CODE_METADATA_INCOMPLETE = "metadata_incomplete"
+WS_NOTICE_CODE_METADATA_NO_AI_CHARS = "metadata_no_accessory_info_characteristics"
+WS_NOTICE_CODE_METADATA_NO_REPRESENTATIVE = "metadata_no_representative_accessory"
+WS_NOTICE_CODE_HUB_CONTROLLER_NOT_READY = "hub_controller_not_ready"
+WS_NOTICE_CODE_LIST_DEVICES_INVALID_DEVICE_ID = "list_devices_invalid_device_id"
+
+
+def _ws_client_notice(
+    *,
+    level: str,
+    code: str,
+    message: str,
+    device_id: Optional[str] = None,
+    primary_aid: Optional[int] = None,
+) -> dict[str, Any]:
+    """One structured notice for WebSocket clients (``warnings`` array)."""
+    row: dict[str, Any] = {"level": level, "code": code, "message": message}
+    if device_id:
+        row["device_id"] = str(device_id).strip().lower()
+    if primary_aid is not None:
+        row["primary_aid"] = int(primary_aid)
+    return row
+
+
 # Client → hub actions supported by this build (advertised in hello ``ack.capabilities``).
 WS_PROTOCOL_ACTIONS: tuple[str, ...] = (
     "hello",
@@ -642,12 +675,95 @@ def _accessory_info_category_value(acc) -> Optional[int]:
     return None
 
 
+def _build_thermostat_like_service_uuids() -> frozenset[str]:
+    out: list[str] = []
+    for name in ("THERMOSTAT", "HEATER_COOLER"):
+        if not hasattr(ServicesTypes, name):
+            continue
+        try:
+            out.append(normalize_uuid(getattr(ServicesTypes, name)))
+        except Exception:
+            continue
+    return frozenset(out)
+
+
+_THERMOSTAT_LIKE_SERVICE_UUIDS: frozenset[str] = _build_thermostat_like_service_uuids()
+
+
+def _accessory_information_service_uuid_normalized() -> Optional[str]:
+    """Normalized UUID for HAP **Accessory Information** (``ServicesTypes.ACCESSORY_INFORMATION``)."""
+    if not hasattr(ServicesTypes, "ACCESSORY_INFORMATION"):
+        return None
+    try:
+        return normalize_uuid(getattr(ServicesTypes, "ACCESSORY_INFORMATION"))
+    except Exception:
+        return None
+
+
+_ACCESSORY_INFORMATION_SERVICE_UUID_NORM: Optional[str] = (
+    _accessory_information_service_uuid_normalized()
+)
+
+
+def _services_for_accessory_information_metadata(acc: Any) -> list[Any]:
+    """
+    Services whose metadata feeds ``list_devices`` Accessory Information fields.
+
+    Ecobee (and similar) accessories expose **Name** on both Accessory Information (primary
+    label, snapshot ``NAME`` at low ``iid``) and on Motion / Occupancy services (e.g.
+    "Kitchen Motion"). Scanning *all* services made ``name`` depend on iteration order; we
+    only ingest AI characteristics from the standard **Accessory Information** service when
+    it is present on the model.
+    """
+    all_svcs = list(getattr(acc, "services", None) or [])
+    nu_ai = _ACCESSORY_INFORMATION_SERVICE_UUID_NORM
+    if not nu_ai:
+        return all_svcs
+    picked = [svc for svc in all_svcs if _normalized_service_type_uuid(svc) == nu_ai]
+    return picked if picked else all_svcs
+
+
+def _normalized_service_type_uuid(svc: Any) -> str:
+    try:
+        t = getattr(svc, "type", None)
+        if t is None:
+            return ""
+        return normalize_uuid(t)
+    except Exception:
+        return ""
+
+
+def _accessory_has_thermostat_like_service(acc) -> bool:
+    """True when ``acc`` exposes Thermostat or Heater Cooler HAP services."""
+    if not acc:
+        return False
+    svcs = getattr(acc, "services", None)
+    if not svcs:
+        return False
+    for svc in svcs:
+        nu = _normalized_service_type_uuid(svc)
+        if nu and nu in _THERMOSTAT_LIKE_SERVICE_UUIDS:
+            return True
+    return False
+
+
+def _prefer_accessory_with_thermostat_service(ordered: list[Any]) -> Optional[Any]:
+    """Lowest ``aid`` among accessories that expose thermostat-like services (Ecobee bridge layout)."""
+    picks = [a for a in ordered if _accessory_has_thermostat_like_service(a)]
+    if not picks:
+        return None
+    return min(picks, key=lambda a: int(getattr(a, "aid", 0) or 0))
+
+
 def _representative_accessory(pairing) -> Any:
     """Pick one accessory whose Accessory Information populates ``list_devices`` metadata.
 
     For a standalone device this is typically ``aid`` 1. For a HomeKit **bridge** pairing,
     skip accessories that advertise category **Bridge** when other accessories exist so
-    clients see the first non-bridge child (e.g. thermostat) when that heuristic applies.
+    clients see a meaningful child. When **Category** is missing from Accessory Information
+    (common on Ecobee), prefer the accessory that exposes **Thermostat** / **Heater Cooler**
+    services so metadata and ``primary_aid`` match the climate endpoint—not a separate
+    Occupancy child that may share the lowest ``aid``.
     """
     accs = getattr(pairing, "accessories", None)
     if not accs:
@@ -662,8 +778,93 @@ def _representative_accessory(pairing) -> Any:
         if cat is not None and cat != bridge_id:
             non_bridge.append(a)
     if non_bridge:
-        return non_bridge[0]
+        therm_nb = [a for a in non_bridge if _accessory_has_thermostat_like_service(a)]
+        if therm_nb:
+            return min(therm_nb, key=lambda a: int(getattr(a, "aid", 0) or 0))
+        return min(non_bridge, key=lambda a: int(getattr(a, "aid", 0) or 0))
+    therm_first = _prefer_accessory_with_thermostat_service(ordered)
+    if therm_first is not None:
+        return therm_first
     return ordered[0]
+
+
+def _infer_thermostat_category_from_services(pairing, entry: dict[str, Any]) -> None:
+    """If **Category** is absent from AI reads, infer thermostat (9) from HAP services."""
+    if entry.get("category") is not None:
+        return
+    accs = getattr(pairing, "accessories", None)
+    if not accs:
+        return
+    for acc in sorted(accs, key=lambda a: int(getattr(a, "aid", 0) or 0)):
+        if not _accessory_has_thermostat_like_service(acc):
+            continue
+        entry["category"] = 9
+        cl = _category_id_to_label(9)
+        if cl:
+            entry["category_label"] = cl
+        try:
+            entry["primary_aid"] = int(getattr(acc, "aid", 0) or 0)
+        except (TypeError, ValueError):
+            entry["primary_aid"] = 0
+        return
+
+
+def _accessory_summaries_for_pairing(pairing) -> list[dict[str, Any]]:
+    """One summary dict per HAP accessory (``aid``) for ``list_devices`` / hello ``devices[]``.
+
+    Built from the cached ``/accessories`` model only (no extra HAP GET per accessory).
+    When Accessory Information omits **Category** but Thermostat / Heater Cooler services are
+    present, **category** / **category_label** are filled with thermostat (9) and
+    **category_inferred** is ``True``. Plugins can filter rows where ``category`` == 9 or
+    ``thermostat_like`` is true without relying on the pairing-level representative row alone.
+    """
+    accs = getattr(pairing, "accessories", None)
+    if not accs:
+        return []
+    out: list[dict[str, Any]] = []
+    for acc in sorted(accs, key=lambda a: int(getattr(a, "aid", 0) or 0)):
+        try:
+            aid = int(getattr(acc, "aid", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        meta = _accessory_information_metadata(acc)
+        cat_raw = _accessory_info_category_value(acc)
+        thermostat_like = _accessory_has_thermostat_like_service(acc)
+        cat = cat_raw
+        inferred = False
+        if cat is None and thermostat_like:
+            cat = 9
+            inferred = True
+        row: dict[str, Any] = {"aid": aid}
+        for key in ("name", "manufacturer", "model", "serial_number", "firmware_revision"):
+            v = meta.get(key)
+            if isinstance(v, str) and v.strip():
+                row[key] = v.strip()
+        if cat is not None:
+            row["category"] = cat
+            cl = _category_id_to_label(cat)
+            if cl:
+                row["category_label"] = cl
+        if inferred:
+            row["category_inferred"] = True
+        if thermostat_like:
+            row["thermostat_like"] = True
+        out.append(row)
+    return out
+
+
+def _accessories_imply_thermostat_class(accessories: Any) -> bool:
+    """True when per-accessory summaries already expose a thermostat (hint for warnings)."""
+    if not isinstance(accessories, list):
+        return False
+    for item in accessories:
+        if not isinstance(item, dict):
+            continue
+        if item.get("category") == 9:
+            return True
+        if item.get("thermostat_like"):
+            return True
+    return False
 
 
 def _characteristic_display_string(ch) -> str:
@@ -708,12 +909,29 @@ def _value_to_meta_string(val: Any) -> str:
     return str(val).strip()
 
 
+def _accessory_information_metadata_needs_hap_reads(static: dict[str, Any]) -> bool:
+    """Return True when cached Accessory Information is incomplete and HAP GETs may help.
+
+    Downstream clients (e.g. HomeKit-mode Ecobee) rely on **category** and **category_label**
+    in ``list_devices`` / hello ``devices[]``. Previously we only issued reads when
+    **Manufacturer** was empty, which skipped **Category** reads when manufacturer was
+    already present in the cached ``/accessories`` model.
+    """
+    if static.get("category") is None:
+        return True
+    if not (static.get("manufacturer") or "").strip():
+        return True
+    if not (static.get("model") or "").strip():
+        return True
+    return False
+
+
 def _accessory_information_metadata(acc) -> dict[str, Any]:
     """Fields from the HAP Accessory Information service (cached model / last /accessories)."""
     out: dict[str, Any] = {}
     if not acc:
         return out
-    for svc in acc.services:
+    for svc in _services_for_accessory_information_metadata(acc):
         for ch in svc.characteristics:
             label = _accessory_info_char_label(ch)
             if not label:
@@ -746,18 +964,27 @@ def _accessory_information_metadata(acc) -> dict[str, Any]:
 
 
 async def _accessory_information_metadata_with_reads(
-    pairing, acc, log: Optional[logging.Logger] = None
+    pairing,
+    acc,
+    log: Optional[logging.Logger] = None,
+    *,
+    client_notices: Optional[list[dict[str, Any]]] = None,
+    notice_device_id: str = "",
 ) -> dict[str, Any]:
-    """Accessory Information from the in-memory model, then HAP reads if **Manufacturer** is still empty.
+    """Accessory Information from the in-memory model, then HAP reads when metadata is incomplete.
 
-    Many accessories omit string values from the initial ``/accessories`` JSON; a
-    ``get_characteristics`` pass is required before **Manufacturer** / **Model** / **Name**
-    appear, which clients use for filtering (e.g. Ecobee thermostats).
+    Many accessories omit values from the initial ``/accessories`` JSON; a
+    ``get_characteristics`` pass is often required before **Category**, **Manufacturer**,
+    **Model**, etc. appear. Clients filter on **category** (e.g. thermostat = 9) as well
+    as vendor strings.
+
+    When ``client_notices`` is provided, structured **warning** / **error** objects are
+    appended for downstream Node Servers to surface in their UI or logs.
     """
     static = _accessory_information_metadata(acc)
     if not acc or not pairing:
         return static
-    if static.get("manufacturer"):
+    if not _accessory_information_metadata_needs_hap_reads(static):
         return static
 
     aid = acc.aid
@@ -782,6 +1009,23 @@ async def _accessory_information_metadata_with_reads(
                 "for aid=%s (cached model may be incomplete)",
                 aid,
             )
+        if (
+            client_notices is not None
+            and notice_device_id
+            and _accessory_information_metadata_needs_hap_reads(static)
+        ):
+            client_notices.append(
+                _ws_client_notice(
+                    level=WS_NOTICE_LEVEL_WARNING,
+                    code=WS_NOTICE_CODE_METADATA_NO_AI_CHARS,
+                    message=(
+                        "No Accessory Information characteristics matched in the cached model; "
+                        "metadata may be incomplete until /accessories refreshes"
+                    ),
+                    device_id=notice_device_id,
+                    primary_aid=int(getattr(acc, "aid", 0) or 0),
+                )
+            )
         return static
     try:
         result = await pairing.get_characteristics(pairs)
@@ -792,6 +1036,16 @@ async def _accessory_information_metadata_with_reads(
                 aid,
                 len(pairs),
                 exc_info=True,
+            )
+        if client_notices is not None and notice_device_id:
+            client_notices.append(
+                _ws_client_notice(
+                    level=WS_NOTICE_LEVEL_ERROR,
+                    code=WS_NOTICE_CODE_GET_CHARACTERISTICS_FAILED,
+                    message="get_characteristics failed while loading Accessory Information metadata",
+                    device_id=notice_device_id,
+                    primary_aid=int(getattr(acc, "aid", 0) or 0),
+                )
             )
         return static
 
@@ -837,35 +1091,174 @@ async def _accessory_information_metadata_with_reads(
             merged[json_key] = s
     if configured_name and not merged.get("name"):
         merged["name"] = configured_name
-    if log and not merged.get("manufacturer"):
+    if log and _accessory_information_metadata_needs_hap_reads(merged):
         log.debug(
-            "list_devices metadata: manufacturer still empty after read aid=%s "
-            "requested=%d static_keys=%s",
+            "list_devices metadata: incomplete after get_characteristics aid=%s "
+            "requested_pairs=%d merged_keys=%s",
             aid,
             len(pairs),
-            list(static.keys()),
+            sorted(merged.keys()),
+        )
+    if (
+        client_notices is not None
+        and notice_device_id
+        and merged.get("category") is not None
+        and _accessory_information_metadata_needs_hap_reads(merged)
+    ):
+        client_notices.append(
+            _ws_client_notice(
+                level=WS_NOTICE_LEVEL_WARNING,
+                code=WS_NOTICE_CODE_METADATA_INCOMPLETE,
+                message=(
+                    "Accessory Information is still missing manufacturer and/or model after HAP read"
+                ),
+                device_id=notice_device_id,
+                primary_aid=int(getattr(acc, "aid", 0) or 0),
+            )
         )
     return merged
 
 
 async def _device_list_entry_resolved(
     device_id: str, pairing, log: Optional[logging.Logger] = None
-) -> dict[str, Any]:
-    """One ``list_devices`` / hello ``devices[]`` row: ``device_id`` plus optional HAP identity."""
-    entry: dict[str, Any] = {"device_id": device_id}
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """One ``list_devices`` / hello ``devices[]`` row plus optional client ``warnings`` entries."""
+    canon = str(device_id or "").strip().lower()
+    entry: dict[str, Any] = {"device_id": canon}
+    client_notices: list[dict[str, Any]] = []
     if not pairing:
-        return entry
-    acc = _representative_accessory(pairing)
-    if not acc:
-        return entry
-    meta = await _accessory_information_metadata_with_reads(pairing, acc, log)
+        return entry, client_notices
+
+    meta: dict[str, Any] = {}
+    acc: Any = None
+
+    for attempt in range(2):
+        if attempt == 1:
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception:
+                if log:
+                    log.debug(
+                        "list_devices metadata: list_accessories_and_characteristics retry failed "
+                        "device_id=%s",
+                        device_id,
+                        exc_info=True,
+                    )
+                client_notices.append(
+                    _ws_client_notice(
+                        level=WS_NOTICE_LEVEL_ERROR,
+                        code=WS_NOTICE_CODE_ACCESSORIES_REFRESH_FAILED,
+                        message=(
+                            "list_accessories_and_characteristics failed while refreshing metadata "
+                            "for Accessory Information"
+                        ),
+                        device_id=device_id,
+                        primary_aid=(int(getattr(acc, "aid", 0) or 0) if acc else None),
+                    )
+                )
+                break
+
+        acc = _representative_accessory(pairing)
+        if not acc:
+            meta = {}
+            if getattr(pairing, "accessories", None):
+                client_notices.append(
+                    _ws_client_notice(
+                        level=WS_NOTICE_LEVEL_WARNING,
+                        code=WS_NOTICE_CODE_METADATA_NO_REPRESENTATIVE,
+                        message=(
+                            "Could not pick a representative accessory for list_devices metadata "
+                            "(accessories present but layout unexpected)"
+                        ),
+                        device_id=device_id,
+                    )
+                )
+            break
+
+        meta = await _accessory_information_metadata_with_reads(
+            pairing,
+            acc,
+            log,
+            client_notices=client_notices,
+            notice_device_id=device_id,
+        )
+
+        if meta.get("category") is not None:
+            break
+
+        if attempt == 0 and getattr(pairing, "accessories", None):
+            if log:
+                log.debug(
+                    "list_devices metadata: category missing from Accessory Information; "
+                    "refreshing /accessories device_id=%s primary_aid=%s",
+                    device_id,
+                    getattr(acc, "aid", None),
+                )
+            continue
+        break
+
     if meta:
         entry.update(meta)
-    try:
-        entry["primary_aid"] = int(getattr(acc, "aid", 0) or 0)
-    except (TypeError, ValueError):
-        entry["primary_aid"] = 0
-    return entry
+    if acc:
+        try:
+            entry["primary_aid"] = int(getattr(acc, "aid", 0) or 0)
+        except (TypeError, ValueError):
+            entry["primary_aid"] = 0
+
+    if pairing:
+        _infer_thermostat_category_from_services(pairing, entry)
+
+    accessory_summaries: list[dict[str, Any]] = []
+    if pairing:
+        accessory_summaries = _accessory_summaries_for_pairing(pairing)
+        if accessory_summaries:
+            entry["accessories"] = accessory_summaries
+
+    if (
+        pairing
+        and getattr(pairing, "accessories", None)
+        and entry.get("category") is None
+        and "primary_aid" in entry
+        and not _accessories_imply_thermostat_class(accessory_summaries)
+    ):
+        if log:
+            log.warning(
+                "list_devices metadata: category still missing after Accessory Information reads "
+                "and optional /accessories refresh device_id=%s primary_aid=%s entry_keys=%s",
+                device_id,
+                entry.get("primary_aid"),
+                sorted(k for k in entry.keys() if k != "device_id"),
+            )
+        client_notices.append(
+            _ws_client_notice(
+                level=WS_NOTICE_LEVEL_WARNING,
+                code=WS_NOTICE_CODE_METADATA_CATEGORY_MISSING,
+                message=(
+                    "HAP category is missing from Accessory Information after reads and optional "
+                    "/accessories refresh; device-type filtering in downstream clients may not work"
+                ),
+                device_id=device_id,
+                primary_aid=entry.get("primary_aid"),
+            )
+        )
+    # PROTOCOL: ``device_id`` is the stable pairing id (events, snapshot, get). Metadata must
+    # never clobber or clear it (e.g. accidental keys in merged dicts).
+    entry["device_id"] = canon
+    return entry, client_notices
+
+
+def _list_devices_ws_message(
+    devices: list[dict[str, Any]], warnings: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Hub → client ``list_devices`` JSON (optional ``warnings``)."""
+    msg: dict[str, Any] = {
+        "version": PROTOCOL_VERSION,
+        "action": "list_devices",
+        "devices": devices,
+    }
+    if warnings:
+        msg["warnings"] = warnings
+    return msg
 
 
 class HomeKitHubBridge:
@@ -1486,7 +1879,8 @@ class HomeKitHubBridge:
             pairing = self._hk.aliases.pop(alias, None)
             if pairing:
                 pid = pairing.id
-                self._hk.pairings.pop(pid, None)
+                pid_key = str(pid).strip().lower() if pid else ""
+                self._hk.pairings.pop(pid_key, None)
                 try:
                     await pairing.close()
                 except Exception:
@@ -1741,21 +2135,27 @@ class HomeKitHubBridge:
                 except Exception:
                     pass
                 return False
-        devices_payload = await self._build_list_devices_payload()
-        device_ids = [str(d.get("device_id") or "").strip().lower() for d in devices_payload]
-        await self._send_ws(
-            ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "ack",
-                "for": "hello",
-                "protocol": PROTOCOL_VERSION,
-                "device_ids": device_ids,
-                "devices": devices_payload,
-                "capabilities": self._ws_capabilities(),
-            },
-        )
-        await self._send_bootstrap_list_devices(ws, devices_payload)
+        devices_payload, list_warnings = await self._build_list_devices_payload()
+        device_ids = [
+            x
+            for x in (
+                str(d.get("device_id") or "").strip().lower() for d in devices_payload
+            )
+            if x
+        ]
+        ack_body: dict[str, Any] = {
+            "version": PROTOCOL_VERSION,
+            "action": "ack",
+            "for": "hello",
+            "protocol": PROTOCOL_VERSION,
+            "device_ids": device_ids,
+            "devices": devices_payload,
+            "capabilities": self._ws_capabilities(),
+        }
+        if list_warnings:
+            ack_body["warnings"] = list_warnings
+        await self._send_ws(ws, ack_body)
+        await self._send_bootstrap_list_devices(ws, devices_payload, list_warnings)
         return True
 
     async def _handle_ws_message(self, ws: Any, raw: str) -> None:
@@ -1833,36 +2233,88 @@ class HomeKitHubBridge:
             },
         )
 
-    async def _build_list_devices_payload(self) -> list[dict[str, Any]]:
-        """Paired hub rows for ``list_devices`` / hello, with optional Accessory Information metadata."""
+    async def _build_list_devices_payload(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Paired hub rows for ``list_devices`` / hello, with optional Accessory Information metadata.
+
+        Returns ``(devices, warnings)`` where ``warnings`` is a list of structured client notices
+        (same array attached to hello ``ack`` and each ``list_devices`` when non-empty).
+        """
         device_ids = await self._active_pairing_device_ids_stable()
         out: list[dict[str, Any]] = []
+        warnings: list[dict[str, Any]] = []
         for did in device_ids:
-            pairing = self._pairing_for_device_id(did)
+            nd = str(did or "").strip().lower()
+            if not nd:
+                self.log.error(
+                    "list_devices: skipping empty pairing id in active list (raw=%r)",
+                    did,
+                )
+                warnings.append(
+                    _ws_client_notice(
+                        level=WS_NOTICE_LEVEL_ERROR,
+                        code=WS_NOTICE_CODE_LIST_DEVICES_INVALID_DEVICE_ID,
+                        message=(
+                            "Hub internal error: empty pairing identifier in active pairings list; "
+                            "this entry was skipped"
+                        ),
+                    )
+                )
+                continue
+            pairing = self._pairing_for_device_id(nd)
             if pairing and not pairing.accessories:
                 try:
                     await pairing.list_accessories_and_characteristics()
                 except Exception:
                     self.log.debug(
                         "list_devices: list_accessories_and_characteristics failed for metadata device_id=%s",
-                        did,
+                        nd,
                         exc_info=True,
                     )
-            out.append(await _device_list_entry_resolved(did, pairing, self.log))
-        return out
+                    warnings.append(
+                        _ws_client_notice(
+                            level=WS_NOTICE_LEVEL_ERROR,
+                            code=WS_NOTICE_CODE_ACCESSORIES_LOAD_FAILED,
+                            message=(
+                                "list_accessories_and_characteristics failed while loading the "
+                                "accessory database for this pairing"
+                            ),
+                            device_id=nd,
+                        )
+                    )
+            row, row_warnings = await _device_list_entry_resolved(nd, pairing, self.log)
+            row["device_id"] = nd
+            fin = str(row.get("device_id") or "").strip().lower()
+            if not fin:
+                self.log.error(
+                    "list_devices: row missing device_id after resolve (unexpected) raw_id=%r row=%r",
+                    did,
+                    row,
+                )
+                warnings.append(
+                    _ws_client_notice(
+                        level=WS_NOTICE_LEVEL_ERROR,
+                        code=WS_NOTICE_CODE_LIST_DEVICES_INVALID_DEVICE_ID,
+                        message=(
+                            "Hub internal error: list_devices row was built without a device_id; "
+                            "this entry was omitted from the payload"
+                        ),
+                    )
+                )
+                continue
+            out.append(row)
+            warnings.extend(row_warnings)
+        return out, warnings
 
     async def _send_bootstrap_list_devices(
-        self, ws: Any, devices_payload: list[dict[str, Any]]
+        self,
+        ws: Any,
+        devices_payload: list[dict[str, Any]],
+        warnings: list[dict[str, Any]],
     ) -> None:
         """Send initial ``list_devices`` after hello (same shape as proactive updates)."""
-        await self._send_ws(
-            ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "list_devices",
-                "devices": devices_payload,
-            },
-        )
+        await self._send_ws(ws, _list_devices_ws_message(devices_payload, warnings))
         self.log.debug(
             "hello bootstrap: sent list_devices count=%d ids=%s",
             len(devices_payload),
@@ -2395,14 +2847,19 @@ class HomeKitHubBridge:
             self.log.debug("list_devices: hk controller is not ready; returning empty list")
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "list_devices",
-                    "devices": [],
-                },
+                _list_devices_ws_message(
+                    [],
+                    [
+                        _ws_client_notice(
+                            level=WS_NOTICE_LEVEL_ERROR,
+                            code=WS_NOTICE_CODE_HUB_CONTROLLER_NOT_READY,
+                            message="HomeKit controller is not ready; paired device list is empty",
+                        )
+                    ],
+                ),
             )
             return
-        devices_payload = await self._build_list_devices_payload()
+        devices_payload, list_warnings = await self._build_list_devices_payload()
         device_ids = [str(d.get("device_id") or "") for d in devices_payload]
         pairings = getattr(self._hk, "pairings", None)
         aliases = getattr(self._hk, "aliases", None)
@@ -2420,14 +2877,7 @@ class HomeKitHubBridge:
             alias_ids,
             device_ids,
         )
-        await self._send_ws(
-            ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "list_devices",
-                "devices": devices_payload,
-            },
-        )
+        await self._send_ws(ws, _list_devices_ws_message(devices_payload, list_warnings))
 
     async def _send_ws(self, ws: Any, obj: dict) -> None:
         self._enqueue_ws_line(ws, json.dumps(obj, default=str))
@@ -2439,15 +2889,9 @@ class HomeKitHubBridge:
 
     async def _broadcast_device_list_update(self, *, reason: str) -> None:
         """Push latest paired device list to all connected clients."""
-        devices_payload = await self._build_list_devices_payload()
+        devices_payload, list_warnings = await self._build_list_devices_payload()
         device_ids = [str(d.get("device_id") or "") for d in devices_payload]
-        await self._broadcast(
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "list_devices",
-                "devices": devices_payload,
-            }
-        )
+        await self._broadcast(_list_devices_ws_message(devices_payload, list_warnings))
         self.log.debug(
             "broadcast list_devices update reason=%s count=%d ids=%s",
             reason,
@@ -2685,7 +3129,9 @@ class HomeKitHubBridge:
         if pairing:
             pid = pairing.id
             removed_device_id = str(pid).strip().lower() if pid else None
-            self._hk.pairings.pop(pid, None)
+            # Keys are normalized to lower case in ``HKController.load_pairing`` / ``_ensure_top_level_pairing_registered``.
+            pid_key = str(pid).strip().lower() if pid else ""
+            self._hk.pairings.pop(pid_key, None)
             try:
                 await pairing.close()
             except Exception:
@@ -2780,7 +3226,36 @@ class HomeKitHubBridge:
         )
         await self._activate_pairing(alias, pairing)
 
+    def _ensure_top_level_pairing_registered(self, alias: str, pairing) -> None:
+        """Keep aggregate ``HKController`` maps in sync with transport-local pairings.
+
+        aiohomekit's IP ``finish_pairing`` stores the new ``IpPairing`` only on the IP
+        transport controller (``IpController.pairings[alias] = …``). The top-level
+        :class:`aiohomekit.Controller` is updated when ``load_pairing`` runs (restart /
+        customdata restore), which copies into ``Controller.pairings`` (device id → pairing)
+        and ``Controller.aliases`` (slot alias → pairing).
+
+        Fresh PIN pairing never goes through ``load_pairing``, so without mirroring here
+        ``self._hk.pairings`` and ``self._hk.aliases`` stay empty: ``list_devices`` reports
+        no devices, WebSocket hello bootstrap sends ``count=0``, and shutdown paths that
+        walk top-level aliases miss the session even though it is active.
+        """
+        if not self._hk or not pairing:
+            return
+        pdata = getattr(pairing, "pairing_data", None)
+        if not isinstance(pdata, dict):
+            return
+        apid = pdata.get("AccessoryPairingID")
+        if not apid:
+            return
+        pid = str(apid).strip().lower()
+        if not pid:
+            return
+        self._hk.pairings[pid] = pairing
+        self._hk.aliases[alias] = pairing
+
     async def _activate_pairing(self, alias: str, pairing) -> None:
+        self._ensure_top_level_pairing_registered(alias, pairing)
         self._attach_listener(alias, pairing)
         try:
             await pairing.list_accessories_and_characteristics()

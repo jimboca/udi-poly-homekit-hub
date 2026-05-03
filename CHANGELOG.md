@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-01
+
+### Added
+
+- **WebSocket client notices:** hello **`ack`** and **`list_devices`** may include an optional **`warnings`** array (`level`, `code`, `message`, optional **`device_id`** / **`primary_aid`**) when the hub hits metadata or HAP issues (e.g. **`get_characteristics`** failure, incomplete Accessory Information, accessories load failure, hub controller not ready). Integrators can mirror these in Node Server logs or UI. Documented in **`PROTOCOL.md`**.
+
+### Fixed
+
+- **WebSocket hello / `list_devices`:** each **`devices[]`** row now drives **HAP `get_characteristics`** when **Category**, **Manufacturer**, or **Model** is missing from the cached accessory model (not only when Manufacturer was empty). If **category** is still missing while the pairing has accessories, the hub **refreshes `/accessories` once** and retries; a **WARNING** logs **`device_id`** and context instead of silently returning only **`device_id`**.
+
 ## [0.2.2] - 2026-05-01
 
 ### Added

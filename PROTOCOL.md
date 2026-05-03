@@ -59,7 +59,23 @@ When **`ws_token`** is empty or unset, behavior matches older hubs: any action m
       "hardware_revision": "…",
       "category": 9,
       "category_label": "THERMOSTAT",
-      "primary_aid": 1
+      "primary_aid": 1,
+      "accessories": [
+        {
+          "aid": 1,
+          "name": "Occupancy",
+          "category": 10,
+          "category_label": "SENSOR",
+          "thermostat_like": false
+        },
+        {
+          "aid": 2,
+          "name": "Lake Living Room",
+          "category": 9,
+          "category_label": "THERMOSTAT",
+          "thermostat_like": true
+        }
+      ]
     }
   ],
   "capabilities": {
@@ -69,10 +85,20 @@ When **`ws_token`** is empty or unset, behavior matches older hubs: any action m
       "mode": "filtered_after_subscribe",
       "description": "By default all HAP events are forwarded. After at least one successful subscribe, only matching (device_id, aid, iid) events are sent until the subscription set becomes empty (then defaults are restored)."
     }
-  }
+  },
+  "warnings": [
+    {
+      "level": "warning",
+      "code": "metadata_incomplete",
+      "message": "human-readable detail",
+      "device_id": "<AccessoryPairingID lowercase>",
+      "primary_aid": 1
+    }
+  ]
 }
 ```
 
+- **`warnings`** (optional): when present and non-empty, an array of structured notices so clients can log or surface hub-side issues in their own UI. Each object has **`level`** (`warning` or `error`), **`code`** (stable machine id), **`message`**, and optionally **`device_id`** and **`primary_aid`** when the notice applies to one pairing row. Omitted when there are no notices. The same array may be repeated on the bootstrap **`list_devices`** (see below).
 - **`device_ids`**: sorted list of paired accessories (same membership as `list_devices`), included for quick client startup without waiting for the bootstrap `list_devices` frame.
 - **`devices`**: same objects as in **`list_devices`** (see below): HAP **Accessory Information** metadata when the hub has loaded `/accessories` for that pairing. Optional keys may be omitted if unknown or not yet fetched.
 - **`capabilities.auth`**: **`none`** if the hub does not require a token; **`token`** when `ws_token` is configured.
@@ -279,11 +305,32 @@ Request the set of currently active paired accessories.
       "hardware_revision": "…",
       "category": 9,
       "category_label": "THERMOSTAT",
-      "primary_aid": 1
+      "primary_aid": 2,
+      "accessories": [
+        {
+          "aid": 1,
+          "name": "Lake Living Room Occupancy",
+          "manufacturer": "ecobee Inc.",
+          "model": "ecobee4",
+          "category": 10,
+          "category_label": "SENSOR"
+        },
+        {
+          "aid": 2,
+          "name": "Lake Living Room",
+          "manufacturer": "ecobee Inc.",
+          "model": "ecobee4",
+          "category": 9,
+          "category_label": "THERMOSTAT",
+          "thermostat_like": true
+        }
+      ]
     }
   ]
 }
 ```
+
+**`warnings`**: same optional structured notices as on hello **`ack`** (see above). The hub omits this key when there are no notices (same as hello **`ack`**).
 
 Each element **always** includes **`device_id`**. The hub adds optional discovery fields from the HAP **Accessory Information** service (values from the last successful `/accessories` load for that pairing):
 
@@ -298,8 +345,22 @@ Each element **always** includes **`device_id`**. The hub adds optional discover
 | `category` | HAP **Category** id (integer) |
 | `category_label` | aiohomekit **Categories** enum name when known (e.g. `THERMOSTAT`) |
 | `primary_aid` | Accessory **aid** whose information is shown (see below) |
+| `accessories` | Optional array of **per-`aid`** summaries (see below). Built from the cached accessory database; lets clients find category **9** / thermostat-like children without guessing from the pairing-level row alone. Omitted when empty. |
 
-**Bridge pairings:** one WebSocket row is still one **pairing** (`device_id`). If the pairing exposes multiple HAP accessories, the hub picks a **representative** accessory for metadata: the first non-**Bridge** category when possible, otherwise the lowest `aid`. Use `primary_aid` to interpret which accessory the strings refer to; `command` / `snapshot` / `get` still use the pairing’s `device_id` and real `aid`/`iid` from the full layout.
+**Per-accessory summaries (`accessories[]`):** one object per HAP accessory in the pairing (sorted by `aid`). Values come from the cached `/accessories` model (no extra HAP round-trip per accessory). Optional keys are omitted when unknown.
+
+| Field | Meaning |
+|-------|---------|
+| `aid` | HAP accessory id (use with `device_id` in `snapshot` / `get` / `command`) |
+| `name`, `manufacturer`, `model`, `serial_number`, `firmware_revision` | From **Accessory Information** when present in the cached model |
+| `category` | HAP **Category** id when known from Accessory Information, or **9** when inferred (see below) |
+| `category_label` | Enum name when `category` is known |
+| `category_inferred` | Present and **`true`** when `category` was set to **9** because the accessory exposes **Thermostat** or **Heater Cooler** services but Accessory Information had no Category |
+| `thermostat_like` | **`true`** when **Thermostat** or **Heater Cooler** HAP services are present on this `aid` |
+
+Plugins that target a specific device class (e.g. thermostats) should prefer scanning **`accessories[]`** for `category === 9` or `thermostat_like === true`, then use that **`aid`** for subscriptions and control. The pairing-level `category` / `primary_aid` fields remain a convenience summary.
+
+**Bridge pairings:** one WebSocket row is still one **pairing** (`device_id`). If the pairing exposes multiple HAP accessories, the hub picks a **representative** accessory for the top-level strings (`name`, `manufacturer`, …): it prefers accessories that expose **Thermostat** / **Heater Cooler** services and otherwise follows non-**Bridge** categories by lowest `aid`. Use **`accessories[]`** to see every child; `command` / `snapshot` / `get` still use the pairing’s `device_id` and the real `aid`/`iid` from the layout.
 
 If the hub has not yet fetched the accessory database for a pairing, rows may contain only `device_id` until the next successful layout refresh.
 
@@ -315,8 +376,9 @@ Clients that want "all thermostats", "all lights", "all switches/plugs", etc. sh
 
 1. **Membership + identity** (`hello` -> bootstrap `list_devices`):
    - Use `device_id` as the stable pairing key.
-   - Use optional `manufacturer`, `model`, `name` for vendor/model filtering.
-   - Use `category` / `category_label` as the first-pass device class hint.
+   - Use optional `manufacturer`, `model`, `name` on the pairing row for vendor/model filtering.
+   - Use optional **`accessories[]`** to locate specific HAP classes by **`aid`** (e.g. `category` **9** or **`thermostat_like`**) on bridge/composite accessories.
+   - Use pairing-level `category` / `category_label` as a quick hint when present; prefer **`accessories[]`** when multiple children exist.
 
 2. **Real capabilities** (`snapshot` or targeted `get`):
    - Determine what the device can actually do by the characteristics it exposes.

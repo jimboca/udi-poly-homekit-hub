@@ -85,7 +85,12 @@ def test_live_hello_ack(live_hub):
     async def run():
         msgs = await _exchange(uri, token=token)
         assert msgs, "expected at least hello ack"
-        ack = msgs[0]
+        # Paired hubs may push HAP ``event`` frames before the client reads ``hello`` ack.
+        ack = next(
+            (m for m in msgs if m.get("action") == "ack" and m.get("for") == "hello"),
+            None,
+        )
+        assert ack is not None, msgs
         assert ack.get("action") == "ack", ack
         assert ack.get("for") == "hello", ack
         assert ack.get("protocol") == "1", ack
