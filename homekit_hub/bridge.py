@@ -555,16 +555,31 @@ def _parse_char_name_to_uuid(spec: str) -> str:
     return normalize_uuid(spec)
 
 
-def _resolve_aid_iid(pairing, char_spec: str) -> Optional[tuple[int, int]]:
-    uid = _parse_char_name_to_uuid(char_spec)
+def _resolve_aid_iid_detailed(
+    pairing, char_spec: str
+) -> tuple[Optional[tuple[int, int]], Optional[str]]:
+    """Resolve HAP (aid, iid) for *char_spec*.
+
+    Returns ``((aid, iid), None)`` on success, or ``(None, error_message)`` on failure.
+    Never raises: invalid UUID / type tokens become a readable error string for RPC clients.
+    """
+    try:
+        uid = _parse_char_name_to_uuid(char_spec)
+    except ValueError as e:
+        return None, str(e)
     if not pairing.accessories:
-        return None
+        return None, "accessory list not loaded"
     for acc in pairing.accessories:
         for svc in acc.services:
             for ch in svc.characteristics:
                 if normalize_uuid(ch.type) == uid:
-                    return acc.aid, ch.iid
-    return None
+                    return (acc.aid, ch.iid), None
+    return None, f"unknown characteristic {char_spec!r}"
+
+
+def _resolve_aid_iid(pairing, char_spec: str) -> Optional[tuple[int, int]]:
+    resolved, err = _resolve_aid_iid_detailed(pairing, char_spec)
+    return resolved if err is None else None
 
 
 def _subscribable_characteristics(pairing) -> list[tuple[int, int]]:
@@ -1116,6 +1131,18 @@ async def _accessory_information_metadata_with_reads(
             merged[json_key] = s
     if configured_name and not merged.get("name"):
         merged["name"] = configured_name
+    if log and merged.get("category") is None:
+        for pair_key, lab in labels.items():
+            if lab != "Category":
+                continue
+            pl = result.get(pair_key)
+            if pl is not None:
+                log.debug(
+                    "list_devices metadata: Category HAP read aid=%s iid=%s payload=%r",
+                    pair_key[0],
+                    pair_key[1],
+                    pl,
+                )
     if log and _accessory_information_metadata_needs_hap_reads(merged):
         log.debug(
             "list_devices metadata: incomplete after get_characteristics aid=%s "
@@ -1207,6 +1234,19 @@ async def _device_list_entry_resolved(
             client_notices=client_notices,
             notice_device_id=device_id,
         )
+
+        # Many bridges (e.g. Ecobee) omit or deny **Category** on HAP GET even when
+        # **Manufacturer** / **Model** succeed. Infer thermostat (9) from services here so
+        # we do not always pay for ``list_accessories_and_characteristics`` solely to
+        # re-attempt Category.
+        if pairing and meta.get("category") is None:
+            probe = dict(meta)
+            _infer_thermostat_category_from_services(pairing, probe)
+            if probe.get("category") is not None:
+                meta["category"] = probe["category"]
+                cl = probe.get("category_label")
+                if cl:
+                    meta["category_label"] = cl
 
         if meta.get("category") is not None:
             break
@@ -1303,6 +1343,9 @@ class HomeKitHubBridge:
             Callable[[bool, str, list[str], dict[str, str], bool], None]
         ] = None,
         mqtt_transport_notice: Optional[Callable[[int], None]] = None,
+        hub_rpc_error_notice: Optional[
+            Callable[[str, str, dict[str, Any]], None]
+        ] = None,
     ) -> None:
         self.log = logger
         self._get_params = get_params
@@ -1312,6 +1355,7 @@ class HomeKitHubBridge:
         self._pairing_notice = pairing_notice
         self._pairing_health_notice = pairing_health_notice
         self._mqtt_transport_notice = mqtt_transport_notice
+        self._hub_rpc_error_notice = hub_rpc_error_notice
         self._mqtt_drv_last: Optional[int] = None
 
         self._hk: Optional[HKController] = None
@@ -1348,6 +1392,29 @@ class HomeKitHubBridge:
             fn(code)
         except Exception:
             self.log.exception("MQTT transport status callback failed code=%s", code)
+
+    def _emit_hub_rpc_error_notice(
+        self,
+        for_what: str,
+        message: str,
+        *,
+        device_id: str = "",
+        mqtt_client_slug: str = "",
+        characteristic: Any = None,
+    ) -> None:
+        """PG3-visible notice for hub → client RPC failures (command / get / …)."""
+        fn = self._hub_rpc_error_notice
+        if fn is None:
+            return
+        ctx: dict[str, Any] = {
+            "device_id": device_id,
+            "mqtt_client_slug": mqtt_client_slug,
+            "characteristic": characteristic,
+        }
+        try:
+            fn(for_what, message, ctx)
+        except Exception:
+            self.log.exception("hub_rpc_error_notice callback failed for=%s", for_what)
 
     async def _abort_start(self) -> None:
         """Undo partial startup (used when async_start or later steps fail)."""
@@ -2380,7 +2447,30 @@ class HomeKitHubBridge:
                         },
                     )
                     return
-        await self._dispatch_client_message(sess, msg)
+        try:
+            await self._dispatch_client_message(sess, msg)
+        except Exception as ex:
+            self.log.exception("MQTT inbound dispatch failed slug=%s", slug)
+            act = msg.get("action")
+            err: dict[str, Any] = {
+                "version": PROTOCOL_VERSION,
+                "action": "error",
+                "message": str(ex),
+            }
+            if isinstance(act, str) and act:
+                err["for"] = act
+            await self._mqtt_publish_json(
+                sess.slug,
+                "rpc",
+                self._ws_merge_request_id(msg, err),
+            )
+            self._emit_hub_rpc_error_notice(
+                str(act or "dispatch"),
+                str(ex),
+                mqtt_client_slug=slug,
+                device_id=str(msg.get("device_id") or ""),
+                characteristic=msg.get("characteristic"),
+            )
 
     async def _start_websocket_server(self) -> None:
         host, port = self._ws_bind()
@@ -2479,7 +2569,25 @@ class HomeKitHubBridge:
                 },
             )
             return
-        await self._dispatch_client_message(ws, msg)
+        try:
+            await self._dispatch_client_message(ws, msg)
+        except Exception as ex:
+            self.log.exception("WebSocket dispatch failed")
+            act = msg.get("action")
+            err: dict[str, Any] = {
+                "version": PROTOCOL_VERSION,
+                "action": "error",
+                "message": str(ex),
+            }
+            if isinstance(act, str) and act:
+                err["for"] = act
+            await self._send_ws(ws, self._ws_merge_request_id(msg, err))
+            self._emit_hub_rpc_error_notice(
+                str(act or "dispatch"),
+                str(ex),
+                device_id=str(msg.get("device_id") or ""),
+                characteristic=msg.get("characteristic"),
+            )
 
     async def _dispatch_client_message(self, client: Any, msg: dict[str, Any]) -> None:
         """Shared JSON dispatch for WebSocket connections and MQTT virtual sessions."""
@@ -2710,25 +2818,32 @@ class HomeKitHubBridge:
                 return ids
         return []
 
-    def _resolve_ws_aid_iid(self, pairing, msg: dict[str, Any]) -> Optional[tuple[int, int]]:
-        """Subscribe/unsubscribe body: ``aid``+``iid`` or ``characteristic`` name/UUID."""
+    def _resolve_ws_aid_iid(
+        self, pairing, msg: dict[str, Any]
+    ) -> tuple[Optional[tuple[int, int]], Optional[str]]:
+        """Subscribe/unsubscribe body: ``aid``+``iid`` or ``characteristic`` name/UUID.
+
+        Returns ``(pair, None)`` on success, ``(None, None)`` when the message omits selectors,
+        or ``(None, err)`` when a characteristic token cannot be resolved.
+        """
         aid = msg.get("aid")
         iid = msg.get("iid")
         if aid is not None and iid is not None:
             try:
-                return int(aid), int(iid)
+                return (int(aid), int(iid)), None
             except (TypeError, ValueError):
-                return None
+                return None, None
         char_spec = msg.get("characteristic")
         if isinstance(char_spec, str) and char_spec.strip():
-            return _resolve_aid_iid(pairing, char_spec.strip())
-        return None
+            return _resolve_aid_iid_detailed(pairing, char_spec.strip())
+        return None, None
 
     async def _handle_get(self, ws: Any, msg: dict[str, Any]) -> None:
         """Read a subset of characteristics (same ``values`` shape as ``snapshot``)."""
         device_id = (msg.get("device_id") or "").strip().lower()
         pairing = self._pairing_for_device_id(device_id) if device_id else None
         if not pairing:
+            m = "unknown device_id or no active pairing"
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -2737,10 +2852,11 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "get",
-                        "message": "unknown device_id or no active pairing",
+                        "message": m,
                     },
                 ),
             )
+            self._emit_hub_rpc_error_notice("get", m, device_id=device_id)
             return
         specs: list[str] = []
         ch_list = msg.get("characteristics")
@@ -2761,6 +2877,7 @@ class HomeKitHubBridge:
             uniq.append(s)
         specs = uniq
         if not specs:
+            m = "provide characteristic (string) or characteristics (string array)"
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -2769,22 +2886,24 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "get",
-                        "message": "provide characteristic (string) or characteristics (string array)",
+                        "message": m,
                     },
                 ),
             )
+            self._emit_hub_rpc_error_notice("get", m, device_id=device_id)
             return
 
         pairs: list[tuple[int, int]] = []
         labels: dict[tuple[int, int], str] = {}
 
-        def try_build() -> Optional[str]:
+        def try_build() -> Optional[tuple[str, str]]:
             pairs.clear()
             labels.clear()
             for spec in specs:
-                resolved = _resolve_aid_iid(pairing, spec)
-                if not resolved:
-                    return spec
+                resolved, err = _resolve_aid_iid_detailed(pairing, spec)
+                if err is not None:
+                    return spec, err
+                assert resolved is not None
                 aid, iid = resolved
                 if (aid, iid) in labels:
                     continue
@@ -2796,27 +2915,35 @@ class HomeKitHubBridge:
                     labels[(aid, iid)] = spec
             return None
 
-        bad = try_build()
-        if bad is not None:
-            try:
-                await pairing.list_accessories_and_characteristics()
-            except Exception as ex:
-                self.log.exception("get: list_accessories_and_characteristics failed")
-                await self._send_ws(
-                    ws,
-                    self._ws_merge_request_id(
-                        msg,
-                        {
-                            "version": PROTOCOL_VERSION,
-                            "action": "error",
-                            "for": "get",
-                            "message": str(ex),
-                        },
-                    ),
-                )
-                return
-            bad = try_build()
-        if bad is not None:
+        fail = try_build()
+        if fail is not None:
+            _bad_spec, bad_err = fail
+            if bad_err.startswith("unknown characteristic"):
+                try:
+                    await pairing.list_accessories_and_characteristics()
+                except Exception as ex:
+                    self.log.exception("get: list_accessories_and_characteristics failed")
+                    await self._send_ws(
+                        ws,
+                        self._ws_merge_request_id(
+                            msg,
+                            {
+                                "version": PROTOCOL_VERSION,
+                                "action": "error",
+                                "for": "get",
+                                "message": str(ex),
+                            },
+                        ),
+                    )
+                    self._emit_hub_rpc_error_notice(
+                        "get",
+                        str(ex),
+                        device_id=device_id,
+                    )
+                    return
+                fail = try_build()
+        if fail is not None:
+            bad_spec, bad_err = fail
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -2825,9 +2952,15 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "get",
-                        "message": f"unknown characteristic {bad!r}",
+                        "message": bad_err,
                     },
                 ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "get",
+                bad_err,
+                device_id=device_id,
+                characteristic=bad_spec,
             )
             return
 
@@ -2835,6 +2968,7 @@ class HomeKitHubBridge:
             result = await pairing.get_characteristics(pairs)
         except Exception as ex:
             self.log.exception("get: get_characteristics failed")
+            m = str(ex)
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -2843,10 +2977,11 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "get",
-                        "message": str(ex),
+                        "message": m,
                     },
                 ),
             )
+            self._emit_hub_rpc_error_notice("get", m, device_id=device_id)
             return
 
         values: list[dict[str, Any]] = []
@@ -2881,16 +3016,27 @@ class HomeKitHubBridge:
     async def _handle_subscribe(self, ws: Any, msg: dict[str, Any]) -> None:
         """Register WebSocket-side filtering so only selected HAP events are forwarded."""
         device_id = (msg.get("device_id") or "").strip().lower()
+        mqtt_slug = ws.slug if isinstance(ws, MqttClientSession) else ""
         pairing = self._pairing_for_device_id(device_id) if device_id else None
         if not pairing:
+            m = "unknown device_id or no active pairing"
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "subscribe",
-                    "message": "unknown device_id or no active pairing",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "subscribe",
+                        "message": m,
+                    },
+                ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "subscribe",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
             )
             return
         if not pairing.accessories:
@@ -2898,26 +3044,67 @@ class HomeKitHubBridge:
                 await pairing.list_accessories_and_characteristics()
             except Exception as ex:
                 self.log.exception("subscribe: list_accessories_and_characteristics failed")
+                m = str(ex)
                 await self._send_ws(
                     ws,
+                    self._ws_merge_request_id(
+                        msg,
+                        {
+                            "version": PROTOCOL_VERSION,
+                            "action": "error",
+                            "for": "subscribe",
+                            "message": m,
+                        },
+                    ),
+                )
+                self._emit_hub_rpc_error_notice(
+                    "subscribe",
+                    m,
+                    device_id=device_id,
+                    mqtt_client_slug=mqtt_slug,
+                )
+                return
+        resolved, resolve_err = self._resolve_ws_aid_iid(pairing, msg)
+        if resolve_err is not None:
+            await self._send_ws(
+                ws,
+                self._ws_merge_request_id(
+                    msg,
                     {
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "subscribe",
-                        "message": str(ex),
+                        "message": resolve_err,
                     },
-                )
-                return
-        resolved = self._resolve_ws_aid_iid(pairing, msg)
+                ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "subscribe",
+                resolve_err,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
+                characteristic=msg.get("characteristic"),
+            )
+            return
         if not resolved:
+            m = "need aid+iid (integers) or characteristic (string)"
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "subscribe",
-                    "message": "need aid+iid (integers) or characteristic (string)",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "subscribe",
+                        "message": m,
+                    },
+                ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "subscribe",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
             )
             return
         aid_i, iid_i = resolved
@@ -2928,28 +3115,42 @@ class HomeKitHubBridge:
         s.add((device_id, aid_i, iid_i))
         await self._send_ws(
             ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "ack",
-                "for": "subscribe",
-                "device_id": device_id,
-                "aid": aid_i,
-                "iid": iid_i,
-            },
+            self._ws_merge_request_id(
+                msg,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "ack",
+                    "for": "subscribe",
+                    "device_id": device_id,
+                    "aid": aid_i,
+                    "iid": iid_i,
+                },
+            ),
         )
 
     async def _handle_unsubscribe(self, ws: Any, msg: dict[str, Any]) -> None:
         device_id = (msg.get("device_id") or "").strip().lower()
+        mqtt_slug = ws.slug if isinstance(ws, MqttClientSession) else ""
         pairing = self._pairing_for_device_id(device_id) if device_id else None
         if not pairing:
+            m = "unknown device_id or no active pairing"
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "unsubscribe",
-                    "message": "unknown device_id or no active pairing",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "unsubscribe",
+                        "message": m,
+                    },
+                ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "unsubscribe",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
             )
             return
         if not pairing.accessories:
@@ -2957,26 +3158,67 @@ class HomeKitHubBridge:
                 await pairing.list_accessories_and_characteristics()
             except Exception as ex:
                 self.log.exception("unsubscribe: list_accessories_and_characteristics failed")
+                m = str(ex)
                 await self._send_ws(
                     ws,
+                    self._ws_merge_request_id(
+                        msg,
+                        {
+                            "version": PROTOCOL_VERSION,
+                            "action": "error",
+                            "for": "unsubscribe",
+                            "message": m,
+                        },
+                    ),
+                )
+                self._emit_hub_rpc_error_notice(
+                    "unsubscribe",
+                    m,
+                    device_id=device_id,
+                    mqtt_client_slug=mqtt_slug,
+                )
+                return
+        resolved, resolve_err = self._resolve_ws_aid_iid(pairing, msg)
+        if resolve_err is not None:
+            await self._send_ws(
+                ws,
+                self._ws_merge_request_id(
+                    msg,
                     {
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "unsubscribe",
-                        "message": str(ex),
+                        "message": resolve_err,
                     },
-                )
-                return
-        resolved = self._resolve_ws_aid_iid(pairing, msg)
+                ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "unsubscribe",
+                resolve_err,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
+                characteristic=msg.get("characteristic"),
+            )
+            return
         if not resolved:
+            m = "need aid+iid (integers) or characteristic (string)"
             await self._send_ws(
                 ws,
-                {
-                    "version": PROTOCOL_VERSION,
-                    "action": "error",
-                    "for": "unsubscribe",
-                    "message": "need aid+iid (integers) or characteristic (string)",
-                },
+                self._ws_merge_request_id(
+                    msg,
+                    {
+                        "version": PROTOCOL_VERSION,
+                        "action": "error",
+                        "for": "unsubscribe",
+                        "message": m,
+                    },
+                ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "unsubscribe",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
             )
             return
         aid_i, iid_i = resolved
@@ -2987,22 +3229,27 @@ class HomeKitHubBridge:
                 self._ws_event_filters.pop(ws, None)
         await self._send_ws(
             ws,
-            {
-                "version": PROTOCOL_VERSION,
-                "action": "ack",
-                "for": "unsubscribe",
-                "device_id": device_id,
-                "aid": aid_i,
-                "iid": iid_i,
-            },
+            self._ws_merge_request_id(
+                msg,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "ack",
+                    "for": "unsubscribe",
+                    "device_id": device_id,
+                    "aid": aid_i,
+                    "iid": iid_i,
+                },
+            ),
         )
 
     async def _handle_command(self, ws: Any, msg: dict) -> None:
         device_id = (msg.get("device_id") or "").strip().lower()
         char_spec = msg.get("characteristic")
         value = msg.get("value")
+        mqtt_slug = ws.slug if isinstance(ws, MqttClientSession) else ""
         pairing = self._pairing_for_device_id(device_id) if device_id else None
         if not pairing:
+            m = "unknown device_id or no active pairing"
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -3011,12 +3258,20 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "command",
-                        "message": "unknown device_id or no active pairing",
+                        "message": m,
                     },
                 ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "command",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
+                characteristic=char_spec,
             )
             return
         if not isinstance(char_spec, str):
+            m = "characteristic must be string"
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -3025,13 +3280,20 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "command",
-                        "message": "characteristic must be string",
+                        "message": m,
                     },
                 ),
             )
+            self._emit_hub_rpc_error_notice(
+                "command",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
+                characteristic=char_spec,
+            )
             return
-        resolved = _resolve_aid_iid(pairing, char_spec)
-        if not resolved:
+        resolved, resolve_err = _resolve_aid_iid_detailed(pairing, char_spec)
+        if resolve_err is not None:
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -3040,15 +3302,24 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "command",
-                        "message": f"unknown characteristic {char_spec!r}",
+                        "message": resolve_err,
                     },
                 ),
             )
+            self._emit_hub_rpc_error_notice(
+                "command",
+                resolve_err,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
+                characteristic=char_spec,
+            )
             return
+        assert resolved is not None
         aid, iid = resolved
         try:
             err = await pairing.put_characteristics([(aid, iid, value)])
             if err:
+                m = str(err)
                 await self._send_ws(
                     ws,
                     self._ws_merge_request_id(
@@ -3057,13 +3328,21 @@ class HomeKitHubBridge:
                             "version": PROTOCOL_VERSION,
                             "action": "error",
                             "for": "command",
-                            "message": str(err),
+                            "message": m,
                         },
                     ),
+                )
+                self._emit_hub_rpc_error_notice(
+                    "command",
+                    m,
+                    device_id=device_id,
+                    mqtt_client_slug=mqtt_slug,
+                    characteristic=char_spec,
                 )
                 return
         except Exception as ex:
             self.log.exception("put_characteristics failed")
+            m = str(ex)
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -3072,9 +3351,16 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "command",
-                        "message": str(ex),
+                        "message": m,
                     },
                 ),
+            )
+            self._emit_hub_rpc_error_notice(
+                "command",
+                m,
+                device_id=device_id,
+                mqtt_client_slug=mqtt_slug,
+                characteristic=char_spec,
             )
             return
         await self._send_ws(

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-05-01
+
+### Added
+
+- **Hub RPC error notice:** optional **`hub_rpc_error_notice`** on **`HomeKitHubBridge`**; the controller sets Polyglot **`Notices['homekit_hub_rpc_error']`** when a client **`command`** fails (HAP status / invalid value), including **`device_id`**, transport (**MQTT `client_slug`** or WebSocket), **`characteristic`**, and **`repr(value)`** for support.
+
+### Changed
+
+- **`PROTOCOL.md`:** documents that wire **`characteristic`** tokens are **`aiohomekit` `CharacteristicsTypes`** names or UUIDs—not Apple PascalCase HAP-doc labels; examples updated (**`ON`**, **`TEMPERATURE_CURRENT`**, etc.).
+- **`list_devices` metadata:** when HAP omits **Category** (common on some bridges), infer thermostat category from accessory services so clients get **`category` / `category_label`** without an extra full accessory reload when Manufacturer/Model already succeeded.
+- **Characteristic resolution:** **`_resolve_aid_iid_detailed`** returns readable errors for unknown or invalid characteristic tokens instead of failing opaquely; debug logging when Category read returns unexpected payloads.
+
+### Fixed
+
+- Invalid characteristic names on **`command` / `get` / `subscribe`** surface clearer hub **`error`** messages for integrators.
+
 ## [0.2.5] - 2026-05-03
 
 ### Added

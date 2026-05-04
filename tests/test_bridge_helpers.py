@@ -572,6 +572,42 @@ async def test_device_list_entry_resolved_retries_list_accessories_for_category(
     log.warning.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_device_list_entry_resolved_skips_accessories_refresh_when_category_inferred(
+    monkeypatch,
+):
+    """Ecobee-like: HAP GET omits Category but Thermostat service is present — no /accessories retry."""
+    log = MagicMock()
+
+    acc1 = MagicMock()
+    acc1.aid = 1
+    therm_svc = MagicMock()
+    therm_svc.type = ServicesTypes.THERMOSTAT
+    acc1.services = [therm_svc]
+
+    pairing = MagicMock()
+    pairing.accessories = [acc1]
+    pairing.list_accessories_and_characteristics = AsyncMock()
+
+    meta_no_cat = {"manufacturer": "Ecobee", "model": "SmartThermostat"}
+
+    async def fake_reads(p, a, lg, **kwargs):
+        return dict(meta_no_cat)
+
+    monkeypatch.setattr(
+        "homekit_hub.bridge._representative_accessory", lambda p: acc1 if p.accessories else None
+    )
+    monkeypatch.setattr(
+        "homekit_hub.bridge._accessory_information_metadata_with_reads", fake_reads
+    )
+
+    entry, warns = await _device_list_entry_resolved("aa:bb:cc:dd:ee:ff", pairing, log)
+    pairing.list_accessories_and_characteristics.assert_not_called()
+    assert entry.get("category") == 9
+    assert entry.get("primary_aid") == 1
+    assert warns == []
+
+
 def test_ensure_top_level_pairing_registered_mirrors_aggregate_controller():
     """Fresh PIN pairing only registers on the IP transport; hub mirrors HKController.load_pairing."""
     log = logging.getLogger("test_ehk")

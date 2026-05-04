@@ -12,6 +12,17 @@ The hub may pair **multiple** HomeKit accessories at once. Every `event` include
 
 When this protocol includes all three keys (`device_id`, `aid`, `iid`), they identify one concrete HomeKit characteristic endpoint.
 
+### Characteristic type string (`characteristic` / `characteristics[]`)
+
+Any JSON field that names a characteristic type by **string**—for example **`command.characteristic`**, entries in **`get.characteristics`**, **`subscribe.characteristic`**, and the **`characteristic`** key on each item in **`snapshot` / `get` `values`** and on **`event`**—must be either:
+
+1. The **exact Python attribute name** on aiohomekit’s **`CharacteristicsTypes`** (often `LIKE_THIS`, e.g. `TEMPERATURE_CURRENT`, `ON`, `HEATING_COOLING_TARGET`), or  
+2. A **normalized HAP type UUID** string accepted by aiohomekit’s **`normalize_uuid`** (short or full form, as aiohomekit allows).
+
+**These strings are not the same as Apple’s public HAP documentation names** in general. Apple and the Accessory Simulator often use **PascalCase** labels (for example `HeatingThresholdTemperature`, `TargetHeatingCoolingState`). aiohomekit uses its own stable enum identifiers (for example `TEMPERATURE_HEATING_THRESHOLD`, `HEATING_COOLING_TARGET`). The hub resolves a non-UUID token by testing **`hasattr(CharacteristicsTypes, name)`**; if that fails, it treats the token as a UUID for **`normalize_uuid`**. PascalCase Apple labels therefore usually **do not** work on the wire unless they accidentally match a `CharacteristicsTypes` attribute.
+
+**Recommended:** treat **`characteristic`** strings from **`snapshot`**, **`get`**, and **`event`** as the canonical names for that session. When mapping from Apple docs or third-party tables, translate to **`CharacteristicsTypes`** (or to the UUID) rather than pasting PascalCase spec names.
+
 ## Request correlation (`id`) — multiplexed RPC
 
 Clients may send an optional **`id`** field on **`command`**, **`snapshot`**, and **`get`** (string or number; the hub echoes the same JSON value on replies).
@@ -153,7 +164,7 @@ HomeKit accessory subscriptions/listeners are managed by the hub per pairing; `s
   "version": "1",
   "action": "command",
   "device_id": "<AccessoryPairingID lowercase>",
-  "characteristic": "<enum name or UUID>",
+  "characteristic": "<CharacteristicsTypes name or UUID>",
   "value": true,
   "id": "<optional client correlation id>"
 }
@@ -211,7 +222,7 @@ Success:
   "id": "<echo when request included id>",
   "values": [
     {
-      "characteristic": "CurrentTemperature",
+      "characteristic": "TEMPERATURE_CURRENT",
       "aid": 1,
       "iid": 10,
       "value": 21.5
@@ -243,12 +254,12 @@ Read **selected** characteristics in one round trip (response shape matches `sna
   "version": "1",
   "action": "get",
   "device_id": "<AccessoryPairingID lowercase>",
-  "characteristics": ["On", "Brightness"],
+  "characteristics": ["ON", "BRIGHTNESS"],
   "id": "<optional client correlation id>"
 }
 ```
 
-Either **`characteristics`** (array of strings) or a single **`characteristic`** (string) is required. Names follow the same rules as `command` / `snapshot` (enum name or UUID).
+Either **`characteristics`** (array of strings) or a single **`characteristic`** (string) is required. Names follow the same rules as **`command`** / **`snapshot`**: **`CharacteristicsTypes`** attribute or UUID (see **Characteristic type string** above).
 
 ## Hub → Client (`get` / `error` for get)
 
@@ -262,7 +273,7 @@ Success:
   "id": "<echo when request included id>",
   "values": [
     {
-      "characteristic": "On",
+      "characteristic": "ON",
       "aid": 1,
       "iid": 10,
       "value": true
@@ -284,7 +295,7 @@ Use **`aid`** and **`iid`** together, or **`characteristic`** (string), plus **`
   "version": "1",
   "action": "subscribe",
   "device_id": "<AccessoryPairingID lowercase>",
-  "characteristic": "On"
+  "characteristic": "ON"
 }
 ```
 
@@ -411,6 +422,8 @@ Clients that want "all thermostats", "all lights", "all switches/plugs", etc. sh
 
 ### Practical classification pattern
 
+The bullets below use **Apple-style / HAP-doc** names so the accessory classes are easy to recognize. For **`command` / `get` / `subscribe`**, you must use **`CharacteristicsTypes`** names (or UUIDs) as in **Characteristic type string**—for example thermostat reads map to `TEMPERATURE_CURRENT`, `TEMPERATURE_TARGET`, `HEATING_COOLING_TARGET`, `HEATING_COOLING_CURRENT`, not the PascalCase labels in the list.
+
 - **Thermostat**: `CurrentTemperature`, `TargetTemperature`, `TargetHeatingCoolingState`, `CurrentHeatingCoolingState`.
 - **Light**: `On` plus one or more of `Brightness`, `Hue`, `Saturation`, `ColorTemperature`.
 - **Switch / plug / outlet**: `On` without light-only controls; outlets often expose `OutletInUse`.
@@ -435,7 +448,7 @@ Clients that want "all thermostats", "all lights", "all switches/plugs", etc. sh
 
 - `list_devices` metadata fields are optional; always tolerate missing `manufacturer`/`model`/`category`.
 - Bridge pairings expose one row per pairing; `primary_aid` tells you which accessory supplied row metadata, but capability detection should come from full `snapshot`/`get` data.
-- Characteristic names in this protocol are `aiohomekit` enum names when known; otherwise normalized UUID strings. Client matchers should support both.
+- Characteristic names in this protocol are `aiohomekit` **`CharacteristicsTypes`** attribute names when known; otherwise normalized UUID strings. Client matchers should support both. See **Characteristic type string** (under **HAP identifiers**) for why these differ from Apple PascalCase HAP-doc names.
 - New HomeKit types can appear without protocol changes; clients should classify by observed characteristics and ignore unknown fields safely.
 
 ## Example client (`websockets`)

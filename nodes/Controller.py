@@ -282,6 +282,29 @@ class Controller(Node):
             extra_html=extra_html,
         )
 
+    def _hub_rpc_error_notice_callback(
+        self, for_what: str, message: str, ctx: Dict[str, Any]
+    ) -> None:
+        """Hub → client RPC failure (command / get / …): PG3 Notice from the asyncio thread."""
+        did = str(ctx.get("device_id") or "").strip()
+        slug = str(ctx.get("mqtt_client_slug") or "").strip()
+        ch = ctx.get("characteristic")
+        parts: list[str] = [
+            f"<p><code>{html.escape(for_what)}</code>: {html.escape(message)}</p>",
+        ]
+        if did:
+            parts.append(f"<p>device_id: <code>{html.escape(did)}</code></p>")
+        if slug:
+            parts.append(f"<p>MQTT client_slug: <code>{html.escape(slug)}</code></p>")
+        if ch is not None and str(ch).strip():
+            parts.append(f"<p>characteristic: <code>{html.escape(str(ch))}</code></p>")
+        self._pg3_warn_and_notice(
+            "homekit_hub_rpc_error",
+            title="HomeKit hub client RPC error",
+            log_message=f"HomeKit hub RPC error ({for_what}): {message}",
+            notice_html="".join(parts),
+        )
+
     def _pg3_warn_and_notice(
         self,
         notice_key: str,
@@ -615,6 +638,7 @@ class Controller(Node):
             pairing_notice=self._pairing_notice_callback,
             pairing_health_notice=self._pairing_health_notice_callback,
             mqtt_transport_notice=self._mqtt_transport_notice_callback,
+            hub_rpc_error_notice=self._hub_rpc_error_notice_callback,
         )
         self._config_snap = self._config_restart_snap()
         fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)
