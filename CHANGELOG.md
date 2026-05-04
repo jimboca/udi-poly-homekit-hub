@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-05-03
+
+### Added
+
+- **Optional MQTT transport** (Custom Params `mqtt_enable`, `mqtt_host`, `mqtt_port`, optional `mqtt_username` / `mqtt_password`, `mqtt_hub_slug`): per-client topic tree `udi/homekit/hubs/{hub_slug}/clients/{client_slug}/in` and split egress `out/rpc` / `out/event`, same JSON as WebSocket; hub uses **aiomqtt** on the asyncio loop. **No application-level MQTT secret in v1** (`ws_token` remains WebSocket-only). Documented in **`PROTOCOL.md`** and **`CONFIG.md`**. Unit tests in **`tests/test_mqtt_topics.py`** (optional **`mqtt_integration`** marker for future broker tests).
+
 ## [0.2.4] - 2026-05-02
 
 ### Added

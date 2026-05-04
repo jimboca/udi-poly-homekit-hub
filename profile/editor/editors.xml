@@ -5,6 +5,9 @@
   <editor id="brst">
     <range uom="25" subset="0,1,2" nls="BRST"/>
   </editor>
+  <editor id="mqttst">
+    <range uom="25" subset="0,1,2" nls="MQTTS"/>
+  </editor>
   <editor id="errc">
     <range uom="25" subset="0-11" nls="ERRC"/>
   </editor>

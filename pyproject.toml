@@ -13,6 +13,7 @@ asyncio_mode = "auto"
 addopts = "-ra"
 markers = [
     "integration: live WebSocket tests against a running hub (see tests/test_ws_live.py)",
+    "mqtt_integration: optional MQTT broker tests (see tests/test_mqtt_topics.py)",
 ]
 
 [tool.ruff]

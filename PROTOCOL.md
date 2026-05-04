@@ -480,3 +480,71 @@ asyncio.run(main())
 ```
 
 In production, run the receive loop concurrently with your command/snapshot logic (e.g. `asyncio.create_task`); the hub may push many `event` messages without prior requests.
+
+## Optional MQTT transport (same JSON as WebSocket)
+
+When the Node Server Custom Param **`mqtt_enable`** is **true**, the hub maintains an **additional** transport to the same hub logic: **one MQTT client connection** from the hub process to the broker (`mqtt_host`, `mqtt_port`, optional `mqtt_username` / `mqtt_password`). **WebSocket is unchanged** and can be used in parallel (e.g. for debugging with `ws_debug_client`).
+
+### v1 security model
+
+- **No** `ws_token`-style application secret on MQTT. **`ws_token` applies only to WebSocket** clients.
+- Optional **broker** username/password match Custom Params when your broker requires them.
+- Deployments **without** broker ACLs expose the hub control plane to anyone who can publish under your topic tree; treat MQTT like any sensitive LAN automation bus.
+
+### Topic root and `hub_slug`
+
+- Root prefix: `udi/homekit/hubs/{hub_slug}/`
+- **`hub_slug`**: Custom Param **`mqtt_hub_slug`** (default `default`), normalized to a broker-safe segment `[A-Za-z0-9_-]` (see `CONFIG.md`). Use a **unique** slug per hub instance when several hubs share one broker.
+
+### Per-client topics (`client_slug`)
+
+Each logical downstream client uses a stable **`client_slug`** (1–128 characters, `[A-Za-z0-9_-]` only) that appears in the topic path. It is analogous to one WebSocket connection: the hub keeps **per-`client_slug`** state for **`subscribe` / `unsubscribe`** event filters, identical to WebSocket semantics.
+
+**Ingress topic** (client → hub): publish **one JSON object per message** (UTF-8 payload), same shape as a WebSocket **text** frame (`version`, `action`, …). Multiplex field **`id`** on RPC is unchanged.
+
+| Topic | Direction | Payload | QoS | Notes |
+|-------|-----------|---------|-----|-------|
+| `udi/homekit/hubs/{hub_slug}/clients/{client_slug}/in` | Client → hub | One JSON object | **1** | Carries `hello`, `command`, `snapshot`, `get`, `subscribe`, `unsubscribe`, `list_devices`. |
+
+**Egress topics** (hub → client):
+
+| Topic | Payload | QoS | Notes |
+|-------|---------|-----|-------|
+| `.../clients/{client_slug}/out/rpc` | JSON | **1** | `ack`, `error`, `snapshot`, `get`, `command` replies, `subscribe` / `unsubscribe` acks/errors, proactive **`list_devices`**, hello **`ack`**. Same bodies as WebSocket outbound **except** streaming **`action: event`** (see next row). |
+| `.../clients/{client_slug}/out/event` | JSON with **`action: event`** only | **0** or **1** (hub uses **1** in current builds) | **Filtered** per client using the **same rules** as WebSocket: until the first successful **`subscribe`**, all events are sent; after at least one **`subscribe`**, only matching `(device_id, aid, iid)` keys; when the subscription set becomes empty again, the default (all events) is restored. |
+
+**Retained messages:** hub publishes with **retain = false** on v1 `rpc` and `event` topics (avoids stale control-plane state on reconnect).
+
+### Hub subscription pattern
+
+The hub subscribes to:
+
+`udi/homekit/hubs/{hub_slug}/clients/+/in`
+
+It parses **`client_slug`** from the topic and dispatches the JSON payload through the **same** action handlers as WebSocket. Unknown topic shapes or invalid `client_slug` segments are ignored (logged at debug).
+
+### Client subscription pattern
+
+1. Publish JSON to `.../clients/{your_slug}/in`.
+2. Subscribe to `.../clients/{your_slug}/out/rpc` (**required** for replies and session traffic).
+3. Subscribe to `.../clients/{your_slug}/out/event` if you want HAP change notifications (or subscribe and ignore unused events).
+
+### `hello` and `hello.client` vs topic slug
+
+Recommended first message on `in` is still **`action: hello`** so the hub returns **`ack.capabilities`** and **`devices`** as on WebSocket.
+
+If **`hello`** includes a **`client`** string, the hub requires that its **sanitized** form (broker-safe slug rules) **matches** the topic **`client_slug`**. If **`client`** is omitted, the topic slug alone identifies the session. **`ws_token`** is **not** checked for MQTT **`hello`** even when the WebSocket Custom Param **`ws_token`** is set.
+
+### Capabilities advertisement
+
+When MQTT is enabled, hello **`ack.capabilities`** may include an **`mqtt`** object (additive), for example:
+
+- `enabled`: `true`
+- `hub_slug`: string
+- `ingress_publish_template` / `egress_rpc_template` / `egress_event_template`: strings with a literal `{client_slug}` placeholder for documentation UIs
+
+Clients should still treat unknown **`capabilities`** keys as optional.
+
+### Library note (hub implementation)
+
+The hub uses **[aiomqtt](https://github.com/sbtinstruments/aiomqtt)** (async MQTT on **paho-mqtt**) on the same asyncio loop as WebSocket. Downstream Node Servers may use **aiomqtt** or **paho**; the wire format is the JSON described in this document, not PG3 internal MQTT.

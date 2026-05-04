@@ -8,6 +8,11 @@ CMD-hkctl-DISCOVER-NAME = Discover
 CMD-hkctl-ZEROCONF_DIAG-NAME = Zeroconf diagnostic
 ST-hkctl-ST-NAME = NodeServer Online
 ST-hkctl-GV0-NAME = Bridge Status
+ST-hkctl-GV1-NAME = MQTT transport
+
+MQTTS-0 = Disabled
+MQTTS-1 = Not connected
+MQTTS-2 = Connected
 
 CST-0 = Disconnected
 CST-1 = Connected

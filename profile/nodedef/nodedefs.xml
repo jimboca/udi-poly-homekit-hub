@@ -4,6 +4,7 @@
     <sts>
       <st id="ST" editor="cst" />
       <st id="GV0" editor="brst" />
+      <st id="GV1" editor="mqttst" />
       <st id="ERR" editor="errc" />
     </sts>
     <cmds>

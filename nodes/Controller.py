@@ -13,9 +13,15 @@ from udi_interface import LOGGER, Custom, Node
 
 from homekit_hub import (
     DATA_KEY_LAST_HAP_DISCOVER,
+    DEFAULT_MQTT_BROKER_HOST,
+    DEFAULT_MQTT_BROKER_PORT,
+    MQTT_TRANSPORT_STATUS_CONNECTED,
+    MQTT_TRANSPORT_STATUS_DISABLED,
+    MQTT_TRANSPORT_STATUS_NOT_CONNECTED,
     TYPED_PAIRING_SLOTS_KEY,
     HomeKitHubBridge,
     assign_pairing_slot_rows,
+    mqtt_transport_enabled,
     normalize_hap_pin,
 )
 from homekit_hub.bridge import _parse_slot_value
@@ -42,6 +48,13 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     "ws_port": "8163",
     # Optional shared secret: when non-empty, WebSocket clients must send it on ``hello`` (see PROTOCOL.md).
     "ws_token": "",
+    # Optional LAN MQTT (same JSON as WebSocket); see PROTOCOL.md / CONFIG.md.
+    "mqtt_enable": "false",
+    "mqtt_host": DEFAULT_MQTT_BROKER_HOST,
+    "mqtt_port": str(DEFAULT_MQTT_BROKER_PORT),
+    "mqtt_username": "",
+    "mqtt_password": "",
+    "mqtt_hub_slug": "default",
     # Matches prior entrypoint default: unicast-friendly when mDNS 5353 is shared.
     "zeroconf_unicast": "on",
     "zeroconf_interfaces": "",
@@ -49,6 +62,18 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     # IoX child node titles: see CONFIG.md (string true/false; merged like other Custom Params).
     "change_node_names": "true",
 }
+
+# Custom Params that affect the hub MQTT transport. They must be included in
+# ``_config_restart_snap`` so saving only MQTT settings still runs
+# ``bridge.restart_session()`` (which stops/starts the MQTT task).
+_BRIDGE_MQTT_RESTART_KEYS: tuple[str, ...] = (
+    "mqtt_enable",
+    "mqtt_host",
+    "mqtt_port",
+    "mqtt_username",
+    "mqtt_password",
+    "mqtt_hub_slug",
+)
 
 # After CONFIGDONE, PG3 may still be delivering CUSTOM* events on other threads; retry briefly.
 _HUB_BOOTSTRAP_AFTER_CONFIG_MAX_ATTEMPTS = 120
@@ -116,6 +141,7 @@ class Controller(Node):
         self.change_node_names = True
         self._discover_notice_token = 0
         self._node_key_next_index_cache: Optional[int] = None
+        self._mqtt_transport_driver = MQTT_TRANSPORT_STATUS_DISABLED
 
         self.init_typed_params()
         poly.subscribe(poly.START, self.handler_start, address)
@@ -256,6 +282,84 @@ class Controller(Node):
             extra_html=extra_html,
         )
 
+    def _pg3_warn_and_notice(
+        self,
+        notice_key: str,
+        *,
+        title: str,
+        log_message: str,
+        notice_html: str,
+        emit_notice: bool = True,
+    ) -> None:
+        """Log **WARNING** and optionally set a PG3 **Notice** (HTML body is concatenated after the title).
+
+        Duplicated from **udi-poly-ecobee** ``nodes.backends.homekit.HomeKitBackend._pg3_warn_and_notice`` so each
+        Node Server stays self-contained (no shared package).
+        """
+        LOGGER.warning("%s", log_message)
+        if not emit_notice:
+            return
+        try:
+            self.Notices[notice_key] = (
+                f"<p><b>{html.escape(title)}</b></p>"
+                f"{notice_html}"
+                "<p>See the Node Server log for details.</p>"
+            )
+        except Exception:
+            LOGGER.exception("PG3 Notice %r failed", notice_key)
+
+    def _apply_mqtt_transport_driver(self, code: int) -> None:
+        """Update cached **GV1** (UOM 25) from hub MQTT transport state (asyncio thread + PG3 thread)."""
+        self._mqtt_transport_driver = int(code)
+        try:
+            self.setDriver("GV1", self._mqtt_transport_driver, report=True, force=True, uom=25)
+        except Exception:
+            LOGGER.exception("setDriver GV1 (MQTT transport status)")
+
+    def _mqtt_transport_notice_callback(self, code: int) -> None:
+        """Bridge runs on the asyncio thread; **GV1** must be IoX-visible."""
+        prev = self._mqtt_transport_driver
+        self._apply_mqtt_transport_driver(code)
+        if mqtt_transport_enabled(self._bridge_get_params()) and prev == MQTT_TRANSPORT_STATUS_CONNECTED:
+            if code == MQTT_TRANSPORT_STATUS_NOT_CONNECTED:
+                self._pg3_warn_and_notice(
+                    "homekit_mqtt_transport_lost",
+                    title="HomeKit hub MQTT session lost",
+                    log_message="HomeKit hub MQTT transport dropped from connected to not connected (broker/hub/network).",
+                    notice_html=(
+                        "<p>The hub lost its MQTT subscription or broker session while <code>mqtt_enable</code> "
+                        "is on. Clients publishing to ingress topics may fail until the hub reconnects. Check the "
+                        "broker, ACLs, and <b>udi-poly-homekit</b> logs.</p>"
+                    ),
+                )
+            elif code == MQTT_TRANSPORT_STATUS_DISABLED:
+                self._pg3_warn_and_notice(
+                    "homekit_mqtt_transport_disabled",
+                    title="HomeKit hub MQTT disabled",
+                    log_message="HomeKit hub MQTT was disabled while it had been connected (Custom Params or hub shutdown).",
+                    notice_html=(
+                        "<p>MQTT ingress is no longer active on the hub. WebSocket clients are unaffected if the "
+                        "hub WebSocket is still running.</p>"
+                    ),
+                )
+        if code == MQTT_TRANSPORT_STATUS_CONNECTED:
+            for nk in ("homekit_mqtt_transport_lost", "homekit_mqtt_transport_disabled"):
+                try:
+                    self.Notices.delete(nk)
+                except Exception:
+                    try:
+                        del self.Notices[nk]
+                    except Exception:
+                        pass
+
+    def _sync_mqtt_status_driver_from_params(self) -> None:
+        """Align **GV1** with Custom Params after (re)start; live updates still come from the bridge."""
+        if not mqtt_transport_enabled(self._bridge_get_params()):
+            self._apply_mqtt_transport_driver(MQTT_TRANSPORT_STATUS_DISABLED)
+            return
+        if self._mqtt_transport_driver == MQTT_TRANSPORT_STATUS_DISABLED:
+            self._apply_mqtt_transport_driver(MQTT_TRANSPORT_STATUS_NOT_CONNECTED)
+
     @staticmethod
     def _slot_from_alias(alias: str) -> Optional[int]:
         if not isinstance(alias, str):
@@ -372,6 +476,8 @@ class Controller(Node):
             "zeroconf_interfaces": p.get("zeroconf_interfaces"),
             "zeroconf_ip_version": p.get("zeroconf_ip_version"),
         }
+        for k in _BRIDGE_MQTT_RESTART_KEYS:
+            snap[k] = p.get(k)
         rows = self._bridge_get_pairing_slot_rows()
         snap["_pairing_slots"] = json.dumps(rows, sort_keys=True, default=str)
         return snap
@@ -392,6 +498,7 @@ class Controller(Node):
             or snap.get("zeroconf_ip_version") != prev.get("zeroconf_ip_version")
         )
         pairing_changed = snap.get("_pairing_slots") != prev.get("_pairing_slots")
+        mqtt_changed = any(snap.get(k) != prev.get(k) for k in _BRIDGE_MQTT_RESTART_KEYS)
         if network_changed:
             LOGGER.info("Hub bind/zeroconf config changed; restarting bridge")
             try:
@@ -404,6 +511,9 @@ class Controller(Node):
             fut.add_done_callback(self._on_full_restart_done)
         elif pairing_changed:
             LOGGER.info("Typed pairing config changed; reloading HomeKit sessions")
+            asyncio.run_coroutine_threadsafe(self.bridge.restart_session(), self.mainloop)
+        elif mqtt_changed:
+            LOGGER.info("MQTT hub settings changed; reloading MQTT transport")
             asyncio.run_coroutine_threadsafe(self.bridge.restart_session(), self.mainloop)
 
     def _on_full_restart_done(self, fut) -> None:
@@ -425,6 +535,7 @@ class Controller(Node):
         except Exception:
             LOGGER.exception("setDriver GV0 after full_restart")
         self.ready = True
+        self._sync_mqtt_status_driver_from_params()
 
     def handler_config_done(self):
         self.handler_config_done_st = True
@@ -490,8 +601,9 @@ class Controller(Node):
         try:
             self.setDriver("ST", 1, report=True, force=True, uom=25)
             self.setDriver("GV0", 0, report=True, force=True, uom=25)
+            self.setDriver("GV1", MQTT_TRANSPORT_STATUS_DISABLED, report=True, force=True, uom=25)
         except Exception:
-            LOGGER.exception("setDriver ST/GV0 before bridge start")
+            LOGGER.exception("setDriver ST/GV0/GV1 before bridge start")
 
         self._config_snap = None
         self.bridge = HomeKitHubBridge(
@@ -502,6 +614,7 @@ class Controller(Node):
             self._bridge_set_data,
             pairing_notice=self._pairing_notice_callback,
             pairing_health_notice=self._pairing_health_notice_callback,
+            mqtt_transport_notice=self._mqtt_transport_notice_callback,
         )
         self._config_snap = self._config_restart_snap()
         fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)
@@ -531,6 +644,7 @@ class Controller(Node):
             self.setDriver("GV0", 1, report=True, force=True, uom=25)
         except Exception:
             LOGGER.exception("setDriver GV0 after bridge start")
+        self._sync_mqtt_status_driver_from_params()
         self.heartbeat()
         self.ready = True
         LOGGER.info("HomeKit Hub ready")
@@ -1109,8 +1223,10 @@ class Controller(Node):
         try:
             self.setDriver("GV0", 0, report=True, force=True, uom=25)
             self.setDriver("ST", 0, report=True, force=True, uom=25)
+            self.setDriver("GV1", MQTT_TRANSPORT_STATUS_DISABLED, report=True, force=True, uom=25)
         except Exception:
-            LOGGER.exception("setDriver ST/GV0 on stop")
+            LOGGER.exception("setDriver ST/GV0/GV1 on stop")
+        self._mqtt_transport_driver = MQTT_TRANSPORT_STATUS_DISABLED
         if self.bridge and self.mainloop:
             fut = asyncio.run_coroutine_threadsafe(self.bridge.stop(), self.mainloop)
             try:
@@ -1652,8 +1768,9 @@ class Controller(Node):
     def query(self):
         try:
             self.setDriver("ST", 1, report=True, force=True, uom=25)
+            self.setDriver("GV1", self._mqtt_transport_driver, report=True, force=True, uom=25)
         except Exception:
-            LOGGER.exception("setDriver ST on query")
+            LOGGER.exception("setDriver ST/GV1 on query")
         self.reportDrivers()
 
     def cmd_discover(self, command=None):
@@ -1854,7 +1971,8 @@ class Controller(Node):
         "ZEROCONF_DIAG": cmd_zeroconf_diag,
     }
     drivers = [
-        {"driver": "ST", "value": 0, "uom": 25, "name": "NodeServer Online"},
+        {"driver": "ST", "value": 1, "uom": 25, "name": "NodeServer Online"},
         {"driver": "GV0", "value": 0, "uom": 25, "name": "Bridge Status"},
+        {"driver": "GV1", "value": 0, "uom": 25, "name": "MQTT transport"},
         {"driver": "ERR", "value": 0, "uom": 25, "name": "Hub error code"},
     ]

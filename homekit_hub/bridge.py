@@ -29,9 +29,11 @@ import logging
 import os
 import socket
 import sys
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Optional
 
+import aiomqtt
 import websockets
 from zeroconf import InterfaceChoice, IPVersion
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
@@ -42,6 +44,22 @@ from aiohomekit.exceptions import AccessoryNotFoundError, AuthenticationError
 from aiohomekit.model.characteristics import CharacteristicPermissions, CharacteristicsTypes
 from aiohomekit.model.services.service_types import ServicesTypes
 from aiohomekit.uuid import normalize_uuid
+
+from .mqtt_topics import (
+    DEFAULT_MQTT_BROKER_HOST,
+    DEFAULT_MQTT_BROKER_PORT,
+    MQTT_QOS_AT_LEAST_ONCE,
+    MQTT_TRANSPORT_STATUS_CONNECTED,
+    MQTT_TRANSPORT_STATUS_DISABLED,
+    MQTT_TRANSPORT_STATUS_NOT_CONNECTED,
+    client_out_event_topic,
+    client_out_rpc_topic,
+    clients_ingress_subscribe_pattern,
+    mqtt_transport_enabled,
+    normalize_hub_slug_param,
+    parse_ingress_client_slug,
+    sanitize_client_slug,
+)
 
 try:
     from aiohomekit.model.categories import Categories as _HapCategories
@@ -91,6 +109,13 @@ WS_PROTOCOL_ACTIONS: tuple[str, ...] = (
     "subscribe",
     "unsubscribe",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class MqttClientSession:
+    """Virtual hub client keyed by MQTT ``client_slug`` (topic path segment)."""
+
+    slug: str
 TYPED_PAIRING_SLOTS_KEY = "pairing_slots"
 DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
@@ -1277,6 +1302,7 @@ class HomeKitHubBridge:
         pairing_health_notice: Optional[
             Callable[[bool, str, list[str], dict[str, str], bool], None]
         ] = None,
+        mqtt_transport_notice: Optional[Callable[[int], None]] = None,
     ) -> None:
         self.log = logger
         self._get_params = get_params
@@ -1285,6 +1311,8 @@ class HomeKitHubBridge:
         self._set_custom_data = set_custom_data
         self._pairing_notice = pairing_notice
         self._pairing_health_notice = pairing_health_notice
+        self._mqtt_transport_notice = mqtt_transport_notice
+        self._mqtt_drv_last: Optional[int] = None
 
         self._hk: Optional[HKController] = None
         self._async_zeroconf: Optional[AsyncZeroconf] = None
@@ -1304,6 +1332,22 @@ class HomeKitHubBridge:
         self._transport_discovery_warned = False
         self._ws_server: Any = None
         self._running = False
+        self._mqtt_task: Optional[asyncio.Task[None]] = None
+        self._mqtt_pub_client: Any = None
+        self._mqtt_handles: dict[str, MqttClientSession] = {}
+
+    def _emit_mqtt_transport_status(self, code: int) -> None:
+        """Notify controller of MQTT transport state (deduped; safe from asyncio thread)."""
+        if self._mqtt_drv_last == code:
+            return
+        self._mqtt_drv_last = code
+        fn = self._mqtt_transport_notice
+        if fn is None:
+            return
+        try:
+            fn(code)
+        except Exception:
+            self.log.exception("MQTT transport status callback failed code=%s", code)
 
     async def _abort_start(self) -> None:
         """Undo partial startup (used when async_start or later steps fail)."""
@@ -1311,6 +1355,7 @@ class HomeKitHubBridge:
         await self._stop_pairing_probe_worker()
         await self._stop_hap_event_worker()
         await self._detach_all_ws_clients()
+        await self._stop_mqtt_transport()
         if self._ws_server is not None:
             try:
                 self._ws_server.close()
@@ -1434,6 +1479,13 @@ class HomeKitHubBridge:
                 continue
             if (did, aid_i, iid_i) in filt:
                 self._enqueue_ws_line(ws, line)
+        for sess in list(self._mqtt_handles.values()):
+            filt_m = self._ws_event_filters.get(sess)
+            if not filt_m:
+                await self._mqtt_publish_line(sess.slug, "event", line)
+                continue
+            if (did, aid_i, iid_i) in filt_m:
+                await self._mqtt_publish_line(sess.slug, "event", line)
 
     def _enqueue_hap_broadcast(self, msg: dict[str, Any]) -> None:
         q = self._hap_evt_queue
@@ -1532,6 +1584,7 @@ class HomeKitHubBridge:
             self._hap_evt_queue = asyncio.Queue(maxsize=HAP_EVENT_BROADCAST_QUEUE_MAX)
             self._hap_evt_worker = asyncio.create_task(self._hap_event_broadcast_worker())
             await self._start_websocket_server()
+            self._maybe_start_mqtt_transport()
         except Exception:
             await self._abort_start()
             raise
@@ -1541,6 +1594,7 @@ class HomeKitHubBridge:
         await self._stop_pairing_probe_worker()
         self._clear_all_listeners()
         await self._stop_hap_event_worker()
+        await self._stop_mqtt_transport()
         await self._shutdown_all_pairings()
         if self._ws_server is not None:
             self._ws_server.close()
@@ -1564,6 +1618,8 @@ class HomeKitHubBridge:
         self._pairing_unhealthy_aliases.clear()
         await self._shutdown_all_pairings()
         await self._sync_pairing_from_params()
+        await self._stop_mqtt_transport()
+        self._maybe_start_mqtt_transport()
 
     def _emit_pairing_health_state(self, unhealthy: bool) -> None:
         """Force-clear or sync fault notification (probe worker stop / session restart)."""
@@ -2080,7 +2136,7 @@ class HomeKitHubBridge:
 
     def _ws_capabilities(self) -> dict[str, Any]:
         need_token = bool(self._ws_expected_token())
-        return {
+        cap: dict[str, Any] = {
             "actions": list(WS_PROTOCOL_ACTIONS),
             "auth": "token" if need_token else "none",
             "rpc": {
@@ -2099,6 +2155,232 @@ class HomeKitHubBridge:
                 ),
             },
         }
+        p = self._get_params()
+        if mqtt_transport_enabled(p):
+            hub = normalize_hub_slug_param(p.get("mqtt_hub_slug"))
+            cap["mqtt"] = {
+                "enabled": True,
+                "hub_slug": hub,
+                "ingress_publish_template": f"udi/homekit/hubs/{hub}/clients/{{client_slug}}/in",
+                "egress_rpc_template": f"udi/homekit/hubs/{hub}/clients/{{client_slug}}/out/rpc",
+                "egress_event_template": f"udi/homekit/hubs/{hub}/clients/{{client_slug}}/out/event",
+            }
+        return cap
+
+    async def _stop_mqtt_transport(self) -> None:
+        self._mqtt_pub_client = None
+        t = self._mqtt_task
+        self._mqtt_task = None
+        if t is not None:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self.log.exception("MQTT transport task stop")
+        for sess in list(self._mqtt_handles.values()):
+            self._ws_hello_authed.discard(sess)
+            self._ws_event_filters.pop(sess, None)
+        self._mqtt_handles.clear()
+        code = (
+            MQTT_TRANSPORT_STATUS_DISABLED
+            if not mqtt_transport_enabled(self._get_params())
+            else MQTT_TRANSPORT_STATUS_NOT_CONNECTED
+        )
+        self._emit_mqtt_transport_status(code)
+
+    def _maybe_start_mqtt_transport(self) -> None:
+        if not mqtt_transport_enabled(self._get_params()):
+            self._emit_mqtt_transport_status(MQTT_TRANSPORT_STATUS_DISABLED)
+            return
+        if self._mqtt_task is not None and not self._mqtt_task.done():
+            return
+        self._mqtt_task = asyncio.create_task(self._mqtt_run_forever(), name="homekit-hub-mqtt")
+
+    def _mqtt_broker_params(self) -> tuple[str, int, str, str]:
+        p = self._get_params()
+        host = str(p.get("mqtt_host") or DEFAULT_MQTT_BROKER_HOST).strip() or DEFAULT_MQTT_BROKER_HOST
+        try:
+            port = int(p.get("mqtt_port") or DEFAULT_MQTT_BROKER_PORT)
+        except (TypeError, ValueError):
+            port = DEFAULT_MQTT_BROKER_PORT
+        if port < 1 or port > 65535:
+            port = DEFAULT_MQTT_BROKER_PORT
+        user = str(p.get("mqtt_username") or "").strip()
+        password = str(p.get("mqtt_password") or "")
+        return host, port, user, password
+
+    async def _mqtt_publish_json(self, slug: str, channel: str, obj: dict[str, Any]) -> None:
+        line = json.dumps(obj, default=str)
+        await self._mqtt_publish_line(slug, channel, line)
+
+    async def _mqtt_publish_line(self, slug: str, channel: str, line: str) -> None:
+        c = self._mqtt_pub_client
+        if c is None:
+            return
+        hub = normalize_hub_slug_param(self._get_params().get("mqtt_hub_slug"))
+        if channel == "event":
+            topic = client_out_event_topic(hub, slug)
+        else:
+            topic = client_out_rpc_topic(hub, slug)
+        try:
+            await c.publish(
+                topic,
+                payload=line.encode("utf-8"),
+                qos=MQTT_QOS_AT_LEAST_ONCE,
+                retain=False,
+            )
+        except Exception:
+            self.log.exception("MQTT publish failed topic=%s", topic)
+
+    def _detach_mqtt_session(self, sess: MqttClientSession) -> None:
+        self._ws_hello_authed.discard(sess)
+        self._ws_event_filters.pop(sess, None)
+        self._mqtt_handles.pop(sess.slug, None)
+
+    async def _close_client_session(self, client: Any) -> None:
+        if isinstance(client, MqttClientSession):
+            self._detach_mqtt_session(client)
+            return
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+    async def _mqtt_run_forever(self) -> None:
+        attempt = 0
+        while self._running:
+            params = self._get_params()
+            if not mqtt_transport_enabled(params):
+                self._emit_mqtt_transport_status(MQTT_TRANSPORT_STATUS_DISABLED)
+                return
+            host, port, user, pw = self._mqtt_broker_params()
+            hub = normalize_hub_slug_param(params.get("mqtt_hub_slug"))
+            pattern = clients_ingress_subscribe_pattern(hub)
+            client_kw: dict[str, Any] = {"hostname": host, "port": port}
+            if user:
+                client_kw["username"] = user
+                client_kw["password"] = pw
+            if attempt == 0:
+                self.log.info(
+                    "MQTT connecting host=%s port=%s hub_slug=%s subscribe_pattern=%s",
+                    host,
+                    port,
+                    hub,
+                    pattern,
+                )
+            self._emit_mqtt_transport_status(MQTT_TRANSPORT_STATUS_NOT_CONNECTED)
+            try:
+                async with aiomqtt.Client(**client_kw) as client:
+                    self._mqtt_pub_client = client
+                    await client.subscribe(pattern, qos=MQTT_QOS_AT_LEAST_ONCE)
+                    self.log.info(
+                        "MQTT connected host=%s port=%s subscribe_pattern=%s",
+                        host,
+                        port,
+                        pattern,
+                    )
+                    self._emit_mqtt_transport_status(MQTT_TRANSPORT_STATUS_CONNECTED)
+                    attempt = 0
+                    async for message in client.messages:
+                        if not self._running:
+                            break
+                        if not mqtt_transport_enabled(self._get_params()):
+                            break
+                        topic_s = str(message.topic)
+                        await self._handle_mqtt_inbound(topic_s, message.payload)
+            except asyncio.CancelledError:
+                self._mqtt_pub_client = None
+                raise
+            except Exception as e:
+                self._mqtt_pub_client = None
+                if not self._running:
+                    break
+                self.log.warning(
+                    "MQTT client error host=%s port=%s: %s",
+                    host,
+                    port,
+                    e,
+                    exc_info=attempt == 0,
+                )
+                delays = (1.0, 2.0, 5.0, 10.0, 30.0)
+                delay = delays[min(attempt, len(delays) - 1)]
+                attempt += 1
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    break
+            finally:
+                self._mqtt_pub_client = None
+
+    async def _handle_mqtt_inbound(self, topic: str, payload: bytes) -> None:
+        params = self._get_params()
+        hub = normalize_hub_slug_param(params.get("mqtt_hub_slug"))
+        slug = parse_ingress_client_slug(topic, hub)
+        if not slug:
+            self.log.debug("MQTT ignored topic=%r", topic)
+            return
+        sess = self._mqtt_handles.setdefault(slug, MqttClientSession(slug=slug))
+        try:
+            raw_pl: bytes | str
+            if isinstance(payload, (bytes, bytearray)):
+                raw_pl = bytes(payload)
+            else:
+                raw_pl = str(payload)
+            text = raw_pl.decode("utf-8") if isinstance(raw_pl, (bytes, bytearray)) else raw_pl
+        except UnicodeDecodeError:
+            await self._mqtt_publish_json(
+                slug,
+                "rpc",
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "message": "invalid payload encoding",
+                },
+            )
+            return
+        try:
+            msg = json.loads(text)
+        except json.JSONDecodeError:
+            await self._mqtt_publish_json(
+                sess.slug,
+                "rpc",
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "message": "invalid json",
+                },
+            )
+            return
+        if not isinstance(msg, dict):
+            await self._mqtt_publish_json(
+                sess.slug,
+                "rpc",
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "message": "json root must be object",
+                },
+            )
+            return
+        if msg.get("action") == "hello":
+            raw_client = msg.get("client")
+            if raw_client is not None and str(raw_client).strip() != "":
+                got = sanitize_client_slug(str(raw_client))
+                if got != slug:
+                    await self._mqtt_publish_json(
+                        sess.slug,
+                        "rpc",
+                        {
+                            "version": PROTOCOL_VERSION,
+                            "action": "error",
+                            "for": "hello",
+                            "message": "hello.client (sanitized) must match MQTT topic client_slug",
+                        },
+                    )
+                    return
+        await self._dispatch_client_message(sess, msg)
 
     async def _start_websocket_server(self) -> None:
         host, port = self._ws_bind()
@@ -2129,7 +2411,7 @@ class HomeKitHubBridge:
     async def _handle_ws_hello(self, ws: Any, msg: dict[str, Any]) -> bool:
         """Validate optional ``ws_token`` and send hello ``ack`` (``devices[]`` on the ack). False → not authed."""
         expected = self._ws_expected_token()
-        if expected:
+        if expected and not isinstance(ws, MqttClientSession):
             got_raw = msg.get("token")
             if got_raw is None:
                 got_raw = msg.get("ws_token")
@@ -2187,23 +2469,38 @@ class HomeKitHubBridge:
                 },
             )
             return
+        if not isinstance(msg, dict):
+            await self._send_ws(
+                ws,
+                {
+                    "version": PROTOCOL_VERSION,
+                    "action": "error",
+                    "message": "json root must be object",
+                },
+            )
+            return
+        await self._dispatch_client_message(ws, msg)
+
+    async def _dispatch_client_message(self, client: Any, msg: dict[str, Any]) -> None:
+        """Shared JSON dispatch for WebSocket connections and MQTT virtual sessions."""
         ver = msg.get("version")
         if ver != PROTOCOL_VERSION:
             await self._send_ws(
-                ws,
+                client,
                 {
                     "version": PROTOCOL_VERSION,
                     "action": "error",
                     "message": f"unsupported version {ver!r}, need {PROTOCOL_VERSION}",
                 },
             )
-            await ws.close()
+            await self._close_client_session(client)
             return
         action = msg.get("action")
-        if self._ws_expected_token() and ws not in self._ws_hello_authed:
+        is_mqtt = isinstance(client, MqttClientSession)
+        if self._ws_expected_token() and not is_mqtt and client not in self._ws_hello_authed:
             if action != "hello":
                 await self._send_ws(
-                    ws,
+                    client,
                     {
                         "version": PROTOCOL_VERSION,
                         "action": "error",
@@ -2213,35 +2510,32 @@ class HomeKitHubBridge:
                         ),
                     },
                 )
-                try:
-                    await ws.close()
-                except Exception:
-                    pass
+                await self._close_client_session(client)
                 return
         if action == "hello":
-            if await self._handle_ws_hello(ws, msg):
-                self._ws_hello_authed.add(ws)
+            if await self._handle_ws_hello(client, msg):
+                self._ws_hello_authed.add(client)
             return
         if action == "command":
-            await self._handle_command(ws, msg)
+            await self._handle_command(client, msg)
             return
         if action == "snapshot":
-            await self._handle_snapshot(ws, msg)
+            await self._handle_snapshot(client, msg)
             return
         if action == "list_devices":
-            await self._handle_list_devices(ws, msg)
+            await self._handle_list_devices(client, msg)
             return
         if action == "get":
-            await self._handle_get(ws, msg)
+            await self._handle_get(client, msg)
             return
         if action == "subscribe":
-            await self._handle_subscribe(ws, msg)
+            await self._handle_subscribe(client, msg)
             return
         if action == "unsubscribe":
-            await self._handle_unsubscribe(ws, msg)
+            await self._handle_unsubscribe(client, msg)
             return
         await self._send_ws(
-            ws,
+            client,
             {
                 "version": PROTOCOL_VERSION,
                 "action": "error",
@@ -2933,12 +3227,17 @@ class HomeKitHubBridge:
         await self._send_ws(ws, _list_devices_ws_message(devices_payload, list_warnings))
 
     async def _send_ws(self, ws: Any, obj: dict) -> None:
+        if isinstance(ws, MqttClientSession):
+            await self._mqtt_publish_json(ws.slug, "rpc", obj)
+            return
         self._enqueue_ws_line(ws, json.dumps(obj, default=str))
 
     async def _broadcast(self, obj: dict) -> None:
         line = json.dumps(obj, default=str)
         for ws in list(self._client_out.keys()):
             self._enqueue_ws_line(ws, line)
+        for sess in list(self._mqtt_handles.values()):
+            await self._mqtt_publish_line(sess.slug, "rpc", line)
 
     async def _broadcast_device_list_update(self, *, reason: str) -> None:
         """Push latest paired device list to all connected clients."""

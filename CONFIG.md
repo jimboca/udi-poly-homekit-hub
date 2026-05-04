@@ -6,7 +6,13 @@
 |-----------|----------|-------------|
 | `ws_host` | No | WebSocket bind address. Default `127.0.0.1`. |
 | `ws_port` | No | WebSocket port. Default `8163`. |
-| `ws_token` | No | Optional shared secret for the WebSocket API. **Leave empty** (default) for no auth. When set, clients must send the same value on `hello` as JSON field **`token`** or **`ws_token`** before any other action; see `PROTOCOL.md`. |
+| `ws_token` | No | Optional shared secret for the WebSocket API. **Leave empty** (default) for no auth. When set, clients must send the same value on `hello` as JSON field **`token`** or **`ws_token`** before any other action; see `PROTOCOL.md`. **Does not apply to MQTT** (v1: no application-level MQTT secret; use broker ACLs). |
+| `mqtt_enable` | No | `true` / `false` (string). When `true`, the hub connects to the LAN MQTT broker and subscribes to per-client ingress topics (see `PROTOCOL.md` MQTT section). Default `false`. |
+| `mqtt_host` | No | MQTT broker hostname or IP. Default `localhost`. |
+| `mqtt_port` | No | MQTT broker port. Default `1884` (Polisy/eISY general MQTT / PG3-style broker). |
+| `mqtt_username` | No | Optional broker username (when the broker requires authentication). |
+| `mqtt_password` | No | Optional broker password (when the broker requires authentication). |
+| `mqtt_hub_slug` | No | Topic segment after `udi/homekit/hubs/` identifying this hub instance (broker-safe slug). Default `default`. Change when multiple hubs share one broker. |
 | `zeroconf_unicast` | No | `on` (default), `auto`, or `off`. **`on`** uses python-zeroconf unicast mode (typical on eISY and other hosts where UDP **5353** is already owned). **`auto`** tries multicast first, then falls back on “address in use”. **`off`** forces multicast only (fails if 5353 is taken). **Most installs never change this.** |
 | `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
 | `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
@@ -74,6 +80,8 @@ Notes:
 | **DISCOVER** | Scan for HAP accessories; refreshes `last_hap_discover` and updates Custom Typed rows. |
 | **ZEROCONF_DIAG** | Notice with zeroconf mode, transport discovery counts, and library versions. |
 
+On the **HomeKit Hub** controller node, **GV1** (**MQTT transport**, UOM 25) reflects broker connectivity separately from **GV0** (**Bridge Status**): `0` = MQTT disabled in Custom Params, `1` = enabled but not subscribed / reconnecting, `2` = connected and subscribed to hub ingress. Values update when the state changes.
+
 ## Paired device node commands
 
 Each pairing slot row is exposed as its own node (including DISCOVER candidates), with:
@@ -132,13 +140,17 @@ Recovery sequence:
 
 If DISCOVER continues to show `paired=True` after those steps, the accessory still has an active HomeKit pairing and usually needs the vendor-specific HomeKit reset/factory reset workflow.
 
-## WebSocket protocol
+## WebSocket and MQTT protocol
 
-See `PROTOCOL.md`. All messages require `"version": "1"`. Events for all paired accessories share one connection; clients filter by `device_id`.
+See `PROTOCOL.md`. All messages require `"version": "1"`. Events for all paired accessories share one connection (WebSocket) or per-client topics (MQTT); clients filter by `device_id` and optional `subscribe` / `unsubscribe` keys.
+
+When **`mqtt_enable`** is `true`, the hub also connects to the broker in Custom Params and exposes the **same JSON** as WebSocket text frames on the topic tree documented in **`PROTOCOL.md`** (MQTT section). WebSocket remains available in parallel.
 
 ## Security
 
 The WebSocket server binds to `127.0.0.1` by default so only local clients can connect.
+
+**MQTT (v1):** there is **no** application-level secret equivalent to **`ws_token`** on the MQTT path. Anyone who can publish to your hub’s ingress topics can drive the hub JSON API. Use **broker authentication**, **ACLs**, and a **private LAN** as you would for other IoT MQTT integrations. **`mqtt_host`** / **`mqtt_port`** default to **`localhost`:**`1884`** to match the Polisy/eISY general MQTT broker used by other PG3 node servers (override if your broker differs).
 
 ## Environment (optional)
 
