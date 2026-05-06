@@ -44,12 +44,16 @@ ensure_orjson_freebsd() {
   echo "FreeBSD preflight: installing ${orjson_pkg} to avoid pip source-build failures..."
   if [ "$(id -u)" -eq 0 ]; then
     pkg install -y "${orjson_pkg}"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo pkg install -y "${orjson_pkg}"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n pkg install -y "${orjson_pkg}" 2>/dev/null; then
+    : # Non-interactive sudo (e.g. NOPASSWD) — typical for automation; PG3 has no TTY for a password.
   else
-    echo "ERROR: Need root/sudo to install ${orjson_pkg} on FreeBSD."
-    echo "Run: sudo pkg install -y ${orjson_pkg}"
-    exit 1
+    echo "WARNING: Could not install OS package ${orjson_pkg} automatically."
+    echo "  PG3/eisy installs often run without a TTY, so interactive sudo cannot prompt for a password."
+    echo "  Fix one of:"
+    echo "    - As root once: pkg install -y ${orjson_pkg}"
+    echo "    - Or configure passwordless sudo for pkg(8) for the Polyglot user"
+    echo "  Continuing with pip; orjson may still install from a wheel or may fail to build from source."
+    return 0
   fi
 }
 
