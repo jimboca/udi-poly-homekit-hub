@@ -18,6 +18,41 @@ print_versions() {
   echo "-----------------------------"
 }
 
+ensure_orjson_freebsd() {
+  # FreeBSD + Python 3.11 can fail building orjson from source (maturin/rust path).
+  # Prefer the OS package when available so pip can continue with pure-Python deps.
+  if ! command -v freebsd-version >/dev/null 2>&1; then
+    return 0
+  fi
+  if python3 -c "import orjson" 2>/dev/null; then
+    echo "orjson: already importable"
+    return 0
+  fi
+  if ! command -v pkg >/dev/null 2>&1; then
+    echo "WARNING: FreeBSD detected but pkg is unavailable; orjson may fail to build from source."
+    return 0
+  fi
+
+  py_tag="$(python3 -c 'import sys; print(f\"py{sys.version_info[0]}{sys.version_info[1]}\")')"
+  orjson_pkg="${py_tag}-orjson"
+
+  if pkg info "${orjson_pkg}" >/dev/null 2>&1; then
+    echo "orjson package already installed: ${orjson_pkg}"
+    return 0
+  fi
+
+  echo "FreeBSD preflight: installing ${orjson_pkg} to avoid pip source-build failures..."
+  if [ "$(id -u)" -eq 0 ]; then
+    pkg install -y "${orjson_pkg}"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo pkg install -y "${orjson_pkg}"
+  else
+    echo "ERROR: Need root/sudo to install ${orjson_pkg} on FreeBSD."
+    echo "Run: sudo pkg install -y ${orjson_pkg}"
+    exit 1
+  fi
+}
+
 if [ "${1-}" = "ci" ] || [ $# -gt 0 ]; then
   echo "Skipping pip3 install (CI or manual skip)."
   print_versions
@@ -25,4 +60,5 @@ if [ "${1-}" = "ci" ] || [ $# -gt 0 ]; then
 fi
 
 print_versions
+ensure_orjson_freebsd
 pip3 install --no-input -r requirements.txt --user --no-warn-script-location --upgrade
