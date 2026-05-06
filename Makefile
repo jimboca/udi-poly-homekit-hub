@@ -13,7 +13,9 @@
 # PG3 release flow (clean tree; not detached HEAD):
 #   1. Bump nodes/__init__.py VERSION; commit.
 #   2. `make release`     — tag v<VERSION> and push current branch + tag.
+#                           Then in PG3 UI, edit the plugin and set Version to that exact VERSION.
 #   3. `make beta`        — push HEAD to the `beta` branch (reference) and build $(NAME)-beta-<VERSION>.zip.
+#                           Then in PG3 UI, edit the plugin and set Version to that exact VERSION.
 #   4. `make production`  — push HEAD to the `production` branch (reference) and build $(NAME)-production-<VERSION>.zip.
 # The track-specific zip files are the actual deliverables uploaded to PG3.
 
@@ -69,6 +71,7 @@ help:
 	@echo "  make release             Tag v\$$VERSION and push current branch + tag"
 	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA) and build $(NAME)-$(BRANCH_BETA)-\$$VERSION.zip"
 	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION) and build $(NAME)-$(BRANCH_PRODUCTION)-\$$VERSION.zip"
+	@echo "                           After make release / make beta, edit plugin in PG3 UI and set Version to \$$VERSION"
 	@echo "  make zip                 Ad-hoc local $(NAME).zip (no version suffix)"
 	@echo ""
 	@echo "WebSocket smoke (bounded via --max-messages / --oneshot)"
@@ -111,7 +114,8 @@ beta:
 	ZIPFILE="$(NAME)-$(BRANCH_BETA)-$$VERSION.zip"; \
 	rm -f "$$ZIPFILE"; \
 	zip -x@zip_exclude.lst -r "$$ZIPFILE" * >/dev/null; \
-	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."
+	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."; \
+	echo "PG3 UI action required: edit this plugin and set Version to $$VERSION."
 
 # Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION) (reference) and build $(NAME)-$(BRANCH_PRODUCTION)-<VERSION>.zip
 # for upload to PG3. Requires clean tree; not detached HEAD.
@@ -166,7 +170,8 @@ release:
 	git -C "$$ROOT" tag -a "v$$VERSION" -m "Release $$VERSION"; \
 	echo "Created annotated tag v$$VERSION."; \
 	git -C "$$ROOT" push "$(GIT_REMOTE)" "$$BRANCH" "v$$VERSION"; \
-	echo "Pushed $$BRANCH and v$$VERSION to $(GIT_REMOTE)."
+	echo "Pushed $$BRANCH and v$$VERSION to $(GIT_REMOTE)."; \
+	echo "PG3 UI action required: edit this plugin and set Version to $$VERSION."
 
 # --- ws_debug_client exercises (exit after N inbound frames; no infinite monitor) ---
 

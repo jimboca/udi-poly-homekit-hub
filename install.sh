@@ -33,7 +33,7 @@ ensure_orjson_freebsd() {
     return 0
   fi
 
-  py_tag="$(python3 -c 'import sys; print(f\"py{sys.version_info[0]}{sys.version_info[1]}\")')"
+  py_tag="$(python3 -c 'import sys; print(f"py{sys.version_info[0]}{sys.version_info[1]}")')"
   orjson_pkg="${py_tag}-orjson"
 
   if pkg info "${orjson_pkg}" >/dev/null 2>&1; then
