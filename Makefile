@@ -1,4 +1,4 @@
-# udi-poly-homekit — lint/test, PG3 release pushes (beta / production / tag), and bounded ws_debug_client smoke checks.
+# udi-poly-homekit — lint/test, PG3 release artifacts (tag + per-track zips), and bounded ws_debug_client smoke checks.
 #
 # Quick tests:
 #   make test / make test-unit / make test-integration
@@ -10,16 +10,18 @@
 # If accessories show live data but ws_* / integration tests look empty, restart the plugin node on IoX/PG3
 # so the hub reloads pairings before re-running make/pytest.
 #
-# PG3 git tracks (clean tree; commit first): prefer **`make release`** then **`make beta`** so the **`beta`**
-# branch always matches an annotated tag (**`v`<VERSION>**). Running both without local commits yields the
-# same remote refs regardless of order.
+# PG3 release flow (clean tree; not detached HEAD):
+#   1. Bump nodes/__init__.py VERSION; commit.
+#   2. `make release`     — tag v<VERSION> and push current branch + tag.
+#   3. `make beta`        — push HEAD to the `beta` branch (reference) and build $(NAME)-beta-<VERSION>.zip.
+#   4. `make production`  — push HEAD to the `production` branch (reference) and build $(NAME)-production-<VERSION>.zip.
+# The track-specific zip files are the actual deliverables uploaded to PG3.
 
 PYTHON ?= python3
 PYTEST ?= $(PYTHON) -m pytest
 NAME = HomeKitHub
-STORE_INFO := release-pg3-store.txt
 GIT_REMOTE ?= origin
-# PG3 can install from a git URL + branch; these are the remote branch names we push to.
+# Reference branches pushed alongside each per-track zip build.
 BRANCH_BETA ?= beta
 BRANCH_PRODUCTION ?= production
 XML_FILES = profile/*/*.xml
@@ -64,10 +66,10 @@ help:
 	@echo "  make test-integration    Live hub tests (HOMEKIT_WS_* / hub)"
 	@echo ""
 	@echo "PG3 release (clean tree; not detached HEAD)"
-	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA)"
-	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION)"
-	@echo "  make release             Tag v\$$VERSION, push branch + tag + $(BRANCH_PRODUCTION)"
-	@echo "  make zip                 Optional local $(NAME).zip"
+	@echo "  make release             Tag v\$$VERSION and push current branch + tag"
+	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA) and build $(NAME)-$(BRANCH_BETA)-\$$VERSION.zip"
+	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION) and build $(NAME)-$(BRANCH_PRODUCTION)-\$$VERSION.zip"
+	@echo "  make zip                 Ad-hoc local $(NAME).zip (no version suffix)"
 	@echo ""
 	@echo "WebSocket smoke (bounded via --max-messages / --oneshot)"
 	@echo "  make ws-smoke            All ws-* targets"
@@ -77,17 +79,20 @@ help:
 
 clean:
 	$(PYTHON) -c "import pathlib, shutil; r = pathlib.Path('.'); [shutil.rmtree(p, ignore_errors=True) for p in r.rglob('__pycache__') if p.is_dir()]; shutil.rmtree('.pytest_cache', ignore_errors=True); shutil.rmtree('.ruff_cache', ignore_errors=True)"
-	rm -f $(NAME).zip
+	rm -f $(NAME)*.zip
 
-# Legacy / reference: local archive for manual upload or testing. Primary PG3 delivery is git branches (beta / production).
+# Ad-hoc local archive (no version suffix). For PG3 uploads, prefer `make beta` / `make production`.
 zip:
 	rm -f $(NAME).zip
 	zip -x@zip_exclude.lst -r $(NAME).zip *
 
-# Push current HEAD to $(GIT_REMOTE)/$(BRANCH_BETA). Requires clean tree; not detached HEAD.
+# Push current HEAD to $(GIT_REMOTE)/$(BRANCH_BETA) (reference) and build $(NAME)-$(BRANCH_BETA)-<VERSION>.zip
+# for upload to PG3. Requires clean tree; not detached HEAD.
 beta:
 	@set -e; \
 	ROOT=$$(pwd); \
+	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
+	test -n "$$VERSION" || { echo "Could not parse VERSION from $$ROOT/nodes/__init__.py"; exit 1; }; \
 	test -z "$$(git -C "$$ROOT" status --porcelain)" || { \
 		echo "Working tree is not clean. Commit or stash before make beta."; \
 		git -C "$$ROOT" status --short; \
@@ -102,12 +107,19 @@ beta:
 	git -C "$$ROOT" push "$(GIT_REMOTE)" HEAD:"$(BRANCH_BETA)"; \
 	echo "Repository: $$REPO"; \
 	echo "Branch: $(BRANCH_BETA)"; \
-	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_BETA)."
+	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_BETA)."; \
+	ZIPFILE="$(NAME)-$(BRANCH_BETA)-$$VERSION.zip"; \
+	rm -f "$$ZIPFILE"; \
+	zip -x@zip_exclude.lst -r "$$ZIPFILE" * >/dev/null; \
+	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."
 
-# Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION). Requires clean tree; not detached HEAD.
+# Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION) (reference) and build $(NAME)-$(BRANCH_PRODUCTION)-<VERSION>.zip
+# for upload to PG3. Requires clean tree; not detached HEAD.
 production:
 	@set -e; \
 	ROOT=$$(pwd); \
+	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
+	test -n "$$VERSION" || { echo "Could not parse VERSION from $$ROOT/nodes/__init__.py"; exit 1; }; \
 	test -z "$$(git -C "$$ROOT" status --porcelain)" || { \
 		echo "Working tree is not clean. Commit or stash before make production."; \
 		git -C "$$ROOT" status --short; \
@@ -122,11 +134,14 @@ production:
 	git -C "$$ROOT" push "$(GIT_REMOTE)" HEAD:"$(BRANCH_PRODUCTION)"; \
 	echo "Repository: $$REPO"; \
 	echo "Branch: $(BRANCH_PRODUCTION)"; \
-	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_PRODUCTION)."
+	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_PRODUCTION)."; \
+	ZIPFILE="$(NAME)-$(BRANCH_PRODUCTION)-$$VERSION.zip"; \
+	rm -f "$$ZIPFILE"; \
+	zip -x@zip_exclude.lst -r "$$ZIPFILE" * >/dev/null; \
+	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."
 
-# Write $(STORE_INFO) (PG3 hints), annotated tag v<version>, push current branch + production branch ref + tag to $(GIT_REMOTE).
-# Does not build a zip; use \`make zip\` only if you need a local archive.
-# Version = nodes/__init__.py VERSION (canonical). profile/version.txt is echoed for ISY/profile metadata.
+# Tag the current HEAD as v<VERSION> and push the current branch + tag to $(GIT_REMOTE).
+# Version = nodes/__init__.py VERSION (canonical). Track-specific zips are built by `make beta` / `make production`.
 # Run from this directory, or: make -C /path/to/udi-poly-homekit release
 # Requires clean git working tree and a checked-out branch (not detached HEAD).
 release:
@@ -134,50 +149,24 @@ release:
 	ROOT=$$(pwd); \
 	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
 	test -n "$$VERSION" || { echo "Could not parse VERSION from $$ROOT/nodes/__init__.py"; exit 1; }; \
-	PROFILE_VERSION=$$(tr -d '\r\n' < "$$ROOT/profile/version.txt"); \
-	test -n "$$PROFILE_VERSION" || { echo "$$ROOT/profile/version.txt is empty"; exit 1; }; \
 	test -z "$$(git -C "$$ROOT" status --porcelain)" || { \
 		echo "Working tree is not clean. Commit or stash before make release."; \
 		git -C "$$ROOT" status --short; \
 		exit 1; \
 	}; \
-	if [ "$$VERSION" != "$$PROFILE_VERSION" ]; then \
-		echo "WARNING: profile/version.txt ($$PROFILE_VERSION) != nodes/__init__.py VERSION ($$VERSION)."; \
-		echo "         Align profile/version.txt with nodes if ISY profile updates should match this release."; \
-	fi; \
-	if git -C "$$ROOT" rev-parse -q --verify "refs/tags/v$$VERSION" >/dev/null 2>&1; then \
-		echo "Tag v$$VERSION already exists. Delete: git -C \"$$ROOT\" tag -d v$$VERSION"; \
-		exit 1; \
-	fi; \
 	BRANCH=$$(git -C "$$ROOT" rev-parse --abbrev-ref HEAD); \
 	if [ "$$BRANCH" = "HEAD" ]; then \
 		echo "ERROR: detached HEAD. Checkout your release branch (e.g. main), then run make release."; \
 		exit 1; \
 	fi; \
+	if git -C "$$ROOT" rev-parse -q --verify "refs/tags/v$$VERSION" >/dev/null 2>&1; then \
+		echo "Tag v$$VERSION already exists. Delete: git -C \"$$ROOT\" tag -d v$$VERSION"; \
+		exit 1; \
+	fi; \
 	git -C "$$ROOT" tag -a "v$$VERSION" -m "Release $$VERSION"; \
 	echo "Created annotated tag v$$VERSION."; \
-	git -C "$$ROOT" push "$(GIT_REMOTE)" "$$BRANCH" "v$$VERSION" "HEAD:$(BRANCH_PRODUCTION)"; \
-	echo "Pushed $$BRANCH, $(BRANCH_PRODUCTION) @ $$(git -C "$$ROOT" rev-parse --short HEAD), and v$$VERSION to $(GIT_REMOTE)."; \
-	echo "Writing $$ROOT/$(STORE_INFO)"; \
-	{ \
-		echo "# PG3 Node Server store — generated by \`make release\` (gitignored; do not commit)"; \
-		echo "#"; \
-		echo "plugin_version=$$VERSION   # nodes/__init__.py VERSION — canonical (PG3 / runtime)"; \
-		echo "profile_version=$$PROFILE_VERSION   # profile/version.txt — ISY profile install metadata"; \
-		echo "git_branch_production=$(BRANCH_PRODUCTION)   # point PG3 install URL at this branch (production track)"; \
-		echo "git_branch_beta=$(BRANCH_BETA)   # point PG3 install URL at this branch (beta / pre-release track)"; \
-		echo "git_branch_pushed=$$BRANCH   # branch pushed alongside the tag"; \
-		echo "git_remote=$(GIT_REMOTE)"; \
-		echo "git_tag=v$$VERSION"; \
-		echo "#"; \
-		echo "# Next steps:"; \
-		echo "# - In PG3, set the Node Server git URL to this repo and branch \`$(BRANCH_PRODUCTION)\` (or \`$(BRANCH_BETA)\` for beta)."; \
-		echo "# - Optional local zip: \`make zip\` (not used for store git installs)."; \
-		echo "# - Override remote / branch names: GIT_REMOTE=... BRANCH_BETA=... BRANCH_PRODUCTION=... make release"; \
-	} > "$$ROOT/$(STORE_INFO)"; \
-	echo ""; \
-	cat "$$ROOT/$(STORE_INFO)"; \
-	echo ""
+	git -C "$$ROOT" push "$(GIT_REMOTE)" "$$BRANCH" "v$$VERSION"; \
+	echo "Pushed $$BRANCH and v$$VERSION to $(GIT_REMOTE)."
 
 # --- ws_debug_client exercises (exit after N inbound frames; no infinite monitor) ---
 

@@ -15,5 +15,5 @@ env/
 svc.pid
 snapshot-all.txt
 release-pg3-store.txt
-# Local archive from `make zip` (PG3 installs use git branches)
-HomeKitHub.zip
+# Local archives from `make zip` / `make beta` / `make production` (PG3 deliverable is the zip).
+HomeKitHub*.zip
