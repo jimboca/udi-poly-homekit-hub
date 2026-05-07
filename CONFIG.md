@@ -1,5 +1,7 @@
 # HomeKit Hub — configuration
 
+Most installations should work with the default parameter values as shipped; in typical setups you should not need to change most settings. Some parameters exist for compatibility and troubleshooting across different environments, and we may remove or simplify many of them in later production releases as behavior proves stable for most users.
+
 ## Custom Configuration Parameters
 
 | Parameter | Required | Description |

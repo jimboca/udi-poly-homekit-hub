@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-05-07
+
+### Changed
+
+- **CONFIG guidance:** added an explicit note that default parameters are usually correct for most users, with advanced settings mainly for compatibility/troubleshooting and likely to be simplified in future production releases.
+- **Version alignment:** `nodes/__init__.py` `VERSION` and `profile/version.txt` are both `0.2.12`.
+
 ## [0.2.11] - 2026-05-07
 
 ### Changed
