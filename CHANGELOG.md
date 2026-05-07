@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-05-07
+
+### Changed
+
+- **MQTT transport default:** Custom Param **`mqtt_enable`** now defaults to **`true`** for new installs so the hub subscribes to MQTT ingress unless explicitly disabled.
+- **Version alignment:** `nodes/__init__.py` `VERSION` and `profile/version.txt` are both `0.2.11`.
+
 ## [0.2.6] - 2026-05-01
 
 ### Added

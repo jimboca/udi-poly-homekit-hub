@@ -7,7 +7,7 @@
 | `ws_host` | No | WebSocket bind address. Default `127.0.0.1`. |
 | `ws_port` | No | WebSocket port. Default `8163`. |
 | `ws_token` | No | Optional shared secret for the WebSocket API. **Leave empty** (default) for no auth. When set, clients must send the same value on `hello` as JSON field **`token`** or **`ws_token`** before any other action; see `PROTOCOL.md`. **Does not apply to MQTT** (v1: no application-level MQTT secret; use broker ACLs). |
-| `mqtt_enable` | No | `true` / `false` (string). When `true`, the hub connects to the LAN MQTT broker and subscribes to per-client ingress topics (see `PROTOCOL.md` MQTT section). Default `false`. |
+| `mqtt_enable` | No | `true` / `false` (string). When `true`, the hub connects to the LAN MQTT broker and subscribes to per-client ingress topics (see `PROTOCOL.md` MQTT section). Default `true`. |
 | `mqtt_host` | No | MQTT broker hostname or IP. Default `localhost`. |
 | `mqtt_port` | No | MQTT broker port. Default `1884` (Polisy/eISY general MQTT / PG3-style broker). |
 | `mqtt_username` | No | Optional broker username (when the broker requires authentication). |

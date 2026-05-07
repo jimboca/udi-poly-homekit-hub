@@ -49,7 +49,7 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     # Optional shared secret: when non-empty, WebSocket clients must send it on ``hello`` (see PROTOCOL.md).
     "ws_token": "",
     # Optional LAN MQTT (same JSON as WebSocket); see PROTOCOL.md / CONFIG.md.
-    "mqtt_enable": "false",
+    "mqtt_enable": "true",
     "mqtt_host": DEFAULT_MQTT_BROKER_HOST,
     "mqtt_port": str(DEFAULT_MQTT_BROKER_PORT),
     "mqtt_username": "",
