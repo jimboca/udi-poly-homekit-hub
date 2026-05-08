@@ -15,6 +15,8 @@ To pair a HomeKit-compatible device with this plugin:
 Notes:
 
 - This hub flow currently has been tested primarily with **Ecobee thermostats** for use with **udi-poly-ecobee**.
+- Many accessories rotate/expire the displayed HomeKit setup code after a short time or after leaving pairing mode; if pairing fails, re-open pairing mode and use the current code shown by the device/app.
+- After you run **DISCOVER**, refresh/reload the PG3 **Configuration** page to see newly added **HomeKit pairing slots** entries in the editor.
 - If the accessory still shows as already paired, remove it from other HomeKit controllers (for example Apple Home), power-cycle/reset the device, then run **DISCOVER** again.
 
 ## Custom Configuration Parameters

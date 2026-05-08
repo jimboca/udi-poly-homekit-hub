@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-05-08
+
+### Changed
+
+- **Pairing notes:** added guidance that some accessories rotate/expire pairing codes and that users should refresh the PG3 **Configuration** page after **DISCOVER** to see new pairing slot rows.
+- **Versioning policy:** bumped plugin/runtime version to `0.2.14` without changing `profile/version.txt` (no profile asset changes in this release).
+
 ## [0.2.13] - 2026-05-08
 
 ### Changed
