@@ -2,6 +2,21 @@
 
 Most installations should work with the default parameter values as shipped; in typical setups you should not need to change most settings. Some parameters exist for compatibility and troubleshooting across different environments, and we may remove or simplify many of them in later production releases as behavior proves stable for most users.
 
+## Pairing quick start
+
+To pair a HomeKit-compatible device with this plugin:
+
+1. Put the accessory into HomeKit pairing mode (unpaired / ready to add).
+2. In PG3 / IoX, run **DISCOVER** on the **HomeKit Hub** controller node.
+3. Open **Custom Typed Configuration Parameters** and find the **HomeKit pairing slots** row added for that device (or add a row manually).
+4. Enter the accessory's HomeKit setup code in **hap_pin** for that row, then save. You can enter `XXXXXXXX` or `XXX-XX-XXX`; the plugin normalizes either format.
+5. Wait for pairing to complete; the plugin creates/updates an IoX child node for that slot and its drivers show pairing/connection status. Check notices/logs if pairing fails.
+
+Notes:
+
+- This hub flow currently has been tested primarily with **Ecobee thermostats** for use with **udi-poly-ecobee**.
+- If the accessory still shows as already paired, remove it from other HomeKit controllers (for example Apple Home), power-cycle/reset the device, then run **DISCOVER** again.
+
 ## Custom Configuration Parameters
 
 | Parameter | Required | Description |

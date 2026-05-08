@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-05-08
+
+### Changed
+
+- **Pairing quick start docs:** expanded the beginning of **`CONFIG.md`** with a concise pairing flow, clarified that HomeKit setup codes can be entered with or without dashes, and noted IoX slot child node status behavior.
+- **Compatibility note:** documented that current testing has focused on Ecobee thermostats used with **udi-poly-ecobee**.
+- **Versioning policy:** bumped plugin/runtime version to `0.2.13` without changing `profile/version.txt` (no profile asset changes in this release).
+
 ## [0.2.12] - 2026-05-07
 
 ### Changed
