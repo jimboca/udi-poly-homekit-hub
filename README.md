@@ -1,38 +1,20 @@
 # udi-poly-homekit
 
-Polyglot **PG3x** Node Server: HomeKit Accessory Protocol (HAP) **controller** hub with a local **WebSocket** API for other Node Servers (e.g. `udi-poly-ecobee` in Local mode).
+## What is this?
 
-The hub supports **multiple simultaneous HomeKit pairings** (each row has an optional **slot** number, or the Hub assigns the next free slot). Each paired accessory is identified on the WebSocket API by its **`device_id`** (AccessoryPairingID, lowercase).
+**udi-poly-homekit** is a **HomeKit plugin for Universal Devices IoX (PG3 / PG3x)**. It runs **on your eisy / Polisy as its own HomeKit hub** and pairs directly with HomeKit-compatible accessories on your LAN — **you do not pair them with the Apple Home app or any Apple device**. **No iPhone, iPad, Mac, Apple TV, or HomePod is required** to install or operate this plugin.
+
+This Node Server speaks the same HomeKit Accessory Protocol (HAP) as Apple's Home app, so accessories that advertise HomeKit support (thermostats, plugs, sensors, locks, etc.) can be added to IoX through PG3. Pairings are persisted in PG3 custom data, so accessories stay paired across restarts.
+
+The hub exposes local **WebSocket** and **MQTT** interfaces so other PG3 Node Servers running on the same controller (for example `udi-poly-ecobee` in Local mode) can read and control characteristics on those paired accessories without going through Ecobee. Those other plugins can then publish their own nodes, drivers, and commands to PG3 / IoX. Each paired accessory is identified on the WebSocket API by its **`device_id`** (HAP `AccessoryPairingID`, lowercase).
+
+The hub supports **multiple simultaneous HomeKit pairings** (each row has an optional **slot** number, or the Hub assigns the next free slot).
 
 ## Requirements
 
 **Python 3.10+** on the Polyglot host (**`aiohomekit` 3.x** and current **`udi_interface`** require it).
 
 **Polyglot** runs **`install.sh`** on the Node Server host to install **`requirements.txt`**; you do not need to install those packages by hand for a normal install.
-
-## Development
-
-```bash
-pip install -r requirements.txt -r requirements-dev.txt
-pytest -q
-```
-
-Lint is checked in **GitHub Actions** with [Ruff](https://docs.astral.sh/ruff/) (pinned in the workflow). Locally: `pip install ruff==0.8.6 && ruff check .` (optional).
-
-**Releases:** Polyglot installs use a **git URL + branch**. This repo uses two remote branches: **`beta`** (pre-release) and **`production`** (stable). On a **branch** (not detached `HEAD`) with a **clean** git tree:
-
-- **`make beta`** — pushes **current `HEAD`** to **`origin/beta`** (override remote: **`GIT_REMOTE=myfork`**; override branch name: **`BRANCH_BETA=...`**).
-- **`make production`** — same for **`origin/production`** (**`BRANCH_PRODUCTION=...`**).
-- **`make release`** — parses **`VERSION`** from **`nodes/__init__.py`**, creates annotated **`v`<version>**, **`git push`**es the current branch, **`v`<version>**, and **`HEAD` → `production`**, then writes **`release-pg3-store.txt`** (versions and git branch hints for the PG3 store). Does **not** build a zip.
-
-**`make zip`** remains for an optional **local `HomeKitHub.zip`** (legacy / manual upload); primary delivery is the branches above.
-
-## Layout
-
-- `homekit-poly.py` — entry point
-- `homekit_hub/bridge.py` — aiohomekit + WebSocket (default port **8163**), multi-slot pairing
-- `nodes/Controller.py` — PG3 lifecycle and custom params/data
-- `PROTOCOL.md` — JSON message contract (`version` **1**)
 
 ## Configuration
 
@@ -75,18 +57,9 @@ The controller node exposes **ST** (Polyglot / NodeServer connection — same id
 
 On **Node Server start**, the controller clears **all** Notices before loading.
 
-## Packaging (git branches; optional zip)
+## Packaging (git branches)
 
-Point PG3 at this repository and the **`production`** or **`beta`** branch (see **Releases** above). Polyglot clones that branch and runs **`install.sh`** / **`requirements.txt`** on the host like other git-based Node Servers.
-
-Optional local archive (reference only): from the repo root on a Unix host (or WSL) with `zip` and optional `xmllint`:
-
-```bash
-chmod +x install.sh
-./install.sh              # optional: local test install (Polyglot runs this on the host)
-make check                # validate profile XML
-make zip                  # produces HomeKitHub.zip (see zip_exclude.lst)
-```
+Point PG3 at this repository and the **`production`** or **`beta`** branch. Polyglot clones that branch and runs **`install.sh`** / **`requirements.txt`** on the host like other git-based Node Servers. Maintainer-side details on how those branches are produced are in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
 ## Logs
 
@@ -97,6 +70,10 @@ Runtime logs under `logs/` are **local-only**: the directory is listed in `.giti
 - **`handler_params`** only applies to **this** Node Server’s Polyglot **Custom Configuration Parameters**. It does not register remote plugins.
 - **Other Node Servers** connect as **WebSocket clients**. The hub **fan-outs** each HAP `event` to **all** connected clients. Each client filters by `device_id` (and characteristic) in its own code.
 - **`hello` `ack`** and proactive **`list_devices`** **`devices[]`** rows include HAP **Accessory Information** when the accessory responds: **`category`** (integer, e.g. **9** = thermostat) and **`category_label`** (HAP enum name when known), plus **`manufacturer`**, **`model`**, **`name`**, **`serial_number`**, etc. The hub issues **reads** and may **refresh `/accessories`** so **category** is populated for healthy pairings; downstream Node Servers (e.g. **udi-poly-ecobee** in HomeKit mode) can rely on **`category`** / **`category_label`** for device-type filtering after pairing succeeds.
+
+## Development
+
+Setup, tests, lint, and the **`make beta` / `make production` / `make release`** flow live in **[DEVELOPMENT.md](DEVELOPMENT.md)**, along with the source-tree layout. End users do not need this file — Polyglot runs `install.sh` on the Node Server host for you.
 
 ## References
 
