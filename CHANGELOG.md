@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-28
+
+### Fixed
+
+- **Hub client warnings:** hello **`ack`** and **`list_devices`** now always include a **`warnings`** array (empty when healthy) so downstream clients can clear stale PG3 notices after recovery.
+
 ## [1.0.0] - 2026-05-28
 
 ### Changed

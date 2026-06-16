@@ -68,7 +68,7 @@ except Exception:  # pragma: no cover - optional typing surface
 
 PROTOCOL_VERSION = "1"
 
-# Optional ``warnings`` on hello ``ack`` / ``list_devices`` (additive; clients may ignore).
+# ``warnings`` on hello ``ack`` / ``list_devices`` (always present; ``[]`` clears client notices).
 WS_NOTICE_LEVEL_WARNING = "warning"
 WS_NOTICE_LEVEL_ERROR = "error"
 WS_NOTICE_CODE_ACCESSORIES_LOAD_FAILED = "accessories_load_failed"
@@ -1315,14 +1315,13 @@ async def _device_list_entry_resolved(
 def _list_devices_ws_message(
     devices: list[dict[str, Any]], warnings: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Hub → client ``list_devices`` JSON (optional ``warnings``)."""
+    """Hub → client ``list_devices`` JSON (always includes ``warnings``, possibly empty)."""
     msg: dict[str, Any] = {
         "version": PROTOCOL_VERSION,
         "action": "list_devices",
         "devices": devices,
+        "warnings": warnings,
     }
-    if warnings:
-        msg["warnings"] = warnings
     return msg
 
 
@@ -2540,9 +2539,8 @@ class HomeKitHubBridge:
             "device_ids": device_ids,
             "devices": devices_payload,
             "capabilities": self._ws_capabilities(),
+            "warnings": list_warnings,
         }
-        if list_warnings:
-            ack_body["warnings"] = list_warnings
         await self._send_ws(ws, ack_body)
         return True
 
@@ -2657,7 +2655,7 @@ class HomeKitHubBridge:
         """Paired hub rows for ``list_devices`` / hello, with optional Accessory Information metadata.
 
         Returns ``(devices, warnings)`` where ``warnings`` is a list of structured client notices
-        (same array attached to hello ``ack`` and each ``list_devices`` when non-empty).
+        (same array attached to hello ``ack`` and each ``list_devices``; use ``[]`` when healthy).
         """
         device_ids = await self._active_pairing_device_ids_stable()
         out: list[dict[str, Any]] = []

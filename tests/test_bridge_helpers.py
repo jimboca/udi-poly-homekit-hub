@@ -359,9 +359,9 @@ async def test_accessory_information_metadata_with_reads_notifies_on_get_charact
     assert notices[0]["primary_aid"] == 1
 
 
-def test_list_devices_ws_message_omits_empty_warnings():
+def test_list_devices_ws_message_includes_empty_warnings():
     m = _list_devices_ws_message([{"device_id": "a"}], [])
-    assert "warnings" not in m
+    assert m["warnings"] == []
     assert m["devices"][0]["device_id"] == "a"
 
 

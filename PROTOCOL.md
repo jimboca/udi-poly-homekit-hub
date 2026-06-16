@@ -123,7 +123,7 @@ When **`ws_token`** is empty or unset, behavior matches older hubs: any action m
 }
 ```
 
-- **`warnings`** (optional): when present and non-empty, an array of structured notices so clients can log or surface hub-side issues in their own UI. Each object has **`level`** (`warning` or `error`), **`code`** (stable machine id), **`message`**, and optionally **`device_id`** and **`primary_aid`** when the notice applies to one pairing row. Omitted when there are no notices. The same array may be repeated on a client-requested or hub-initiated **`list_devices`** (see below).
+- **`warnings`**: array of structured notices so clients can log or surface hub-side issues in their own UI (and clear stale notices when empty). Each object has **`level`** (`warning` or `error`), **`code`** (stable machine id), **`message`**, and optionally **`device_id`** and **`primary_aid`** when the notice applies to one pairing row. Always present on hello **`ack`** and **`list_devices`**; use **`[]`** when there are no current notices. The same array may be repeated on a client-requested or hub-initiated **`list_devices`** (see below).
 - **`device_ids`**: sorted list of paired accessories (same membership as **`devices`** and as **`list_devices`** when you request it).
 - **`devices`**: same objects as in **`list_devices`** (see below): HAP **Accessory Information** metadata when the hub has loaded `/accessories` for that pairing. Optional keys may be omitted if unknown or not yet fetched. Use this array at connect time; the hub does **not** send a separate **`list_devices`** message unless you request **`action: list_devices`** or the hub pushes one after pairing changes.
 - **`capabilities.auth`**: **`none`** if the hub does not require a token; **`token`** when `ws_token` is configured.
@@ -364,7 +364,7 @@ Request the set of currently active paired accessories (same **`devices[]`** sha
 }
 ```
 
-**`warnings`**: same optional structured notices as on hello **`ack`** (see above). The hub omits this key when there are no notices (same as hello **`ack`**).
+**`warnings`**: same structured notices as on hello **`ack`** (see above). Always present; **`[]`** means no current hub notices.
 
 Each element **always** includes **`device_id`**. The hub adds optional discovery fields from the HAP **Accessory Information** service (values from the last successful `/accessories` load for that pairing):
 
