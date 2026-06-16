@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **User setup docs:** restructured **CONFIG.md** as the primary guide with **Ecobee + IoX quick start**, defaults-first pairing steps, consolidated troubleshooting, and demoted reference sections. **README.md** trimmed to a short overview linking to CONFIG.
+
 ## [0.2.14] - 2026-05-08
 
 ### Changed

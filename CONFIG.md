@@ -1,25 +1,144 @@
 # HomeKit Hub — configuration
 
-Most installations should work with the default parameter values as shipped; in typical setups you should not need to change most settings. Some parameters exist for compatibility and troubleshooting across different environments, and we may remove or simplify many of them in later production releases as behavior proves stable for most users.
+**Start here.** This file is the main setup guide for pairing accessories and connecting other PG3 plugins (for example **udi-poly-ecobee**).
 
-## Pairing quick start
+On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf settings at their defaults**. You only need to change **`mqtt_hub_slug`** if multiple HomeKit hubs share one MQTT broker.
 
-To pair a HomeKit-compatible device with this plugin:
+---
 
-1. Put the accessory into HomeKit pairing mode (unpaired / ready to add).
-2. In PG3 / IoX, run **DISCOVER** on the **HomeKit Hub** controller node.
-3. Open **Custom Typed Configuration Parameters** and find the **HomeKit pairing slots** row added for that device (or add a row manually).
-4. Enter the accessory's HomeKit setup code in **hap_pin** for that row, then save. You can enter `XXXXXXXX` or `XXX-XX-XXX`; the plugin normalizes either format.
-5. Wait for pairing to complete; the plugin creates/updates an IoX child node for that slot and its drivers show pairing/connection status. Check notices/logs if pairing fails.
+## Ecobee + IoX quick start
 
-Notes:
+Pair your Ecobee on this hub **before** installing **udi-poly-ecobee**. No iPhone, iPad, Mac, or Apple Home app is required.
 
-- This hub flow currently has been tested primarily with **Ecobee thermostats** for use with **udi-poly-ecobee**.
-- Many accessories rotate/expire the displayed HomeKit setup code after a short time or after leaving pairing mode; if pairing fails, re-open pairing mode and use the current code shown by the device/app.
-- After you run **DISCOVER**, refresh/reload the PG3 **Configuration** page to see newly added **HomeKit pairing slots** entries in the editor.
-- If the accessory still shows as already paired, remove it from other HomeKit controllers (for example Apple Home), power-cycle/reset the device, then run **DISCOVER** again.
+**Critical:** The Ecobee must **not** be paired to **Apple Home** (or any other HomeKit controller) while you pair it here. Remove it from Apple Home first if it was added there.
 
-## Custom Configuration Parameters
+1. Add **HomeKit Hub** from the PG3 store and start the Node Server.
+2. On the Ecobee: put it in **HomeKit pairing mode** (see Ecobee docs). Confirm it is **not** in Apple Home.
+3. On the **HomeKit Hub** controller node in PG3 / IoX, run **DISCOVER**.
+4. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Refresh the Configuration page** if the new row does not appear yet.
+5. Find the row for your thermostat (id and name are filled in by **DISCOVER**). Enter the 8-digit HomeKit code in **hap_pin** (`12345678` or `123-45-678` — either format works). **Save**.
+6. Wait for pairing to finish. A child node should appear; its **ST** driver should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
+7. Leave **`mqtt_enable`** `true` and **`mqtt_hub_slug`** `default` unless you run multiple hubs on one broker.
+8. **Next:** install **udi-poly-ecobee** and follow its [CONFIG.md — Ecobee quick start](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
+
+This hub flow has been tested primarily with **Ecobee thermostats** for use with **udi-poly-ecobee**. Other HomeKit accessories may work; pairing steps are the same.
+
+---
+
+## Defaults you can ignore
+
+Most users never change these. Only touch them when you have a specific reason (multiple hubs, custom broker, or support asked you to).
+
+| Parameter | Default | Change only when… |
+|-----------|---------|-------------------|
+| `mqtt_enable` | `true` | You intentionally want WebSocket-only (not recommended for Ecobee). |
+| `mqtt_host` / `mqtt_port` | `localhost` / `1884` | Your MQTT broker is not the Polisy/eISY general broker. |
+| `mqtt_hub_slug` | `default` | Multiple HomeKit hubs share one broker (must match Ecobee **`hk_mqtt_hub_slug`**). |
+| `ws_host` / `ws_port` | `127.0.0.1` / `8163` | WebSocket fallback client needs a non-default bind or port. |
+| `ws_token` | *(empty)* | You want a shared secret on the WebSocket API. |
+| `zeroconf_*` | shipped defaults | mDNS / discover troubleshooting only. |
+
+---
+
+## Pairing details
+
+### Standard flow (DISCOVER)
+
+1. Put the accessory in HomeKit pairing mode (unpaired).
+2. Run **DISCOVER** on the **HomeKit Hub** controller. The hub stores a discover snapshot and **adds a row** per new unpaired accessory to **HomeKit pairing slots** (id and name prefilled; **hap_pin** empty).
+3. Enter the **HomeKit pairing code** on that row and **Save**. The code appears on the device label, screen, or vendor app while in pairing mode — it is not shown in Polyglot.
+4. If several unpaired devices appear at once, use **accessory_id** or **accessory_name** on the row to pick the right one (usually **DISCOVER** already set these).
+
+**Tips:**
+
+- Setup codes often **expire** when pairing mode ends; re-open pairing mode and use the **current** code if pairing fails.
+- After **DISCOVER**, refresh the PG3 **Configuration** page before editing typed rows.
+
+### Manual rows (QR code in vendor app only)
+
+You can **add row** manually in **HomeKit pairing slots** instead of waiting for **DISCOVER**.
+
+Some products (e.g. **Ecobee**) show a **QR code** in their app for **Apple Home**. That path is separate: for this hub you need the **numeric** setup code (often on a sticker or in docs). Run **DISCOVER** while the device is in pairing mode to fill **id** / **name**, or type them yourself.
+
+### Ecobee and Apple Home
+
+Ecobee may prompt you to add the thermostat to Apple Home. **Skip that** for this setup. The thermostat should be pairable only to **this** hub (unpaired from Apple Home).
+
+---
+
+## Verify hub is ready for Ecobee
+
+On the **HomeKit Hub** controller node:
+
+| Driver | Good value | Meaning |
+|--------|------------|---------|
+| **ST** | `1` | Node Server connected to Polyglot. |
+| **GV0** | `1` | Bridge running (HomeKit + WebSocket server up). |
+| **GV1** | `2` | MQTT connected (when **`mqtt_enable`** is `true`). |
+
+If **GV0** is not `1` or **GV1** is not `2`, check PG3 **Notices** and `logs/debug.log` before installing Ecobee.
+
+Continue with [udi-poly-ecobee CONFIG.md](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
+
+---
+
+## Troubleshooting
+
+### Accessory shows "already paired"
+
+Symptoms: **DISCOVER** lists the device under **Already paired elsewhere**, or pairing fails with notices like **no matching accessory** / **no unpaired accessory matched**.
+
+1. Remove/unpair the accessory from **Apple Home** and any other HomeKit controller.
+2. Put the accessory into HomeKit pairing mode again.
+3. Power-cycle the accessory (or vendor HomeKit reset if required).
+4. Wait 30–60 seconds for mDNS to settle.
+5. Run **DISCOVER** again; confirm the target is **unpaired**.
+6. Enter the current pairing code on the slot row and **Save**.
+
+**UNPAIR** / **DELETE** on a slot row clears **this plugin's** pairing data only. If the accessory still advertises `paired=True`, repeat the steps above on the device side.
+
+Other notes:
+
+- Paired state in discovery can lag briefly after unpair.
+- Deleting a typed row removes saved slot data; re-pairing is a fresh flow.
+
+### Pairing code rejected or expired
+
+Re-open HomeKit pairing mode on the accessory and enter the **new** code shown on the device.
+
+---
+
+## Reference: Hub status and errors
+
+The controller exposes **ST** (Node Server connection), **GV0** (**Bridge Status**), **GV1** (**MQTT transport**), and **ERR** (last error code). Polyglot **Notices** carry human-readable text for the same events.
+
+| Driver | Values |
+|--------|--------|
+| **ST** `0` / `1` / `2` | Disconnected / Connected / Failed |
+| **GV0** `0` / `1` / `2` | Bridge stopped / running / error |
+| **GV1** `0` / `1` / `2` | MQTT disabled / reconnecting / connected |
+
+**ERR** codes (profile NLS `ERRC-*`):
+
+| Code | Label |
+|------|--------|
+| 0 | No error |
+| 1 | Bridge start failed |
+| 2 | Discover scan failed |
+| 3 | Discover unexpected error |
+| 4 | Custom typed save failed |
+| 5 | Pairing rows update failed |
+| 6 | Bridge stop failed |
+| 7 | Status update failed |
+| 8 | Pairing: no matching accessory |
+| 9 | Pairing failed |
+| 10 | Asyncio loop stopped |
+
+On Node Server start, the controller clears all Notices before loading.
+
+---
+
+## Reference: Custom Configuration Parameters
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
@@ -37,146 +156,85 @@ Notes:
 | `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
 | `change_node_names` | No | `true` (default) or `false` (string). When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
 
-**Zeroconf parameters:** On a normal Polisy / eISY deployment you can ignore the three `zeroconf_*` keys entirely. Defaults match the supported production setup (unicast-friendly when mDNS is shared). Change them only for troubleshooting or unusual networks; the controller command **Zeroconf diagnostic** (`ZEROCONF_DIAG`) logs a snapshot (mode, transports, library versions). After changing `zeroconf_*` or WebSocket bind settings, save configuration; the hub restarts the asyncio bridge automatically when those values change. (Environment variables below still **override** Custom Params when set for the Node Server process.)
+**Zeroconf parameters:** On a normal Polisy / eISY deployment you can ignore the three `zeroconf_*` keys entirely. The controller command **Zeroconf diagnostic** (`ZEROCONF_DIAG`) logs a snapshot for support. After changing `zeroconf_*` or WebSocket bind settings, save configuration; the hub restarts the asyncio bridge automatically.
 
-## Custom Typed Configuration Parameters
+---
 
-Same pattern as **udi-poly-notification** (e.g. Pushover / Messages lists): one typed section with **multiple rows**; each row is one pairing slot.
+## Reference: Custom Typed Configuration Parameters
+
+Same pattern as **udi-poly-notification**: one typed section with **multiple rows**; each row is one pairing slot.
 
 ### HomeKit pairing slots (`pairing_slots`)
 
-In the Polyglot UI, open **Custom Typed Configuration Parameters** and use the list **“HomeKit pairing slots”** (the Node Server registers it at startup; the list supports **add row** / **remove** in the editor). **DISCOVER** automatically **adds a row** for each newly seen **unpaired** accessory (with **Accessory id** and **name** filled in; you add the **HomeKit pairing code** and save). You can also add or remove rows manually in that list.
-
-Each row has a **Slot** (optional) plus the pairing and filter fields:
+In the Polyglot UI, open **Custom Typed Configuration Parameters** and use the list **“HomeKit pairing slots”**. **DISCOVER** automatically **adds a row** for each newly seen **unpaired** accessory. You can also **add row** / **remove** manually.
 
 | Field | Description |
 |-------|-------------|
-| **Slot** (`slot`) | Positive integer **1, 2, 3, …** identifying this row’s pairing in saved data and hub logs. **Optional:** if you leave it empty, the Hub picks the **smallest unused** slot number (reuses a gap if you remove a row). If two rows request the same slot, the first wins and the other is reassigned automatically. |
-| **HomeKit pairing code** (`hap_pin`) | Code shown on the accessory (e.g. `123-45-678`). You may enter **eight digits without dashes** (`12345678`); the hub normalizes to `123-45-678` before pairing. **Leave empty** on that row to disassociate only that accessory (Hub removes pairing when possible and clears saved data for that slot). |
-| **Accessory device id** (`accessory_id`) | **Optional.** If you leave it (and the name) **empty**, the Hub uses the **most recent DISCOVER** snapshot in custom data (`last_hap_discover`) to pick the target — you do not copy ids by hand. If **several** accessories are unpaired at once, set this field (or **name** below) on the row to choose one. |
-| **Substring of accessory name** (`accessory_name`) | **Optional** extra filter (same as id); use when you must disambiguate multiple unpaired devices. |
-| **Node key** (`node_key`) | Stable plugin-managed key used for IoX child node identity/address. Auto-assigned if missing. Leave it unchanged to keep the same IoX node address across unpair/re-pair, including when replacing with a different physical device in that row, so existing programs/scenes/references continue to target the same node. Auto-generated keys are monotonic and are not automatically reused later, even if old rows are deleted. |
-| **LAN host:port** (`discover_endpoint`) | Filled from **DISCOVER** when applicable; also **updated automatically** when a degraded IP pairing **recovers** after reboot or LAN/IP/port change (informational). |
+| **Slot** (`slot`) | Positive integer **1, 2, 3, …** Optional: if empty, the Hub picks the smallest unused slot. |
+| **HomeKit pairing code** (`hap_pin`) | Code shown on the accessory (e.g. `123-45-678`). Eight digits without dashes work. **Leave empty** to disassociate that slot. |
+| **Accessory device id** (`accessory_id`) | Optional. Usually filled by **DISCOVER**. Use to disambiguate multiple unpaired devices. |
+| **Substring of accessory name** (`accessory_name`) | Optional extra filter. |
+| **Node key** (`node_key`) | Stable IoX child node identity (`hkp_<node_key>`). Auto-assigned; leave unchanged to keep the same IoX address across re-pair. |
+| **LAN host:port** (`discover_endpoint`) | Filled from **DISCOVER**; updated when IP pairing recovers after reboot (informational). |
 
-- There is **no fixed maximum** number of rows; use as many as you need.
-- **Remove** a row or **clear** its pairing code in the editor to disassociate that slot.
-- If you removed a row by mistake, run **DISCOVER** again: the hub will repopulate rows from current discover results (prefers unpaired devices, but can also recreate missing rows from paired discoveries so id/name are available again).
+- No fixed maximum number of rows.
+- If you removed a row by mistake, run **DISCOVER** again to repopulate.
 
-## Persisted custom data
+### Persisted custom data
 
-Pairing keys and session metadata are stored under **`homekit_pairings`** in Polyglot **custom data** (object keyed by slot index string, e.g. `"1"`, `"12"`). You normally do not edit this by hand.
+Pairing keys live under **`homekit_pairings`** in Polyglot custom data. Do not edit by hand.
 
-## Pairing workflow
+---
 
-1. Put the accessory in HomeKit pairing mode (unpaired).
-2. Run the **DISCOVER** command on the **HomeKit Hub** controller in the ISY / PG3 admin UI or in the PG3 UI. The hub stores **`last_hap_discover`**, and **appends the Custom Typed** **HomeKit pairing slots** list with a row per new unpaired accessory (id and name set for you; pairing code **empty** until you fill it).
-3. In **Custom Typed** configuration, find the new row and enter the **HomeKit pairing code** (eight digits, often shown as `123-45-678`). The accessory shows it on a label, screen, or in its vendor app while it is in **HomeKit pairing mode**—it is not in Polyglot. **Save** (and restart the Node Server if the admin UI requires it). You only need to edit id/name on that row if you are correcting a **DISCOVER** mistake or disambiguating before pairing; otherwise those fields are already set by **DISCOVER**.
+## Advanced
 
-### Manual rows (e.g. vendor app only offers a QR code)
-
-You do **not** have to rely on **DISCOVER** auto-adding rows. **Custom Typed** **HomeKit pairing slots** is the manual configuration: use **add row** in that list, enter **HomeKit pairing code** and (recommended) **Accessory id** / **name** so the hub targets the right device.
-
-Some products (e.g. **Ecobee**) steer you to scan a **QR code** in their app to add the device to **Apple Home**. That is separate from this hub: for **Local** control, the accessory must be pairable by **this** Node Server—usually **not** paired to Apple Home at the same time—and you still need the **numeric** setup code the HomeKit spec uses (often on a sticker or in documentation; a QR is an encoding of that payload, not a substitute typed into Polyglot). Use the hub’s **DISCOVER** on the controller while the device is in **HomeKit pairing mode** to populate **`last_hap_discover`** and to fill **id** / **name** automatically, or type those fields yourself if you already know them.
-
-### Troubleshooting: "Already paired" after unpair
-
-If DISCOVER or pairing still reports the accessory as **already paired** after you unpaired it, use this recovery sequence:
-
-1. Remove/unpair the accessory from **Apple Home** (and any other HomeKit controller).
-2. Power-cycle the accessory (or perform a HomeKit factory reset on the accessory if the vendor requires it).
-3. Wait 30-60 seconds for mDNS/HomeKit state to settle.
-4. Run **DISCOVER** again to refresh `last_hap_discover` and repopulate/update the row.
-5. Enter the HomeKit pairing code on that row and save.
-
-Notes:
-- HomeKit paired state in discovery can lag briefly after unpair.
-- Deleting a row also removes the saved pairing slot data for that row; if that happens, re-pairing is a fresh pairing flow.
-
-## Controller commands
+### Controller commands
 
 | Command | Purpose |
 |---------|---------|
-| **DISCOVER** | Scan for HAP accessories; refreshes `last_hap_discover` and updates Custom Typed rows. |
+| **DISCOVER** | Scan for HAP accessories; refreshes discover snapshot and updates Custom Typed rows. |
 | **ZEROCONF_DIAG** | Notice with zeroconf mode, transport discovery counts, and library versions. |
 
-On the **HomeKit Hub** controller node, **GV1** (**MQTT transport**, UOM 25) reflects broker connectivity separately from **GV0** (**Bridge Status**): `0` = MQTT disabled in Custom Params, `1` = enabled but not subscribed / reconnecting, `2` = connected and subscribed to hub ingress. Values update when the state changes.
+### Paired device node commands
 
-## Paired device node commands
+Each pairing slot row is exposed as its own node:
 
-Each pairing slot row is exposed as its own node (including DISCOVER candidates), with:
-
-- **ST** = paired status (`1` while the slot is currently paired, `0` for discovered/candidate slots not paired yet),
-- **GV0** = slot number.
-- Node address = `hkp_<node_key>` (stable per row; not tied to slot/device id/name).
-- Default node title prefers the name from **`last_hap_discover`** for the row’s accessory / pairing id (so **DISCOVER** refreshes pick up renamed devices), then the typed **name** field, then id / pairing id. If nothing is available, the title falls back to `HK Device <NODE_KEY>`. Pair/unpair does not change the address. Custom Param **`change_node_names`** defaults to **`true`** so IoX titles stay in sync; set **`false`** to freeze names in the IoX database.
-- Because address is keyed by `node_key`, IoX references to that node address remain valid even if slot assignment changes or a new accessory is paired into the same row.
+- **ST** = paired status (`1` paired, `0` candidate)
+- **GV0** = slot number
+- Node address = `hkp_<node_key>`
 
 | Command | Purpose |
 |---------|---------|
-| **UNPAIR** | Clears only that slot row's `hap_pin` in Custom Typed data and reloads hub sessions. This removes plugin-side pairing configuration for that slot. |
-| **DELETE** | Removes that slot row from Custom Typed data, removes that slot entry from saved custom data (`homekit_pairings`), then deletes the node. |
+| **UNPAIR** | Clears that row's `hap_pin` and reloads hub sessions. |
+| **DELETE** | Removes the row, clears saved slot data, deletes the node. |
 
-Important:
+`UNPAIR` / `DELETE` do **not** guarantee the physical accessory cleared its HomeKit bond.
 
-- `UNPAIR` / `DELETE` are plugin-side cleanup and do **not** guarantee the accessory itself has cleared HomeKit bonds.
-- If a device still advertises as `paired=True` after plugin-side unpair/delete, also unpair/reset it from Apple Home or vendor workflow, then rediscover.
+### HomeKit setup URI (`X-HM://`)
 
-## HomeKit setup URI (`X-HM://`)
+Vendor QR codes often encode **`X-HM://`**. The hub still needs the **numeric** setup code in **hap_pin**.
 
-Vendor apps often show a **QR code** or share link whose payload starts with **`X-HM://`**. The hub still needs the **numeric** setup code (e.g. `123-45-678`) in Custom Typed; the URI encodes that code plus metadata.
+- **Decode helper (dev machine):** `python3 tools/decode_x_hm_setup.py 'X-HM://…'`
+- **Library:** `homekit_hub.x_hm_uri.decode_x_hm_setup_uri`
 
-- **Decode helper (dev machine):** from the Node Server repo root, run  
-  `python3 tools/decode_x_hm_setup.py 'X-HM://…'`  
-  (or pipe the URI on stdin). JSON output includes `setup_code` in `XXX-XX-XXX` form.
-- **Library:** `homekit_hub.x_hm_uri.decode_x_hm_setup_uri` returns the same fields for tests or tooling.
+### WebSocket and MQTT protocol
 
-## Troubleshooting
+See `PROTOCOL.md`. When **`mqtt_enable`** is `true`, the hub exposes the same JSON on MQTT and WebSocket. WebSocket remains available in parallel.
 
-### UNPAIR slot was run, but re-pair still fails
+### Security
 
-Symptom:
+WebSocket binds to `127.0.0.1` by default. **MQTT (v1):** no application-level secret like **`ws_token`**; use broker authentication, ACLs, and a private LAN.
 
-- You run **UNPAIR** for a slot (or clear the slot `hap_pin`), then save a new pairing code.
-- Pairing fails with a notice like:
-  - `HomeKit pairing: no matching accessory`
-  - `Slot N: no unpaired accessory matched id=... name=...`
-- A fresh **DISCOVER** may show the device under **Already paired elsewhere**.
+### Environment (optional)
 
-Why this happens:
-
-- The slot unpair path clears this plugin's saved pairing state and asks the hub to remove its session.
-- If the accessory is still paired to another HomeKit controller (Apple Home or another bridge), or has not fully returned to pairing mode yet, discovery reports it as `paired=True`.
-- The hub intentionally refuses to run SRP pairing against discoveries marked paired, so it reports "no matching accessory" for that slot.
-
-Recovery sequence:
-
-1. Remove/unpair the accessory from Apple Home (and any other HomeKit controller).
-2. Put the accessory into HomeKit pairing mode again.
-3. Power-cycle the accessory (or perform vendor HomeKit reset/factory reset if required).
-4. Wait ~30-60 seconds for mDNS/HomeKit state to settle.
-5. Run **DISCOVER** again and confirm the target appears as unpaired (not in "Already paired elsewhere").
-6. Enter/save the pairing code in the slot row and let the hub pair.
-
-If DISCOVER continues to show `paired=True` after those steps, the accessory still has an active HomeKit pairing and usually needs the vendor-specific HomeKit reset/factory reset workflow.
-
-## WebSocket and MQTT protocol
-
-See `PROTOCOL.md`. All messages require `"version": "1"`. Events for all paired accessories share one connection (WebSocket) or per-client topics (MQTT); clients filter by `device_id` and optional `subscribe` / `unsubscribe` keys.
-
-When **`mqtt_enable`** is `true`, the hub also connects to the broker in Custom Params and exposes the **same JSON** as WebSocket text frames on the topic tree documented in **`PROTOCOL.md`** (MQTT section). WebSocket remains available in parallel.
-
-## Security
-
-The WebSocket server binds to `127.0.0.1` by default so only local clients can connect.
-
-**MQTT (v1):** there is **no** application-level secret equivalent to **`ws_token`** on the MQTT path. Anyone who can publish to your hub’s ingress topics can drive the hub JSON API. Use **broker authentication**, **ACLs**, and a **private LAN** as you would for other IoT MQTT integrations. **`mqtt_host`** / **`mqtt_port`** default to **`localhost`:**`1884`** to match the Polisy/eISY general MQTT broker used by other PG3 node servers (override if your broker differs).
-
-## Environment (optional)
-
-These apply to the **Node Server process**. When set, they **override** the corresponding Custom Params (`zeroconf_*`). Host operators use them for support or automation; **typical users rely on Custom Param defaults and do not set these.**
+Override Custom Params `zeroconf_*` for the Node Server process. Typical users do not set these.
 
 | Variable | Values | Purpose |
 |----------|--------|---------|
-| `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` / `on` or `0` / `false` / `off` | Force unicast or force multicast regardless of Custom Params. |
-| `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Interface selection for zeroconf (BSD/macOS: `default` can reduce errno **49** warnings in unicast mode). |
+| `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` / `on` or `0` / `false` / `off` | Force unicast or multicast. |
+| `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Interface selection for zeroconf. |
 | `HOMEKIT_HUB_ZEROCONF_IP_VERSION` | `v4` / `v6` / `all` | IP stack for zeroconf. |
+
+### Multiple WebSocket clients
+
+Other Node Servers (e.g. **udi-poly-ecobee**) connect as clients. The hub fan-outs HAP events; each client filters by `device_id`. **`hello` `ack`** and **`list_devices`** include accessory **category** metadata (e.g. **9** = thermostat) for downstream filtering.
