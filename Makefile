@@ -1,4 +1,4 @@
-# udi-poly-homekit — lint/test, PG3 release artifacts (tag + per-track zips), and bounded ws_debug_client smoke checks.
+# udi-poly-homekit-hub — lint/test, PG3 release artifacts (tag + per-track zips), and bounded ws_debug_client smoke checks.
 #
 # Quick tests:
 #   make test / make test-unit / make test-integration
@@ -146,7 +146,7 @@ production:
 
 # Tag the current HEAD as v<VERSION> and push the current branch + tag to $(GIT_REMOTE).
 # Version = nodes/__init__.py VERSION (canonical). Track-specific zips are built by `make beta` / `make production`.
-# Run from this directory, or: make -C /path/to/udi-poly-homekit release
+# Run from this directory, or: make -C /path/to/udi-poly-homekit-hub release
 # Requires clean git working tree and a checked-out branch (not detached HEAD).
 release:
 	@set -e; \

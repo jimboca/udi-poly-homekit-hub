@@ -2,7 +2,7 @@
 # IoX profile version: profile/version.txt
 
 [project]
-name = "udi-poly-homekit"
+name = "udi-poly-homekit-hub"
 description = "PG3x HomeKit hub Node Server (profile version in profile/version.txt)"
 requires-python = ">=3.10"
 readme = "README.md"

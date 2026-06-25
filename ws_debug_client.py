@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple WebSocket debug client for the udi-poly-homekit hub.
+Simple WebSocket debug client for the udi-poly-homekit-hub hub.
 
 Connects to ``ws://<host>:<port>``, sends the protocol ``hello``, and prints
 inbound messages in a human-readable format. Protocol details: ``PROTOCOL.md``.
@@ -477,7 +477,7 @@ See PROTOCOL.md for actions (hello, command, snapshot, list_devices, get, subscr
 Hub ws_host / ws_port / optional ws_token are Custom Params on the Polyglot node (defaults 127.0.0.1:8163).
 """
     p = argparse.ArgumentParser(
-        description="Debug client for udi-poly-homekit WebSocket stream.",
+        description="Debug client for udi-poly-homekit-hub WebSocket stream.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=epilog,
     )

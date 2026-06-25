@@ -1,8 +1,8 @@
-# udi-poly-homekit
+# udi-poly-homekit-hub
 
 ## What is this?
 
-**udi-poly-homekit** is a **HomeKit hub plugin for Universal Devices IoX (PG3 / PG3x)**. It runs on your **eisy / Polisy**, pairs directly with HomeKit-compatible accessories on your LAN, and exposes them to IoX and other PG3 Node Servers.
+**udi-poly-homekit-hub** is a **HomeKit hub plugin for Universal Devices IoX (PG3 / PG3x)**. It runs on your **eisy / Polisy**, pairs directly with HomeKit-compatible accessories on your LAN, and exposes them to IoX and other PG3 Node Servers.
 
 **No iPhone, iPad, Mac, Apple TV, or HomePod is required.** You do not use the Apple Home app to pair accessories for this integration.
 

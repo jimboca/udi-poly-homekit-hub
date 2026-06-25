@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Repository / directory:** renamed from **`udi-poly-homekit`** to **`udi-poly-homekit-hub`** (GitHub: `jimboca/udi-poly-homekit-hub`). Runtime entry point, zip name, and MQTT protocol unchanged.
+
 ## [1.0.1] - 2026-05-28
 
 ### Fixed

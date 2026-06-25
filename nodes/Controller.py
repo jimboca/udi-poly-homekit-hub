@@ -352,7 +352,7 @@ class Controller(Node):
                     notice_html=(
                         "<p>The hub lost its MQTT subscription or broker session while <code>mqtt_enable</code> "
                         "is on. Clients publishing to ingress topics may fail until the hub reconnects. Check the "
-                        "broker, ACLs, and <b>udi-poly-homekit</b> logs.</p>"
+                        "broker, ACLs, and <b>udi-poly-homekit-hub</b> logs.</p>"
                     ),
                 )
             elif code == MQTT_TRANSPORT_STATUS_DISABLED:

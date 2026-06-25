@@ -1,5 +1,7 @@
 # Development
 
+Clone path: `plugins/udi-poly-homekit-hub` (repo `https://github.com/jimboca/udi-poly-homekit-hub`).
+
 Setup and tests:
 
 ```bash

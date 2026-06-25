@@ -1,4 +1,4 @@
-"""Live WebSocket tests against a running udi-poly-homekit hub.
+"""Live WebSocket tests against a running udi-poly-homekit-hub hub.
 
 These complement mocked tests in ``test_ws_debug_client.py``: they open a real
 connection to ``ws://HOST:PORT`` (defaults ``127.0.0.1:8163``), send the same
@@ -23,7 +23,7 @@ may skip even though accessories are online.
 
 Run with plugin started locally::
 
-    cd plugins/udi-poly-homekit && python3 -m pytest tests/test_ws_live.py -v
+    cd plugins/udi-poly-homekit-hub && python3 -m pytest tests/test_ws_live.py -v
 
 Or run the full suite (live tests skip if hub is down; use ``HOMEKIT_WS_INTEGRATION=1`` to require the hub)::
 
@@ -242,7 +242,7 @@ def test_live_ws_debug_run_snapshot_all_records_snapshots(live_hub, monkeypatch)
     if not snapshots:
         pytest.skip(
             "No outbound snapshot frames before timeout (no pairings/events yet, hub quiet, or stale hub "
-            "process—restart the udi-poly-homekit node on IoX/PG3 and retry)."
+            "process—restart the udi-poly-homekit-hub node on IoX/PG3 and retry)."
         )
 
     assert any(p.get("device_id") for p in snapshots), snapshots
