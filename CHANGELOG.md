@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`DEBUGGING.md`:** user troubleshooting guide for pairing and **Discover** issues — hub health checks (**NodeServer Online**, **Bridge Status**, **MQTT transport**, **Hub error code**), PG3 Notices and logs, LAN/mDNS and “already paired” cases, manual pairing, Ecobee notes, and **Download Log Package** escalation for support. Linked from **CONFIG.md** and **README.md**.
+
 ### Changed
 
 - **Repository / directory:** renamed from **`udi-poly-homekit`** to **`udi-poly-homekit-hub`** (GitHub: `jimboca/udi-poly-homekit-hub`). Runtime entry point, zip name, and MQTT protocol unchanged.
