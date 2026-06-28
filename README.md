@@ -14,6 +14,8 @@ The hub is commonly used with **[udi-poly-ecobee](https://github.com/UniversalDe
 
 That guide covers **DISCOVER**, entering the HomeKit pairing code, verifying the hub is ready, and linking to the Ecobee plugin.
 
+**[DEBUGGING.md](DEBUGGING.md)** — when pairing or **Discover** does not work as expected.
+
 ## Requirements
 
 - **Python 3.10+** on the Polyglot host

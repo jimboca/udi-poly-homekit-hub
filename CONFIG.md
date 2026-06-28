@@ -1,5 +1,7 @@
 # HomeKit Hub — configuration
 
+**[Debugging issues](DEBUGGING.md)** — pairing failures, **Discover** not adding rows, status **Disconnected**, logs, and what to send support.
+
 **Start here.** This file is the main setup guide for pairing accessories and connecting other PG3 plugins (for example **udi-poly-ecobee**).
 
 On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf settings at their defaults**. You only need to change **`mqtt_hub_slug`** if multiple HomeKit hubs share one MQTT broker.
@@ -83,6 +85,8 @@ Continue with [udi-poly-ecobee CONFIG.md](https://github.com/UniversalDevicesInc
 ---
 
 ## Troubleshooting
+
+See **[DEBUGGING.md](DEBUGGING.md)** for step-by-step diagnosis (hub not ready, **Discover** with no rows, LAN/mDNS, Ecobee pairing, logs, and support checklist).
 
 ### Accessory shows "already paired"
 
