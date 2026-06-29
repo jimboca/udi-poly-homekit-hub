@@ -93,7 +93,7 @@ You run **Discover** on the **HomeKit Hub** controller, but **HomeKit pairing sl
 
 If it shows **Disconnected** or **Failed**, the Node Server is not running correctly — **Discover** will not work and pairing rows will not update.
 
-**Upgrade Packages (June 1, 2026 release):** Hub builds from that release onward require the Python package **`aiomqtt`** (listed in `requirements.txt`). Pulling a newer plugin version does not install dependencies by itself — you must run **Upgrade Packages** on the **HomeKit Hub** Node Server page in Polyglot after updating. If you last ran **Upgrade Packages** before June 1, 2026, startup often fails with `ModuleNotFoundError: No module named 'aiomqtt'` in **`logs/debug.log`**. Run **Upgrade Packages**, wait for install to finish, then **Restart** the Node Server.
+**Upgrade Packages (June 1, 2026 release):** Hub builds from that release onward require the Python package **`aiomqtt`** (listed in `requirements.txt`). If you last ran **Upgrade Packages** before June 1, 2026, startup often fails with `ModuleNotFoundError: No module named 'aiomqtt'` in **`logs/debug.log`**. In IoX, run **Upgrade Packages**, wait for install to finish, then **Restart** the Node Server.
 
 1. Open the **HomeKit Hub** Node Server in Polyglot and read **Notices**.
 2. Check **`logs/debug.log`** in the Node Server folder for errors at startup (Python exceptions, missing dependencies, install failures).
