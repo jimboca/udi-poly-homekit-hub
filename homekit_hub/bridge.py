@@ -60,6 +60,10 @@ from .mqtt_topics import (
     parse_ingress_client_slug,
     sanitize_client_slug,
 )
+# %% professional-only begin
+from homekit_hub.device_classifier import classify_accessories
+from homekit_hub.paths import ensure_persistent_dir
+# %% professional-only end
 
 try:
     from aiohomekit.model.categories import Categories as _HapCategories
@@ -1345,6 +1349,16 @@ class HomeKitHubBridge:
         hub_rpc_error_notice: Optional[
             Callable[[str, str, dict[str, Any]], None]
         ] = None,
+        # %% professional-only begin
+        pairing_classified: Optional[
+            Callable[[str, str, str, list, Any], None]
+        ] = None,
+        generic_hap_event: Optional[
+            Callable[[str, int, int, Any, str], None]
+        ] = None,
+        is_professional: Optional[Callable[[], bool]] = None,
+        inventory_notice: Optional[Callable[[str, str], None]] = None,
+        # %% professional-only end
     ) -> None:
         self.log = logger
         self._get_params = get_params
@@ -1355,6 +1369,12 @@ class HomeKitHubBridge:
         self._pairing_health_notice = pairing_health_notice
         self._mqtt_transport_notice = mqtt_transport_notice
         self._hub_rpc_error_notice = hub_rpc_error_notice
+        # %% professional-only begin
+        self._pairing_classified = pairing_classified
+        self._generic_hap_event = generic_hap_event
+        self._is_professional = is_professional
+        self._inventory_notice = inventory_notice
+        # %% professional-only end
         self._mqtt_drv_last: Optional[int] = None
 
         self._hk: Optional[HKController] = None
@@ -1945,6 +1965,11 @@ class HomeKitHubBridge:
                 "pairing health probe recovered %s; listener/subscriptions refreshed",
                 alias,
             )
+            # %% professional-only begin
+            pairing = hk.aliases.get(alias)
+            if pairing is not None:
+                await self._on_pairing_ready(alias, pairing, reason="health_recovered")
+            # %% professional-only end
         new_fault = bool(self._pairing_unhealthy_aliases)
         fault_transition = self._pairing_health_fault_active != new_fault
         unhealthy_out = [] if not new_fault else sorted(self._pairing_unhealthy_aliases)
@@ -2797,6 +2822,149 @@ class HomeKitHubBridge:
                     return pairing
         return None
 
+    # %% professional-only begin
+    async def put_characteristic(
+        self, device_id: str, char_spec: str, value: Any
+    ) -> Optional[str]:
+        """Write one HAP characteristic by name/UUID. Returns error text or None on success."""
+        pairing = self._pairing_for_device_id(device_id)
+        if pairing is None:
+            return f"unknown device_id {device_id!r}"
+        resolved, resolve_err = _resolve_aid_iid_detailed(pairing, char_spec)
+        if resolve_err is not None:
+            return resolve_err
+        assert resolved is not None
+        aid, iid = resolved
+        return await self.put_characteristic_by_iid(device_id, aid, iid, value)
+
+    async def put_characteristic_by_iid(
+        self, device_id: str, aid: int, iid: int, value: Any
+    ) -> Optional[str]:
+        pairing = self._pairing_for_device_id(device_id)
+        if pairing is None:
+            return f"unknown device_id {device_id!r}"
+        try:
+            err = await pairing.put_characteristics([(int(aid), int(iid), value)])
+            return str(err) if err else None
+        except Exception as ex:
+            self.log.exception("put_characteristic_by_iid failed")
+            return str(ex)
+
+    async def fetch_snapshot_values(
+        self, device_id: str
+    ) -> tuple[list[dict[str, Any]], Optional[str]]:
+        """Read all readable HAP characteristics for *device_id* (same shape as WS ``snapshot``)."""
+        did = str(device_id or "").strip().lower()
+        pairing = self._pairing_for_device_id(did)
+        if pairing is None:
+            return [], "unknown device_id or no active pairing"
+        readable = _readable_characteristics(pairing)
+        if not readable:
+            try:
+                await pairing.list_accessories_and_characteristics()
+            except Exception as ex:
+                self.log.exception("snapshot: list_accessories_and_characteristics failed")
+                return [], str(ex)
+            readable = _readable_characteristics(pairing)
+        if not readable:
+            return [], "no readable characteristics after HAP /accessories refresh"
+        pairs = [(aid, iid) for aid, iid, _ in readable]
+        labels = {(aid, iid): label for aid, iid, label in readable}
+        try:
+            result = await pairing.get_characteristics(pairs)
+        except Exception as ex:
+            self.log.exception("get_characteristics failed")
+            return [], str(ex)
+        values: list[dict[str, Any]] = []
+        for aid, iid in pairs:
+            payload = result.get((aid, iid), {})
+            if not isinstance(payload, dict):
+                payload = {}
+            item: dict[str, Any] = {
+                "aid": aid,
+                "iid": iid,
+                "characteristic": labels.get((aid, iid), f"{aid}.{iid}"),
+            }
+            if "value" in payload:
+                item["value"] = payload.get("value")
+            if "status" in payload:
+                item["status"] = payload.get("status")
+            values.append(item)
+        return values, None
+
+    async def _export_device_inventory(
+        self, alias: str, pairing, *, reason: str
+    ) -> Optional[Any]:
+        fn = self._is_professional
+        if fn is not None:
+            try:
+                if not fn():
+                    self.log.debug(
+                        'Skipping device inventory export (%s): below Professional edition',
+                        alias,
+                    )
+                    return None
+            except Exception:
+                return None
+        device_id = str(getattr(pairing, 'id', '') or '').strip().lower()
+        if not device_id:
+            return None
+        try:
+            ensure_persistent_dir()
+            from homekit_hub.device_inventory import export_device_inventory
+
+            path = export_device_inventory(
+                device_id=device_id,
+                alias=alias,
+                pairing=pairing,
+                reason=reason,
+            )
+            accessories = getattr(pairing, 'accessories', None) or []
+            n_acc = sum(1 for _ in accessories) if accessories else 0
+            roles = classify_accessories(accessories)
+            self.log.info(
+                'Device inventory exported for %s -> %s (%d accessories, %d classified roles, reason=%s)',
+                device_id,
+                path,
+                n_acc,
+                len(roles),
+                reason,
+            )
+            notice = self._inventory_notice
+            if notice is not None:
+                try:
+                    notice(device_id, str(path))
+                except Exception:
+                    self.log.exception('inventory_notice callback failed')
+            return path
+        except Exception:
+            self.log.exception('Device inventory export failed for %s', alias)
+            return None
+
+    async def _on_pairing_ready(self, alias: str, pairing, *, reason: str) -> None:
+        fn = self._is_professional
+        is_pro = True
+        if fn is not None:
+            try:
+                is_pro = bool(fn())
+            except Exception:
+                is_pro = False
+        if not is_pro:
+            return
+        device_id = str(getattr(pairing, 'id', '') or '').strip().lower()
+        if not device_id:
+            return
+        await self._export_device_inventory(alias, pairing, reason=reason)
+        classification = classify_accessories(getattr(pairing, 'accessories', None))
+        cb = self._pairing_classified
+        if cb is None:
+            return
+        try:
+            cb(alias, device_id, reason, classification, pairing)
+        except Exception:
+            self.log.exception('pairing_classified callback failed for %s', alias)
+    # %% professional-only end
+
     async def _active_pairing_device_ids_stable(self) -> list[str]:
         """Retry briefly before returning an empty paired-device list."""
         ids = self._active_pairing_device_ids()
@@ -3371,8 +3539,8 @@ class HomeKitHubBridge:
 
     async def _handle_snapshot(self, ws: Any, msg: dict) -> None:
         device_id = (msg.get("device_id") or "").strip().lower()
-        pairing = self._pairing_for_device_id(device_id) if device_id else None
-        if not pairing:
+        values, err = await self.fetch_snapshot_values(device_id)
+        if err is not None:
             await self._send_ws(
                 ws,
                 self._ws_merge_request_id(
@@ -3381,83 +3549,11 @@ class HomeKitHubBridge:
                         "version": PROTOCOL_VERSION,
                         "action": "error",
                         "for": "snapshot",
-                        "message": "unknown device_id or no active pairing",
+                        "message": err,
                     },
                 ),
             )
             return
-
-        readable = _readable_characteristics(pairing)
-        if not readable:
-            try:
-                await pairing.list_accessories_and_characteristics()
-            except Exception as ex:
-                self.log.exception("snapshot: list_accessories_and_characteristics failed")
-                await self._send_ws(
-                    ws,
-                    self._ws_merge_request_id(
-                        msg,
-                        {
-                            "version": PROTOCOL_VERSION,
-                            "action": "error",
-                            "for": "snapshot",
-                            "message": str(ex),
-                        },
-                    ),
-                )
-                return
-            readable = _readable_characteristics(pairing)
-
-        if not readable:
-            await self._send_ws(
-                ws,
-                self._ws_merge_request_id(
-                    msg,
-                    {
-                        "version": PROTOCOL_VERSION,
-                        "action": "error",
-                        "for": "snapshot",
-                        "message": "no readable characteristics after HAP /accessories refresh",
-                    },
-                ),
-            )
-            return
-
-        pairs = [(aid, iid) for aid, iid, _ in readable]
-        labels = {(aid, iid): label for aid, iid, label in readable}
-        try:
-            result = await pairing.get_characteristics(pairs)
-        except Exception as ex:
-            self.log.exception("get_characteristics failed")
-            await self._send_ws(
-                ws,
-                self._ws_merge_request_id(
-                    msg,
-                    {
-                        "version": PROTOCOL_VERSION,
-                        "action": "error",
-                        "for": "snapshot",
-                        "message": str(ex),
-                    },
-                ),
-            )
-            return
-
-        values: list[dict[str, Any]] = []
-        for aid, iid in pairs:
-            payload = result.get((aid, iid), {})
-            if not isinstance(payload, dict):
-                payload = {}
-            item: dict[str, Any] = {
-                "aid": aid,
-                "iid": iid,
-                "characteristic": labels.get((aid, iid), f"{aid}.{iid}"),
-            }
-            if "value" in payload:
-                item["value"] = payload.get("value")
-            if "status" in payload:
-                item["status"] = payload.get("status")
-            values.append(item)
 
         await self._send_ws(
             ws,
@@ -3563,6 +3659,14 @@ class HomeKitHubBridge:
                     "value": payload.get("value"),
                 }
             )
+            # %% professional-only begin
+            cb = self._generic_hap_event
+            if cb is not None:
+                try:
+                    cb(device_id, int(aid), int(iid), payload.get("value"), label)
+                except Exception:
+                    self.log.debug("generic_hap_event callback failed", exc_info=True)
+            # %% professional-only end
 
     def _attach_listener(self, alias: str, pairing) -> None:
         old_stop = self._listeners.pop(alias, None)
@@ -3911,3 +4015,6 @@ class HomeKitHubBridge:
                 self.log.exception("subscribe failed for %s", alias)
         self.log.info("HomeKit session active for %s (%s)", alias, pairing.id)
         await self._broadcast_device_list_update(reason=f"pairing_active:{alias}")
+        # %% professional-only begin
+        await self._on_pairing_ready(alias, pairing, reason="pairing_active")
+        # %% professional-only end

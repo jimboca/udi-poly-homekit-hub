@@ -29,6 +29,25 @@ from homekit_hub.bridge import _parse_slot_value
 from nodes import VERSION
 from .PairedDeviceNode import PairedDeviceNode
 
+# %% professional-only begin
+from dev_settings import (
+    dev_edition_override_active,
+    edition_at_least,
+    licensed_edition,
+    resolve_edition,
+)
+from homekit_hub.paths import ensure_persistent_dir
+import homekit_hub.hap_apply as hap_apply
+from node_funcs import generic_node_address, generic_node_title, legacy_generic_node_address
+from .BinarySensorNode import BinarySensorNode
+from .EcobeeThermostatNode import EcobeeThermostatNode
+from .LightNode import LightNode
+from .SwitchNode import SwitchNode
+from .ThermostatNode import ThermostatNode
+
+_DEV_EDITION_NOTICE_KEYS = ('dev_edition_override', 'dev_edition_mismatch')
+# %% professional-only end
+
 # ISY-visible error codes (driver ERR, UOM 25 index + NLS ERRC-*). See README.
 ERR_OK = 0
 ERR_BRIDGE_START = 1
@@ -61,7 +80,13 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     "zeroconf_ip_version": "",
     # IoX child node titles: see CONFIG.md (string true/false; merged like other Custom Params).
     "change_node_names": "true",
+    # Professional: master switch for generic IoX child nodes (default off).
+    "generic_nodes_enable": "false",
+    # Ecobee HK: minimum heat/cool delta when writing thresholds (degrees F unless stat uses °C).
+    "hk_heat_cool_min_delta": "3",
 }
+
+_DEFAULT_PAIRING_GENERIC_NODES = "false"
 
 # Custom Params that affect the hub MQTT transport. They must be included in
 # ``_config_restart_snap`` so saving only MQTT settings still runs
@@ -95,6 +120,19 @@ def _coerce_change_node_names(val: Any) -> bool:
     if s in ("true", "1", "yes", "on"):
         return True
     return True
+
+
+def _coerce_bool_param(val: Any, *, default: bool = False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("false", "0", "no", "off"):
+        return False
+    if s in ("true", "1", "yes", "on"):
+        return True
+    return default
 
 
 def _alpha_key_from_index(n: int) -> str:
@@ -142,6 +180,10 @@ class Controller(Node):
         self._discover_notice_token = 0
         self._node_key_next_index_cache: Optional[int] = None
         self._mqtt_transport_driver = MQTT_TRANSPORT_STATUS_DISABLED
+        # %% professional-only begin
+        self.edition = 'Standard'
+        self._generic_nodes: dict[str, Any] = {}
+        # %% professional-only end
 
         self.init_typed_params()
         poly.subscribe(poly.START, self.handler_start, address)
@@ -197,6 +239,18 @@ class Controller(Node):
                             "name": "node_key",
                             "title": "Stable node key (plugin-managed identity; auto-generated if empty. Edit only to match a previously paired device you want to keep on the same IoX node address)",
                             "isRequired": False,
+                        },
+                        {
+                            "name": "generic_nodes",
+                            "title": "Create generic IoX control nodes (Professional)",
+                            "desc": (
+                                "Default false. Set true (and enable hub generic_nodes_enable) "
+                                "to manage this device with generic IoX nodes in this plugin "
+                                "instead of a separate vendor plugin."
+                            ),
+                            "type": "BOOLEAN",
+                            "isRequired": False,
+                            "defaultValue": [_DEFAULT_PAIRING_GENERIC_NODES],
                         },
                     ],
                 },
@@ -612,6 +666,15 @@ class Controller(Node):
         # One-shot migration: dashed PIN in UI for codes stored without dashes.
         self._normalize_and_persist_typed_pairing_pins()
         self._ensure_pairing_row_node_keys()
+        self._ensure_pairing_row_generic_nodes_default()
+
+        # %% professional-only begin
+        self._update_edition()
+        try:
+            ensure_persistent_dir()
+        except Exception:
+            LOGGER.exception('ensure_persistent_dir on bootstrap')
+        # %% professional-only end
 
         self.mainloop = asyncio.new_event_loop()
 
@@ -639,6 +702,12 @@ class Controller(Node):
             pairing_health_notice=self._pairing_health_notice_callback,
             mqtt_transport_notice=self._mqtt_transport_notice_callback,
             hub_rpc_error_notice=self._hub_rpc_error_notice_callback,
+            # %% professional-only begin
+            pairing_classified=self._pairing_classified_callback,
+            generic_hap_event=self._generic_hap_event_callback,
+            is_professional=self.is_professional,
+            inventory_notice=self._inventory_export_notice_callback,
+            # %% professional-only end
         )
         self._config_snap = self._config_restart_snap()
         fut = asyncio.run_coroutine_threadsafe(self.bridge.start(), self.mainloop)
@@ -784,6 +853,9 @@ class Controller(Node):
         self._maybe_clear_hap_discover_notice_for_paired()
         self._maybe_clear_pairing_error_notice_for_success()
         self.handler_data_st = True
+        # %% professional-only begin
+        self._resync_all_generic_nodes()
+        # %% professional-only end
 
     def _paired_slots_from_data(self) -> dict[int, str]:
         try:
@@ -965,6 +1037,46 @@ class Controller(Node):
         LOGGER.info("Assigned stable node_key values for HomeKit pairing rows")
         return True
 
+    @staticmethod
+    def _pairing_row_generic_nodes_is_blank(row: dict[str, Any]) -> bool:
+        raw = row.get("generic_nodes")
+        if raw is None:
+            return True
+        if isinstance(raw, str) and not raw.strip():
+            return True
+        return False
+
+    def _ensure_pairing_row_generic_nodes_default(self) -> bool:
+        """Seed blank pairing-row generic_nodes values as false (Professional opt-in)."""
+        try:
+            raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return False
+        if not isinstance(raw_rows, list):
+            return False
+
+        rows = [dict(x) if isinstance(x, dict) else x for x in raw_rows]
+        changed = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if self._pairing_row_generic_nodes_is_blank(row):
+                row["generic_nodes"] = _DEFAULT_PAIRING_GENERIC_NODES
+                changed = True
+
+        if not changed:
+            return False
+
+        try:
+            td = self._typed_data_dict()
+            td[TYPED_PAIRING_SLOTS_KEY] = rows
+            self.TypedData.load(td, save=True)
+        except Exception:
+            LOGGER.exception("Failed to persist generic_nodes defaults in typed pairing rows")
+            return False
+        LOGGER.info("Seeded generic_nodes=false for HomeKit pairing rows missing a value")
+        return True
+
     def _sync_paired_nodes_from_data(self) -> None:
         paired = self._paired_slots_from_data()
         display_by_slot = self._pairing_slot_display_names()
@@ -1038,11 +1150,27 @@ class Controller(Node):
         if not new_ids:
             return
         ids_txt = ", ".join(sorted(new_ids))
-        self.Notices["homekit_pair_success"] = (
+        notice = (
             "<b>HomeKit pairing successful</b><br/>"
             f"Paired device id(s): <code>{html.escape(ids_txt)}</code><br/>"
             "This notice clears automatically after two long polls."
         )
+        # %% professional-only begin
+        if self._generic_nodes_master_enabled():
+            missing_row = []
+            for did in sorted(new_ids):
+                if not self._device_generic_nodes_enabled(did):
+                    missing_row.append(did)
+            if missing_row:
+                notice += (
+                    "<br/><br/>To add generic control nodes (thermostat, light, …) under this hub, "
+                    "set <b>Create generic IoX control nodes</b> to <b>true</b> on the pairing row "
+                    "in <b>Custom Typed → HomeKit pairing slots</b> and <b>Save</b>. "
+                    "The <b>Paired HomeKit device</b> child node remains for slot status; "
+                    "generic nodes appear as additional siblings."
+                )
+        # %% professional-only end
+        self.Notices["homekit_pair_success"] = notice
         self._pair_success_notice_polls_remaining = 2
         LOGGER.info(
             "Posted transient pairing success notice for id(s): %s",
@@ -1155,9 +1283,13 @@ class Controller(Node):
         # Use TypedData after load — PG3 may send a partial ``data`` dict without ``pairing_slots``.
         self._normalize_and_persist_typed_pairing_pins()
         self._ensure_pairing_row_node_keys()
+        self._ensure_pairing_row_generic_nodes_default()
         self._auto_discover_if_needed_from_typed_update()
         self._sync_paired_nodes_from_data()
         self._maybe_restart_on_config_change()
+        # %% professional-only begin
+        self._resync_all_generic_nodes()
+        # %% professional-only end
 
     def _refresh_change_node_names_flag(self) -> None:
         try:
@@ -1192,16 +1324,25 @@ class Controller(Node):
         self.Params.load(params)
         self._ensure_default_custom_params()
         self._refresh_change_node_names_flag()
+        # %% professional-only begin
+        self._update_edition()
+        # %% professional-only end
         self.handler_params_st = True
         self._maybe_restart_on_config_change()
         if self.handler_typed_data_st:
             self._sync_paired_nodes_from_data()
+        # %% professional-only begin
+        self._resync_all_generic_nodes()
+        # %% professional-only end
 
     def handler_start(self):
         self._async_loop_death_reported = False
         self._hub_bootstrap_generation += 1
         bootstrap_gen = self._hub_bootstrap_generation
         self.Notices.clear()
+        # %% professional-only begin
+        self._update_edition()
+        # %% professional-only end
         LOGGER.info("HomeKit Hub NodeServer %s (profile %s)", self.poly.serverdata.get("version"), VERSION)
         cfg_md = Path(__file__).resolve().parent.parent / "CONFIG.md"
         if cfg_md.is_file():
@@ -1244,6 +1385,9 @@ class Controller(Node):
         LOGGER.info("Stopping HomeKit Hub")
         self.ready = False
         self._paired_nodes.clear()
+        # %% professional-only begin
+        self._remove_all_generic_nodes()
+        # %% professional-only end
         try:
             self.setDriver("GV0", 0, report=True, force=True, uom=25)
             self.setDriver("ST", 0, report=True, force=True, uom=25)
@@ -1616,6 +1760,8 @@ class Controller(Node):
             if ep:
                 row["discover_endpoint"] = ep
             row.setdefault("hap_pin", "")
+            if self._pairing_row_generic_nodes_is_blank(row):
+                row["generic_nodes"] = _DEFAULT_PAIRING_GENERIC_NODES
             if _parse_slot_value(row.get("slot")) is None:
                 row["slot"] = str(self._take_next_free_slot(used_slots))
             nk = str(row.get("node_key") or "").strip().lower()
@@ -1639,6 +1785,7 @@ class Controller(Node):
                 "accessory_id": pid,
                 "accessory_name": pname,
                 "node_key": self._allocate_node_key(used_node_keys),
+                "generic_nodes": _DEFAULT_PAIRING_GENERIC_NODES,
             }
             used_node_keys.add(str(new_row["node_key"]))
             if ep:
@@ -1976,6 +2123,423 @@ class Controller(Node):
         )
         self._maybe_restart_on_config_change()
         return True
+
+    # %% professional-only begin
+    def is_professional(self) -> bool:
+        return edition_at_least(getattr(self, 'edition', 'Standard'), 'Professional')
+
+    def _update_edition(self) -> None:
+        self.edition = resolve_edition(self.poly, LOGGER)
+        self._sync_dev_edition_notice()
+
+    def _sync_dev_edition_notice(self) -> None:
+        override_key = 'dev_edition_override'
+        licensed = licensed_edition(self.poly)
+        if dev_edition_override_active(self.poly, self.edition):
+            notice = (
+                f'Edition override active (local dev only): licensed {licensed}, '
+                f'running as {self.edition} via dev_edition.txt.'
+            )
+            self.Notices[override_key] = notice
+            LOGGER.warning(notice)
+        else:
+            try:
+                self.Notices.delete(override_key)
+            except Exception:
+                pass
+
+    def _generic_nodes_master_enabled(self) -> bool:
+        try:
+            raw = self.Params.get('generic_nodes_enable')
+        except Exception:
+            raw = None
+        if raw is None:
+            raw = _DEFAULT_BRIDGE_PARAMS.get('generic_nodes_enable', 'false')
+        return _coerce_bool_param(raw, default=False)
+
+    def _node_key_for_device_id(self, device_id: str) -> Optional[str]:
+        did = str(device_id or '').strip().lower()
+        if not did:
+            return None
+        paired_by_slot = self._paired_slots_from_data()
+        for node_key, node in self._paired_nodes.items():
+            pid = paired_by_slot.get(int(node.slot))
+            if pid == did:
+                return node_key
+        return None
+
+    def _device_generic_nodes_enabled(self, device_id: str) -> bool:
+        if not self._generic_nodes_master_enabled():
+            return False
+        nk = self._node_key_for_device_id(device_id)
+        if nk is None:
+            return False
+        slot = self._paired_nodes[nk].slot
+        try:
+            rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
+        except Exception:
+            return False
+        if not isinstance(rows, list):
+            return False
+        for sn, row in assign_pairing_slot_rows(rows, LOGGER):
+            if sn != slot or not isinstance(row, dict):
+                continue
+            return _coerce_bool_param(row.get('generic_nodes'), default=False)
+        return False
+
+    def _generic_nodes_skip_reason(self, device_id: str) -> Optional[str]:
+        if not self.is_professional():
+            return 'not Professional edition'
+        if not self._generic_nodes_master_enabled():
+            return 'hub generic_nodes_enable is false'
+        nk = self._node_key_for_device_id(device_id)
+        if nk is None:
+            return 'no paired device node for device_id yet'
+        if not self._device_generic_nodes_enabled(device_id):
+            return 'pairing row generic_nodes is false (Custom Typed → HomeKit pairing slots)'
+        return None
+
+    def _pairing_display_name(self, device_id: str) -> str:
+        nk = self._node_key_for_device_id(device_id)
+        if nk and nk in self._paired_nodes:
+            nm = self._paired_nodes[nk].display_name
+            if nm:
+                return nm
+        return device_id
+
+    def paired_node_title(self, node: PairedDeviceNode) -> str:
+        from node_funcs import append_isy_node_suffix
+
+        base = PairedDeviceNode._node_title(node.node_key, node.display_name)
+        if not node.paired:
+            return base
+        paired_by_slot = self._paired_slots_from_data()
+        device_id = paired_by_slot.get(int(node.slot))
+        if device_id and self._device_generic_nodes_enabled(str(device_id).lower()):
+            return append_isy_node_suffix(base, ' (Pairing)')
+        return base
+
+    def _paired_device_id(self, node: PairedDeviceNode) -> Optional[str]:
+        paired_by_slot = self._paired_slots_from_data()
+        device_id = paired_by_slot.get(int(node.slot))
+        if not device_id:
+            return None
+        return str(device_id).strip().lower()
+
+    def _push_paired_node_isy_title(self, node: PairedDeviceNode) -> None:
+        """Push paired-slot IoX title; force rename when generic control nodes are active."""
+        requested = node._requested_title()
+        node.name = requested
+        if not self.change_node_names:
+            return
+        device_id = self._paired_device_id(node)
+        force_rename = bool(device_id and self._device_generic_nodes_enabled(device_id))
+        poly = self.poly
+        cname = None
+        if hasattr(poly, 'getNodeNameFromDb'):
+            try:
+                cname = poly.getNodeNameFromDb(node.address)
+            except Exception:
+                cname = None
+        if not force_rename:
+            if cname is None or cname == requested:
+                return
+        if not hasattr(poly, 'renameNode'):
+            return
+        try:
+            poly.renameNode(node.address, requested)
+            LOGGER.info(
+                'Renamed paired slot node %s to %r (generic_nodes=%s)',
+                node.address,
+                requested,
+                force_rename,
+            )
+        except Exception:
+            LOGGER.exception('renameNode failed for %s', node.address)
+
+    def _reconcile_paired_node_title_for_device(self, device_id: str) -> None:
+        nk = self._node_key_for_device_id(device_id)
+        if nk and nk in self._paired_nodes:
+            self._push_paired_node_isy_title(self._paired_nodes[nk])
+
+    def _generic_node_address(self, device_id: str, row: dict[str, Any]) -> str:
+        return generic_node_address(
+            str(device_id or ''),
+            int(row.get('aid') or 0),
+            str(row.get('role') or 'node'),
+        )
+
+    def hub_write(self, device_id: str, char_spec: str, value: Any) -> bool:
+        if not (self.bridge and self.mainloop):
+            return False
+        fut = asyncio.run_coroutine_threadsafe(
+            self.bridge.put_characteristic(device_id, char_spec, value),
+            self.mainloop,
+        )
+        try:
+            err = fut.result(timeout=30)
+            return err is None
+        except Exception:
+            LOGGER.exception('hub_write failed for %s %s', device_id, char_spec)
+            return False
+
+    def hub_snapshot_values(self, device_id: str) -> list:
+        """Return hub snapshot rows for *device_id* (empty list on failure)."""
+        if not (self.bridge and self.mainloop):
+            return []
+        fut = asyncio.run_coroutine_threadsafe(
+            self.bridge.fetch_snapshot_values(device_id),
+            self.mainloop,
+        )
+        try:
+            values, err = fut.result(timeout=60)
+        except Exception:
+            LOGGER.exception('hub_snapshot_values failed for %s', device_id)
+            return []
+        if err:
+            LOGGER.debug('hub_snapshot_values %s: %s', device_id, err)
+            return []
+        return list(values or [])
+
+    def refresh_generic_node(self, node: Any, *, report: bool = True) -> None:
+        """Pull a HAP snapshot and map values onto one generic IoX node."""
+        did = str(getattr(node, 'device_id', '') or '').strip().lower()
+        if not did:
+            return
+        rows = self.hub_snapshot_values(did)
+        if not rows:
+            return
+        applied = hap_apply.apply_snapshot_rows_to_generic_node(node, rows, log=LOGGER)
+        if applied and report:
+            try:
+                node.reportDrivers()
+            except Exception:
+                LOGGER.debug('reportDrivers after snapshot failed for %s', getattr(node, 'address', '?'), exc_info=True)
+
+    def _schedule_refresh_generic_node(self, node: Any) -> None:
+        Timer(0.0, lambda: self.refresh_generic_node(node)).start()
+
+    def _inventory_export_notice_callback(self, device_id: str, path: str) -> None:
+        self.Notices['homekit_inventory_export'] = (
+            '<b>Device inventory exported</b><br/>'
+            f'device_id: <code>{html.escape(device_id)}</code><br/>'
+            f'path: <code>{html.escape(path)}</code>'
+        )
+
+    def export_device_inventory_manual(self, node_key: str) -> None:
+        if not self.is_professional():
+            self.Notices['homekit_inventory_export'] = (
+                '<b>Device inventory requires Professional edition</b>'
+            )
+            return
+        nk = str(node_key or '').strip().lower()
+        node = self._paired_nodes.get(nk)
+        if node is None:
+            return
+        paired = self._paired_slots_from_data()
+        device_id = paired.get(int(node.slot))
+        if not device_id or not (self.bridge and self.mainloop):
+            return
+        fut = asyncio.run_coroutine_threadsafe(
+            self.bridge._export_device_inventory(
+                f'slot_{node.slot}',
+                self.bridge._pairing_for_device_id(device_id),
+                reason='manual_export',
+            ),
+            self.mainloop,
+        )
+        try:
+            fut.result(timeout=60)
+        except Exception:
+            LOGGER.exception('manual EXPORT_INVENTORY failed for %s', nk)
+
+    def _pairing_classified_callback(
+        self,
+        alias: str,
+        device_id: str,
+        reason: str,
+        classification: list,
+        pairing: Any,
+    ) -> None:
+        del alias, pairing
+        Timer(
+            0.0,
+            lambda: self._sync_generic_nodes(str(device_id).lower(), list(classification or [])),
+        ).start()
+
+    def _generic_hap_event_callback(
+        self,
+        device_id: str,
+        aid: int,
+        iid: int,
+        value: Any,
+        label: str,
+    ) -> None:
+        did = str(device_id or '').strip().lower()
+        for node in list(self._generic_nodes.values()):
+            handler = getattr(node, 'on_hap_event', None)
+            if not callable(handler):
+                continue
+            if getattr(node, 'device_id', '').lower() != did:
+                continue
+            try:
+                handler(int(aid), int(iid), value, str(label or ''))
+            except Exception:
+                LOGGER.debug('generic node HAP event failed for %s', getattr(node, 'address', '?'), exc_info=True)
+
+    def _resync_all_generic_nodes(self) -> None:
+        if not self.is_professional():
+            self._remove_all_generic_nodes()
+            return
+        if not (self.bridge and self.mainloop):
+            return
+        for did in self._current_paired_ids_from_data():
+            fut = asyncio.run_coroutine_threadsafe(
+                self._classify_device_async(did),
+                self.mainloop,
+            )
+            try:
+                _alias, classification = fut.result(timeout=60)
+            except Exception:
+                LOGGER.exception('generic node resync classify failed for %s', did)
+                continue
+            self._sync_generic_nodes(did, classification)
+
+    async def _classify_device_async(self, device_id: str) -> tuple[str, list]:
+        from homekit_hub.device_classifier import classify_accessories
+
+        pairing = self.bridge._pairing_for_device_id(device_id) if self.bridge else None
+        if pairing is None:
+            return ('', [])
+        classification = classify_accessories(getattr(pairing, 'accessories', None))
+        return ('', classification)
+
+    def _delete_generic_node_by_address(self, addr: str) -> None:
+        addr = str(addr or '').strip()
+        if not addr:
+            return
+        node = self._generic_nodes.pop(addr, None)
+        try:
+            if hasattr(self.poly, 'delNode'):
+                self.poly.delNode(addr)
+            elif node is not None and hasattr(self.poly, 'removeNode'):
+                self.poly.removeNode(node.address)
+        except Exception:
+            LOGGER.exception('Failed to delete generic node %s', addr)
+
+    def _remove_legacy_generic_nodes_for_device(
+        self, device_id: str, classification: list
+    ) -> None:
+        did = str(device_id or '').strip().lower()
+        if not did:
+            return
+        legacy_addrs: set[str] = set()
+        for row in classification:
+            if not isinstance(row, dict):
+                continue
+            legacy = legacy_generic_node_address(
+                did,
+                int(row.get('aid') or 0),
+                str(row.get('role') or 'node'),
+            )
+            current = self._generic_node_address(did, row)
+            if legacy != current:
+                legacy_addrs.add(legacy)
+        for addr in list(self._generic_nodes.keys()):
+            node = self._generic_nodes.get(addr)
+            if node is None or getattr(node, 'device_id', '').lower() != did:
+                continue
+            if addr.startswith('hkg_'):
+                legacy_addrs.add(addr)
+        for addr in sorted(legacy_addrs):
+            LOGGER.info('Removing legacy generic IoX node %s for %s', addr, did)
+            self._delete_generic_node_by_address(addr)
+
+    def _remove_generic_nodes_for_device(self, device_id: str) -> None:
+        did = str(device_id or '').strip().lower()
+        for addr in list(self._generic_nodes.keys()):
+            node = self._generic_nodes.get(addr)
+            if node is None or getattr(node, 'device_id', '').lower() != did:
+                continue
+            self._delete_generic_node_by_address(addr)
+        self._reconcile_paired_node_title_for_device(did)
+
+    def _remove_all_generic_nodes(self) -> None:
+        for addr in list(self._generic_nodes.keys()):
+            self._delete_generic_node_by_address(addr)
+
+    def _sync_generic_nodes(self, device_id: str, classification: list) -> None:
+        if not self.is_professional():
+            return
+        did = str(device_id or '').strip().lower()
+        if not did:
+            return
+        if not self._device_generic_nodes_enabled(did):
+            reason = self._generic_nodes_skip_reason(did)
+            if reason:
+                LOGGER.info('Generic IoX nodes skipped for %s: %s', did, reason)
+            self._remove_generic_nodes_for_device(did)
+            return
+        self._remove_legacy_generic_nodes_for_device(did, classification)
+        display = self._pairing_display_name(did)
+        role_rows = [row for row in classification if isinstance(row, dict)]
+        sibling_count = len(role_rows)
+        desired_addrs = {self._generic_node_address(did, row) for row in role_rows}
+        for addr in list(self._generic_nodes.keys()):
+            node = self._generic_nodes.get(addr)
+            if node is None or getattr(node, 'device_id', '').lower() != did:
+                continue
+            if addr not in desired_addrs:
+                self._delete_generic_node_by_address(addr)
+
+        for row in classification:
+            if not isinstance(row, dict):
+                continue
+            addr = self._generic_node_address(did, row)
+            node_def = str(row.get('node_def_id') or '')
+            aid = int(row.get('aid') or 0)
+            bindings = row.get('char_bindings') if isinstance(row.get('char_bindings'), dict) else {}
+            title = generic_node_title(
+                display,
+                str(row.get('role') or 'device'),
+                sibling_count=sibling_count,
+            )
+            existing = self._generic_nodes.get(addr)
+            if existing is not None:
+                existing.char_bindings = dict(bindings)
+                self._schedule_refresh_generic_node(existing)
+                continue
+            try:
+                if node_def == 'HKHubEcobeeThermostat':
+                    node = EcobeeThermostatNode(
+                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                    )
+                elif node_def == 'HKHubThermostat':
+                    node = ThermostatNode(
+                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                    )
+                elif node_def == 'HKHubLight':
+                    node = LightNode(
+                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                    )
+                elif node_def == 'HKHubSwitch':
+                    node = SwitchNode(
+                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                    )
+                elif node_def == 'HKHubBinarySensor':
+                    node = BinarySensorNode(
+                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                    )
+                else:
+                    continue
+                self.poly.addNode(node)
+                self._generic_nodes[addr] = node
+                LOGGER.info('Created generic IoX node %s (%s) for %s', addr, node_def, did)
+                self._schedule_refresh_generic_node(node)
+            except Exception:
+                LOGGER.exception('Failed to create generic node %s for %s', node_def, did)
+        self._reconcile_paired_node_title_for_device(did)
+    # %% professional-only end
 
     def cmd_unpair(self, command=None):
         """Backward-compatible controller UNPAIR path."""

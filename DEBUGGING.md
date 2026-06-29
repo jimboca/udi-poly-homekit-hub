@@ -37,6 +37,8 @@ Also confirm in the Node Server log (`logs/debug.log`):
 
 If **NodeServer Online** is **Disconnected** or **Failed**, or **Bridge Status** is **Stopped** or **Error**, fix that before pairing. **Discover** is skipped when the bridge is not ready. Check Notices and `logs/debug.log`; if the cause is not obvious, use **Download Log Package** and PM it to the plugin author.
 
+**Professional edition:** device inventory JSON lives under `persistent/` (one file per paired device). **Download Log Package** includes `persistent/` — use it when authoring vendor nodeDefs or escalating support. Inventory export requires **Professional** (trial licenses usually qualify).
+
 Startup can take up to **1–2 minutes** after a restart (configuration must load first).
 
 ---
@@ -128,9 +130,12 @@ Check:
 - Accessory and Polisy/eISY are on the **same subnet** (no guest Wi‑Fi, no AP client isolation).
 - Accessory is **actively in HomeKit pairing mode** during the scan (codes expire when that screen closes).
 - Run **Discover** while the pairing code is still on the device screen; wait for the full scan window.
+- If the device still does not appear, **remove power** (unplug or breaker off), wait **10–30 seconds**, restore power, re-enter pairing mode, wait **30–60 seconds**, then **Discover** again.
 - Run **Zeroconf diagnostic** on the controller and read the Notice.
 
 If the **HomeKit discover** Notice says **no accessories found**, this is a network/mDNS issue, not a UI bug.
+
+**Power-cycle the accessory:** if **Discover** still finds nothing after checking the list above, remove power from the device (unplug or switch off the circuit), wait **10–30 seconds**, power it back on, put it in **HomeKit pairing mode** again, wait **30–60 seconds** for it to advertise on the LAN, then run **Discover** once more. A cold reboot often clears a stuck mDNS advertisement or pairing-mode state that a soft reset does not fix.
 
 #### E. Accessory still paired elsewhere
 

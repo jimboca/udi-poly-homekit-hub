@@ -2,7 +2,43 @@
 
 **[Debugging issues](DEBUGGING.md)** — pairing failures, **Discover** not adding rows, status **Disconnected**, logs, and what to send support.
 
-**Start here.** This file is the main setup guide for pairing accessories and connecting other PG3 plugins (for example **udi-poly-ecobee**).
+---
+
+## Professional edition
+
+If your PG3 license includes **Professional**, the hub adds features on top of the standard pairing and transport stack. **Standard** behavior is unchanged: multi-slot pairing, **DISCOVER**, WebSocket/MQTT for client plugins (e.g. **udi-poly-ecobee**), and **HKHubPairedDevice** child nodes.
+
+PG3 sets the edition from your license (`Standard` or `Professional`). A **trial license** typically reports as **Professional** so you can evaluate before purchase. The plugin does not expose a separate “mode” toggle — edition comes from the store license at runtime.
+
+### What Professional adds
+
+| Feature | What it does | Default |
+|---------|----------------|---------|
+| **Device inventory** | On pair and HAP health recovery, writes `persistent/<device_id>.json` — full HAP layout, values, and `plugin_hints` for plugin authoring and support. | Always on when licensed Professional |
+| **Export device inventory** | Command on a paired device node to refresh that JSON and show a Notice with the file path. | Manual trigger |
+| **Generic IoX nodes** | Optional child nodes (`HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubSwitch`, `HKHubBinarySensor`) driven directly from HomeKit, without a separate vendor plugin. | **Off** until you opt in |
+
+Inventory files are included in **Download Log Package** (`persistent/` is not excluded from support zips). See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md) for using the JSON to design vendor nodeDefs.
+
+### Opt-in generic control (Professional)
+
+Generic nodes are **not** created automatically. Enable both:
+
+1. **Custom Configuration Parameters:** `generic_nodes_enable` = `true` (hub master switch; seeded as `false` on upgrade).
+2. **Custom Typed → HomeKit pairing slots:** `generic_nodes` = `true` on the row for that pairing.
+
+Both must be **true** for that device. Defaults stay **off** so existing sites that use **udi-poly-ecobee** (or other plugins) are not given duplicate thermostats.
+
+| Your setup | Settings |
+|------------|----------|
+| Keep **udi-poly-ecobee** (or similar) | Leave both **off** — hub transports HomeKit; the other plugin drives IoX. Inventory export still works on Professional. |
+| **Hub-only** control (e.g. Ecobee without the Ecobee plugin) | Enable both on that pairing — Ecobee pairings get **HKHubEcobeeThermostat** (comfort / `GV3`); other thermostats get **HKHubThermostat** until a vendor-specific nodeDef is added. |
+
+After changing either flag, save configuration; the hub re-syncs generic children for affected pairings.
+
+---
+
+**Start here (Standard pairing).** This file is the main setup guide for pairing accessories and connecting other PG3 plugins (for example **udi-poly-ecobee**).
 
 On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf settings at their defaults**. You only need to change **`mqtt_hub_slug`** if multiple HomeKit hubs share one MQTT broker.
 
@@ -159,6 +195,10 @@ On Node Server start, the controller clears all Notices before loading.
 | `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
 | `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
 | `change_node_names` | No | `true` (default) or `false` (string). When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
+| `generic_nodes_enable` | No | **Professional:** `false` (default) or `true`. Master switch for generic IoX child nodes. Requires per-pairing **`generic_nodes`** in Custom Typed. See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md). |
+| `hk_heat_cool_min_delta` | No | **Professional:** minimum heat/cool gap in °F when writing thermostat thresholds (default `3`). |
+
+**Professional device inventory:** JSON files are written to `persistent/<device_id>.json` on pair and health recovery. Use **Export device inventory** on a paired device node or include `persistent/` via **Download Log Package** (not excluded from support zips).
 
 **Zeroconf parameters:** On a normal Polisy / eISY deployment you can ignore the three `zeroconf_*` keys entirely. The controller command **Zeroconf diagnostic** (`ZEROCONF_DIAG`) logs a snapshot for support. After changing `zeroconf_*` or WebSocket bind settings, save configuration; the hub restarts the asyncio bridge automatically.
 

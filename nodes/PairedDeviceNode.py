@@ -43,7 +43,7 @@ class PairedDeviceNode(Node):
         self.display_name = str(display_name or "").strip()
         self.paired = bool(paired)
         address = f"hkp_{self.node_key}"
-        title = self._node_title(self.node_key, self.display_name)
+        title = self._requested_title()
         super().__init__(controller.poly, controller.address, address, title)
         self.setDriver("ST", 1 if self.paired else 0, report=False, force=True, uom=25)
         self.setDriver("GV0", self.slot, report=False, force=True, uom=56)
@@ -57,10 +57,17 @@ class PairedDeviceNode(Node):
         )
 
     def _requested_title(self) -> str:
+        fn = getattr(self.controller, 'paired_node_title', None)
+        if callable(fn):
+            return fn(self)
         return self._node_title(self.node_key, self.display_name)
 
     def reconcile_isy_name(self) -> None:
         """Align IoX node title with discover/typed name; respects ``change_node_names``."""
+        push = getattr(self.controller, "_push_paired_node_isy_title", None)
+        if callable(push):
+            push(self)
+            return
         requested = self._requested_title()
         poly = self.poly
         if not hasattr(poly, "getNodeNameFromDb"):
@@ -148,9 +155,18 @@ class PairedDeviceNode(Node):
         del command
         self.controller._delete_node_key_config_and_node(self.node_key, source=self.address)
 
+    def cmd_export_inventory(self, command=None):
+        del command
+        self.controller.export_device_inventory_manual(self.node_key)
+
     hint = _PAIRED_DEVICE_HINT
     id = "HKHubPairedDevice"
-    commands = {"QUERY": query, "UNPAIR": cmd_unpair, "DELETE": cmd_delete}
+    commands = {
+        "QUERY": query,
+        "UNPAIR": cmd_unpair,
+        "DELETE": cmd_delete,
+        "EXPORT_INVENTORY": cmd_export_inventory,
+    }
     drivers = [
         {"driver": "ST", "value": 0, "uom": 25, "name": "Paired status"},
         {"driver": "GV0", "value": 0, "uom": 56, "name": "Pairing slot"},

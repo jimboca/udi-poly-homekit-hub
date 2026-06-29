@@ -71,6 +71,7 @@ help:
 	@echo "  make release             Tag v\$$VERSION and push current branch + tag"
 	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA) and build $(NAME)-$(BRANCH_BETA)-\$$VERSION.zip"
 	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION) and build $(NAME)-$(BRANCH_PRODUCTION)-\$$VERSION.zip"
+	@echo "  make production-standard Build $(NAME)-Production-Standard-\$$VERSION.zip (Standard store artifact)"
 	@echo "                           After make release / make beta, edit plugin in PG3 UI and set Version to \$$VERSION"
 	@echo "  make zip                 Ad-hoc local $(NAME).zip (no version suffix)"
 	@echo ""
@@ -142,7 +143,26 @@ production:
 	ZIPFILE="$(NAME)-$(BRANCH_PRODUCTION)-$$VERSION.zip"; \
 	rm -f "$$ZIPFILE"; \
 	zip -x@zip_exclude.lst -r "$$ZIPFILE" * >/dev/null; \
-	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."
+	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."; \
+	$(MAKE) production-standard
+
+# Standard edition zip: strip Professional marker blocks, py_compile check, zip with extended exclude list.
+production-standard:
+	@set -e; \
+	ROOT=$$(pwd); \
+	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
+	test -n "$$VERSION" || { echo "Could not parse VERSION from $$ROOT/nodes/__init__.py"; exit 1; }; \
+	STRIP_FILES="nodes/Controller.py homekit_hub/bridge.py nodes/__init__.py"; \
+	for f in $$STRIP_FILES; do cp "$$f" "$$f.strip_bak"; done; \
+	$(PYTHON) scripts/strip_standard_zip.py $$STRIP_FILES; \
+	$(PYTHON) -m py_compile nodes/Controller.py homekit_hub/bridge.py nodes/__init__.py; \
+	ZIPFILE="$(NAME)-Production-Standard-$$VERSION.zip"; \
+	rm -f zip_exclude_standard_full.lst "$$ZIPFILE"; \
+	cat zip_exclude.lst zip_exclude_professional.lst > zip_exclude_standard_full.lst; \
+	zip -x@zip_exclude_standard_full.lst -r "$$ZIPFILE" * >/dev/null; \
+	for f in $$STRIP_FILES; do mv "$$f.strip_bak" "$$f"; done; \
+	rm -f zip_exclude_standard_full.lst; \
+	echo "Built $$ROOT/$$ZIPFILE (Standard edition artifact)."
 
 # Tag the current HEAD as v<VERSION> and push the current branch + tag to $(GIT_REMOTE).
 # Version = nodes/__init__.py VERSION (canonical). Track-specific zips are built by `make beta` / `make production`.
@@ -202,5 +222,5 @@ ws-raw:
 ws-smoke: ws-hello ws-list ws-get ws-subscribe ws-unsubscribe ws-snapshot-device ws-snapshot-all ws-raw
 	@echo "ws-smoke: finished ($(WS_HOST):$(WS_PORT))"
 
-.PHONY: check xml-check lint format-check black-check test test-unit test-integration help clean zip beta production release \
+.PHONY: check xml-check lint format-check black-check test test-unit test-integration help clean zip beta production production-standard release \
 	ws-smoke ws-hello ws-list ws-get ws-subscribe ws-unsubscribe ws-snapshot-device ws-snapshot-all ws-raw

@@ -7,13 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-25
+
+Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
 ### Added
 
-- **`DEBUGGING.md`:** user troubleshooting guide for pairing and **Discover** issues — hub health checks (**NodeServer Online**, **Bridge Status**, **MQTT transport**, **Hub error code**), PG3 Notices and logs, LAN/mDNS and “already paired” cases, manual pairing, Ecobee notes, and **Download Log Package** escalation for support. Linked from **CONFIG.md** and **README.md**.
+- **(Standard + Professional)** **`DEBUGGING.md`:** user troubleshooting guide for pairing and **Discover** — hub health checks, PG3 Notices and logs, LAN/mDNS, manual pairing, Ecobee notes, and **Download Log Package** escalation. Linked from **CONFIG.md** and **README.md**.
+- **(Professional)** **Edition tiers:** `dev_settings.py` gates Professional features; store builds via `make production` (Professional) and `make production-standard` (Standard).
+- **(Professional)** **Device inventory:** `persistent/<device_id>.json` export on pair, health recovery, and manual **EXPORT_INVENTORY** on paired device nodes.
+- **(Professional)** **Generic IoX nodes (opt-in):** `HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubSwitch`, `HKHubBinarySensor` with HAP classification, `hap_apply`, and controller/pairing flags `generic_nodes_enable` / `generic_nodes`.
+- **(Professional)** **`PLUGIN_AUTHORING.md`**, unit tests (`test_dev_settings`, `test_device_inventory`, `test_hap_apply`, `test_node_funcs`), `scripts/strip_standard_zip.py`, and `zip_exclude_professional.lst` for Standard zip stripping.
 
 ### Changed
 
-- **Repository / directory:** renamed from **`udi-poly-homekit`** to **`udi-poly-homekit-hub`** (GitHub: `jimboca/udi-poly-homekit-hub`). Runtime entry point, zip name, and MQTT protocol unchanged.
+- **(Standard + Professional)** **Version 2.0.0** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt` aligned for IoX profile/NLS refresh.
+- **(Standard + Professional)** **Repository / directory:** renamed from **`udi-poly-homekit`** to **`udi-poly-homekit-hub`** (GitHub: `jimboca/udi-poly-homekit-hub`). Runtime entry point, zip name, and MQTT/WebSocket protocol unchanged.
+- **(Standard + Professional)** **`CONFIG.md`** and **`README.md`:** document Standard vs Professional editions, generic IoX nodes, and hub-only Ecobee control path on Professional.
+- **(Professional)** **Ecobee thermostat IoX parity:** `HKHubEcobeeThermostat` maps HAP characteristics to IoX drivers (mode, fan, HVAC state, comfort **`GV3`**, schedule mode **`CLISMD`**, setpoints).
+
+### Fixed
+
+- **(Professional)** **Ecobee setpoint parity (°F):** outbound heat/cool writes use Ecobee display rounding (`int(C×1.8+32)`) so IoX targets (e.g. 76°F/74°F) match the physical thermostat instead of landing 1°F low.
+- **(Professional)** **Schedule mode (`CLISMD`):** manual holds and setpoint changes set **Hold Next** / **Hold Indefinite**; on restart, hold state is inferred from HAP comfort byte plus active vs program setpoints instead of staying **Running**.
+- **(Professional)** **Comfort (`GV3`) on manual hold:** HAP temp/hold byte 3 now displays **Temp** (not **Smart1**) when active setpoints do not match a configured program comfort; vacation/smart comforts still resolve by vendor setpoint match.
 
 ## [1.0.1] - 2026-05-28
 

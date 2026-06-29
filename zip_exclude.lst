@@ -15,4 +15,5 @@ release-pg3-store.txt
 *.cert
 *.key
 *.lock
-snapshot-all.txt
+dev_edition.txt
+persistent/*

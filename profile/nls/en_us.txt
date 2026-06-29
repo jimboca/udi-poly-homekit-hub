@@ -50,3 +50,107 @@ PAIRST-1 = Paired
 HKHLTH-0 = Healthy
 HKHLTH-1 = Degraded
 HKHLTH-2 = Not paired
+
+# Generic IoX nodes (Professional)
+ND-HKHubThermostat-NAME = HomeKit Thermostat
+ND-HKHubThermostat-ICON = Thermostat
+ND-HKHubEcobeeThermostat-NAME = HomeKit Ecobee Thermostat
+ND-HKHubEcobeeThermostat-ICON = Thermostat
+ND-HKHubLight-NAME = HomeKit Light
+ND-HKHubLight-ICON = Light
+ND-HKHubSwitch-NAME = HomeKit Switch
+ND-HKHubSwitch-ICON = Relay
+ND-HKHubBinarySensor-NAME = HomeKit Sensor
+ND-HKHubBinarySensor-ICON = Sensor
+CMD-hkpair-EXPORT_INVENTORY-NAME = Export device inventory
+CMD-hkctl-GENERIC_NODES-NAME = Generic nodes (info)
+
+# Generic IoX node drivers (Professional) — nls keys match generic_nodedefs.xml
+ST-hktherm-ST-NAME = Temperature
+ST-hktherm-CLISPH-NAME = Heat setpoint
+ST-hktherm-CLISPC-NAME = Cool setpoint
+ST-hktherm-CLIMD-NAME = Mode
+ST-hktherm-CLIFS-NAME = Fan mode
+ST-hktherm-CLIHUM-NAME = Humidity
+ST-hktherm-CLIHCS-NAME = HVAC state
+ST-hktherm-CLIFRS-NAME = Fan state
+ST-hktherm-GV1-NAME = Humidity setpoint
+CMD-hktherm-CLISPH-NAME = Heat setpoint
+CMD-hktherm-CLISPC-NAME = Cool setpoint
+CMD-hktherm-CLIMD-NAME = Mode
+CMD-hktherm-CLIFS-NAME = Fan mode
+CMD-hktherm-GV1-NAME = Humidity setpoint
+CMD-hktherm-QUERY-NAME = Query
+
+ST-hkecoth-ST-NAME = Temperature
+ST-hkecoth-CLISPH-NAME = Heat setpoint
+ST-hkecoth-CLISPC-NAME = Cool setpoint
+ST-hkecoth-CLIMD-NAME = Mode
+ST-hkecoth-CLIFS-NAME = Fan mode
+ST-hkecoth-CLIHUM-NAME = Humidity
+ST-hkecoth-CLIHCS-NAME = HVAC state
+ST-hkecoth-CLIFRS-NAME = Fan state
+ST-hkecoth-GV1-NAME = Humidity setpoint
+ST-hkecoth-GV3-NAME = Comfort
+ST-hkecoth-CLISMD-NAME = Schedule mode
+CMD-hkecoth-CLISPH-NAME = Heat setpoint
+CMD-hkecoth-CLISPC-NAME = Cool setpoint
+CMD-hkecoth-CLIMD-NAME = Mode
+CMD-hkecoth-CLIFS-NAME = Fan mode
+CMD-hkecoth-GV1-NAME = Humidity setpoint
+CMD-hkecoth-GV3-NAME = Comfort
+CMD-hkecoth-CLISMD-NAME = Schedule mode
+CMD-hkecoth-QUERY-NAME = Query
+
+ST-hklight-ST-NAME = Status
+ST-hklight-GV0-NAME = Brightness
+CMD-hklight-DON-NAME = On
+CMD-hklight-DOF-NAME = Off
+CMD-hklight-GV0-NAME = Brightness
+CMD-hklight-QUERY-NAME = Query
+
+ST-hkswitch-ST-NAME = Status
+CMD-hkswitch-DON-NAME = On
+CMD-hkswitch-DOF-NAME = Off
+CMD-hkswitch-QUERY-NAME = Query
+
+ST-hksensor-ST-NAME = Temperature
+ST-hksensor-GV1-NAME = Motion
+ST-hksensor-GV2-NAME = Contact
+ST-hksensor-CLIHUM-NAME = Humidity
+CMD-hksensor-QUERY-NAME = Query
+
+# Generic IoX editor state labels (Professional)
+EN_ECOHCS-0 = Idle
+EN_ECOHCS-1 = Heat
+EN_ECOHCS-2 = Cool
+EN_ECOHCS-3 = Heat2
+EN_ECOHCS-4 = Heat3
+EN_ECOHCS-5 = Cool2
+EN_ECOHCS-6 = AuxHeat
+EN_ECOHCS-7 = AuxHeat2
+EN_ECOHCS-8 = AuxHeat3
+
+EN_PM2-0 = Running
+EN_PM2-1 = Hold Next
+EN_PM2-2 = Hold Indefinite
+
+EN_ONOFF-0 = Off
+EN_ONOFF-1 = On
+
+HKCLIMATE-0 = Away
+HKCLIMATE-1 = Home
+HKCLIMATE-2 = Sleep
+HKCLIMATE-3 = Smart1
+HKCLIMATE-4 = Smart2
+HKCLIMATE-5 = Smart3
+HKCLIMATE-6 = Smart4
+HKCLIMATE-7 = Smart5
+HKCLIMATE-8 = Smart6
+HKCLIMATE-9 = Smart7
+HKCLIMATE-10 = Vacation
+HKCLIMATE-11 = SmartAway
+HKCLIMATE-12 = SmartHome
+HKCLIMATE-13 = DemandResponse
+HKCLIMATE-14 = Temp
+HKCLIMATE-15 = Wakeup

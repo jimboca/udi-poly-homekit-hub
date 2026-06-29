@@ -177,6 +177,33 @@ def test_append_pairing_rows_for_discover_merge_fill_append():
     assert by_id["dd:ee:ff"]["accessory_name"] == "FillDev"
     assert by_id["11:22:33"]["accessory_name"] == "Appended"
     assert "slot" in by_id["11:22:33"]
+    assert by_id["dd:ee:ff"]["generic_nodes"] == "false"
+    assert by_id["11:22:33"]["generic_nodes"] == "false"
+
+
+def test_ensure_pairing_row_generic_nodes_default_seeds_blank_rows():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData(
+        {
+            TYPED_PAIRING_SLOTS_KEY: [
+                {"hap_pin": "123-45-678", "generic_nodes": ""},
+                {"hap_pin": "111-11-111", "generic_nodes": "true"},
+            ]
+        }
+    )
+    assert c._ensure_pairing_row_generic_nodes_default() is True
+    rows = c.TypedData.loads[0][0][TYPED_PAIRING_SLOTS_KEY]
+    assert rows[0]["generic_nodes"] == "false"
+    assert rows[1]["generic_nodes"] == "true"
+
+
+def test_ensure_pairing_row_generic_nodes_default_noop_when_set():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData(
+        {TYPED_PAIRING_SLOTS_KEY: [{"generic_nodes": "false"}]}
+    )
+    assert c._ensure_pairing_row_generic_nodes_default() is False
+    assert not c.TypedData.loads
 
 
 def test_append_pairing_rows_for_discover_empty():

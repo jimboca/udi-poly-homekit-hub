@@ -17,3 +17,5 @@ snapshot-all.txt
 release-pg3-store.txt
 # Local archives from `make zip` / `make beta` / `make production` (PG3 deliverable is the zip).
 HomeKitHub*.zip
+dev_edition.txt
+persistent/
