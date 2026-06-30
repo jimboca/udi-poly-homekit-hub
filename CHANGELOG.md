@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-30
+
+Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Changed
+
+- **(Standard + Professional)** **`CONFIG.md`**, **`README.md`**, **`PLUGIN_AUTHORING.md`:** pairing-first layout, stronger pairing-code guidance, browser reload notes for Custom Typed rows, and corrected **Create generic IoX control nodes (Professional)** label.
+
+### Fixed
+
+- **(Standard + Professional)** **Plugin restart:** `handler_stop` no longer calls `delNode` on paired/generic child nodes; startup re-publishes nodes with `addNode` (Ecobee hub pattern) so IoX Admin Console layout is preserved across restarts.
+
 ## [2.0.0] - 2026-06-25
 
 Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

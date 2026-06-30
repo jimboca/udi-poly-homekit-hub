@@ -1115,10 +1115,15 @@ class Controller(Node):
             node = self._paired_nodes.get(node_key)
             if node is None:
                 try:
-                    node = PairedDeviceNode(
-                        self, node_key, slot, display_name, is_paired
-                    )
-                    self.poly.addNode(node)
+                    addr = f"hkp_{node_key}"
+                    node = self.poly.getNode(addr)
+                    if node is None:
+                        node = PairedDeviceNode(
+                            self, node_key, slot, display_name, is_paired
+                        )
+                        self.poly.addNode(node)
+                    elif hasattr(node, "update_identity"):
+                        node.update_identity(slot, display_name, is_paired)
                     self._paired_nodes[node_key] = node
                     node.reconcile_isy_name()
                 except Exception:
@@ -1386,7 +1391,8 @@ class Controller(Node):
         self.ready = False
         self._paired_nodes.clear()
         # %% professional-only begin
-        self._remove_all_generic_nodes()
+        # Drop in-memory handles only; IoX keeps child nodes across plugin restarts.
+        self._generic_nodes.clear()
         # %% professional-only end
         try:
             self.setDriver("GV0", 0, report=True, force=True, uom=25)
@@ -2510,31 +2516,36 @@ class Controller(Node):
                 self._schedule_refresh_generic_node(existing)
                 continue
             try:
-                if node_def == 'HKHubEcobeeThermostat':
-                    node = EcobeeThermostatNode(
-                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
-                    )
-                elif node_def == 'HKHubThermostat':
-                    node = ThermostatNode(
-                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
-                    )
-                elif node_def == 'HKHubLight':
-                    node = LightNode(
-                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
-                    )
-                elif node_def == 'HKHubSwitch':
-                    node = SwitchNode(
-                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
-                    )
-                elif node_def == 'HKHubBinarySensor':
-                    node = BinarySensorNode(
-                        self, addr, title, device_id=did, aid=aid, char_bindings=bindings
-                    )
+                node = self.poly.getNode(addr)
+                if node is None:
+                    if node_def == 'HKHubEcobeeThermostat':
+                        node = EcobeeThermostatNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    elif node_def == 'HKHubThermostat':
+                        node = ThermostatNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    elif node_def == 'HKHubLight':
+                        node = LightNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    elif node_def == 'HKHubSwitch':
+                        node = SwitchNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    elif node_def == 'HKHubBinarySensor':
+                        node = BinarySensorNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    else:
+                        continue
+                    self.poly.addNode(node)
+                    LOGGER.info('Created generic IoX node %s (%s) for %s', addr, node_def, did)
                 else:
-                    continue
-                self.poly.addNode(node)
+                    if hasattr(node, 'char_bindings'):
+                        node.char_bindings = dict(bindings)
                 self._generic_nodes[addr] = node
-                LOGGER.info('Created generic IoX node %s (%s) for %s', addr, node_def, did)
                 self._schedule_refresh_generic_node(node)
             except Exception:
                 LOGGER.exception('Failed to create generic node %s for %s', node_def, did)

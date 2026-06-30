@@ -4,11 +4,70 @@
 
 ---
 
+## Start here
+
+This guide is ordered for every install:
+
+1. **[Pairing accessories](#pairing-accessories)** — required for **Standard** and **Professional** (no Apple Home app).
+2. **[Professional edition](#professional-edition)** — optional hub-only IoX control and device inventory (skip if you use a vendor plugin below).
+3. **[Ecobee + udi-poly-ecobee](#ecobee--udi-poly-ecobee)** — pair on this hub first, then install the Ecobee Node Server.
+
+On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf settings at their defaults**. You only need to change **`mqtt_hub_slug`** if multiple HomeKit hubs share one MQTT broker.
+
+---
+
+## Pairing accessories
+
+Applies to **Standard** and **Professional**. **No iPhone, iPad, Mac, or Apple Home app is required** — and the accessory must **not** be paired to Apple Home (or another HomeKit controller) while you pair it here.
+
+### Quick pairing (DISCOVER)
+
+1. Add **HomeKit Hub** from the PG3 store and start the Node Server.
+2. Put the accessory in **HomeKit pairing mode** (see vendor docs). Confirm it is **unpaired** from Apple Home and other controllers.
+3. On the **HomeKit Hub** controller node, run **DISCOVER**.
+4. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Reload the Configuration page in your browser** if the new row does not appear yet (the table refresh button alone may not be enough).
+5. Find the row for your device (id and name are filled in by **DISCOVER**). In **HomeKit pairing code** (`hap_pin`), enter the **8-digit code currently shown on the accessory** while it is in pairing mode (`12345678` or `123-45-678` — either format works). **Save**.
+6. Wait for pairing to finish. A **Paired HomeKit device** child node should appear; **ST** should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
+
+### Pairing code can change
+
+HomeKit setup codes are **not permanent**. Many accessories issue a **new code** each time pairing mode starts, and codes **expire** when pairing mode ends.
+
+- Enter the code **shown on the device at the moment you type it** — not an old sticker, email, screenshot, or code from an earlier attempt.
+- If pairing fails or the code is rejected, put the accessory back in pairing mode and use the **new** code on screen before **Save**.
+- Polyglot does not display the code for you; it comes from the accessory label, screen, or vendor app while pairing mode is active.
+
+### More pairing options
+
+**Several unpaired devices:** use **accessory_id** or **accessory_name** on the row to pick the right one (usually **DISCOVER** already set these).
+
+**Manual row:** you can **add row** in **HomeKit pairing slots** instead of waiting for **DISCOVER**. **Reload the Configuration page in your browser** if the new row does not appear after you save.
+
+**QR / `X-HM://` only:** some products (e.g. **Ecobee**) show a QR in their app for **Apple Home**. This hub needs the **numeric** setup code. Run **DISCOVER** while the device is in pairing mode to fill **id** / **name**, or type them yourself.
+
+**Browser refresh:** after **DISCOVER**, **add row**, or a plugin upgrade that adds new columns, **reload the entire Configuration page in your browser** before editing typed rows—the table refresh button alone often is not enough.
+
+### Verify the hub is ready
+
+On the **HomeKit Hub** controller node:
+
+| Driver | Good value | Meaning |
+|--------|------------|---------|
+| **ST** | `1` | Node Server connected to Polyglot. |
+| **GV0** | `1` | Bridge running (HomeKit + WebSocket server up). |
+| **GV1** | `2` | MQTT connected (when **`mqtt_enable`** is `true`). |
+
+If **GV0** is not `1` or **GV1** is not `2`, check PG3 **Notices** and `logs/debug.log` before connecting a client plugin or enabling Professional generic nodes.
+
+---
+
 ## Professional edition
 
-If your PG3 license includes **Professional**, the hub adds features on top of the standard pairing and transport stack. **Standard** behavior is unchanged: multi-slot pairing, **DISCOVER**, WebSocket/MQTT for client plugins (e.g. **udi-poly-ecobee**), and **HKHubPairedDevice** child nodes.
+If your PG3 license includes **Professional**, the hub adds features on top of the [pairing flow](#pairing-accessories) above. **Standard** behavior is unchanged: multi-slot pairing, **DISCOVER**, WebSocket/MQTT transport, and **HKHubPairedDevice** child nodes.
 
 PG3 sets the edition from your license (`Standard` or `Professional`). A **trial license** typically reports as **Professional** so you can evaluate before purchase. The plugin does not expose a separate “mode” toggle — edition comes from the store license at runtime.
+
+You do **not** need Professional to use **udi-poly-ecobee** or other hub client plugins on **Standard**.
 
 ### What Professional adds
 
@@ -16,50 +75,61 @@ PG3 sets the edition from your license (`Standard` or `Professional`). A **trial
 |---------|----------------|---------|
 | **Device inventory** | On pair and HAP health recovery, writes `persistent/<device_id>.json` — full HAP layout, values, and `plugin_hints` for plugin authoring and support. | Always on when licensed Professional |
 | **Export device inventory** | Command on a paired device node to refresh that JSON and show a Notice with the file path. | Manual trigger |
-| **Generic IoX nodes** | Optional child nodes (`HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubSwitch`, `HKHubBinarySensor`) driven directly from HomeKit, without a separate vendor plugin. | **Off** until you opt in |
+| **Generic IoX nodes** | Optional child nodes driven directly from HomeKit in this plugin — no separate vendor Node Server when you opt in. | **Off** until you opt in |
 
 Inventory files are included in **Download Log Package** (`persistent/` is not excluded from support zips). See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md) for using the JSON to design vendor nodeDefs.
 
+### Supported generic IoX nodes (included devices)
+
+When generic control is enabled (below), the hub can create these child node types from HomeKit after pairing:
+
+| Device type | IoX node |
+|-------------|----------|
+| Thermostat (generic HAP) | **HKHubThermostat** |
+| Ecobee thermostat | **HKHubEcobeeThermostat** (comfort / `GV3`, schedule mode, setpoints) |
+| Light | **HKHubLight** |
+| Switch / outlet | **HKHubSwitch** |
+| Contact, motion, occupancy, … | **HKHubBinarySensor** |
+
+For now, only **generic** light and switch node types are supported (**HKHubLight**, **HKHubSwitch**). Capability-specific variants (dimmer vs color, etc.) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)**.
+
 ### Opt-in generic control (Professional)
 
-Generic nodes are **not** created automatically. Enable both:
+Generic nodes are **not** created automatically. Complete [pairing](#pairing-accessories) first, then enable both:
 
-1. **Custom Configuration Parameters:** `generic_nodes_enable` = `true` (hub master switch; seeded as `false` on upgrade).
-2. **Custom Typed → HomeKit pairing slots:** `generic_nodes` = `true` on the row for that pairing.
+1. **Custom Configuration Parameters:** set **`generic_nodes_enable`** to `true` (hub master switch; seeded as `false` on upgrade). Reload the **Configuration** page in your browser if this parameter does not appear after a plugin upgrade.
+2. **Custom Typed → HomeKit pairing slots:** on the row for that pairing, set **Create generic IoX control nodes (Professional)** to **true** (internal key `generic_nodes`). Reload the **Configuration** page in your browser if that column does not appear yet (common after a plugin upgrade).
 
 Both must be **true** for that device. Defaults stay **off** so existing sites that use **udi-poly-ecobee** (or other plugins) are not given duplicate thermostats.
 
 | Your setup | Settings |
 |------------|----------|
-| Keep **udi-poly-ecobee** (or similar) | Leave both **off** — hub transports HomeKit; the other plugin drives IoX. Inventory export still works on Professional. |
-| **Hub-only** control (e.g. Ecobee without the Ecobee plugin) | Enable both on that pairing — Ecobee pairings get **HKHubEcobeeThermostat** (comfort / `GV3`); other thermostats get **HKHubThermostat** until a vendor-specific nodeDef is added. |
+| Use **udi-poly-ecobee** (or similar) | Leave both **off** — hub transports HomeKit; the other plugin drives IoX. Inventory export still works on Professional. |
+| **Hub-only** control (no Ecobee plugin) | Enable both on that pairing — Ecobee pairings get **HKHubEcobeeThermostat**; other thermostats get **HKHubThermostat** until a vendor-specific nodeDef is added. |
 
 After changing either flag, save configuration; the hub re-syncs generic children for affected pairings.
 
 ---
 
-**Start here (Standard pairing).** This file is the main setup guide for pairing accessories and connecting other PG3 plugins (for example **udi-poly-ecobee**).
+## Ecobee + udi-poly-ecobee
 
-On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf settings at their defaults**. You only need to change **`mqtt_hub_slug`** if multiple HomeKit hubs share one MQTT broker.
+Use this path when **udi-poly-ecobee** drives your thermostats over the hub’s MQTT/WebSocket API. **Pair on this hub first**, then install the Ecobee plugin.
 
----
+This hub flow has been tested primarily with **Ecobee thermostats**. Other HomeKit accessories use the same [pairing steps](#pairing-accessories).
 
-## Ecobee + IoX quick start
+### Before you start
 
-Pair your Ecobee on this hub **before** installing **udi-poly-ecobee**. No iPhone, iPad, Mac, or Apple Home app is required.
+- Complete **[Pairing accessories](#pairing-accessories)** for each Ecobee **before** installing **udi-poly-ecobee**.
+- **Critical:** the Ecobee must **not** be in **Apple Home** while you pair here. Remove it from Apple Home first if needed.
+- Ecobee may prompt you to add the thermostat to Apple Home during setup — **skip that** for this integration.
 
-**Critical:** The Ecobee must **not** be paired to **Apple Home** (or any other HomeKit controller) while you pair it here. Remove it from Apple Home first if it was added there.
+### After pairing on the hub
 
-1. Add **HomeKit Hub** from the PG3 store and start the Node Server.
-2. On the Ecobee: put it in **HomeKit pairing mode** (see Ecobee docs). Confirm it is **not** in Apple Home.
-3. On the **HomeKit Hub** controller node in PG3 / IoX, run **DISCOVER**.
-4. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Refresh the Configuration page** if the new row does not appear yet.
-5. Find the row for your thermostat (id and name are filled in by **DISCOVER**). Enter the 8-digit HomeKit code in **hap_pin** (`12345678` or `123-45-678` — either format works). **Save**.
-6. Wait for pairing to finish. A child node should appear; its **ST** driver should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
-7. Leave **`mqtt_enable`** `true` and **`mqtt_hub_slug`** `default` unless you run multiple hubs on one broker.
-8. **Next:** install **udi-poly-ecobee** and follow its [CONFIG.md — Ecobee quick start](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
+1. Confirm the hub is ready (**ST** `1`, **GV0** `1`, **GV1** `2` on the controller) — see [Verify the hub is ready](#verify-the-hub-is-ready).
+2. Leave **`mqtt_enable`** `true` and **`mqtt_hub_slug`** `default` unless you run multiple hubs on one broker.
+3. Install **udi-poly-ecobee** and follow its [CONFIG.md — Ecobee quick start](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
 
-This hub flow has been tested primarily with **Ecobee thermostats** for use with **udi-poly-ecobee**. Other HomeKit accessories may work; pairing steps are the same.
+On **Professional**, leave **generic_nodes_enable** and **Create generic IoX control nodes (Professional)** **off** on Ecobee rows unless you intentionally want duplicate thermostat nodes in IoX.
 
 ---
 
@@ -78,48 +148,6 @@ Most users never change these. Only touch them when you have a specific reason (
 
 ---
 
-## Pairing details
-
-### Standard flow (DISCOVER)
-
-1. Put the accessory in HomeKit pairing mode (unpaired).
-2. Run **DISCOVER** on the **HomeKit Hub** controller. The hub stores a discover snapshot and **adds a row** per new unpaired accessory to **HomeKit pairing slots** (id and name prefilled; **hap_pin** empty).
-3. Enter the **HomeKit pairing code** on that row and **Save**. The code appears on the device label, screen, or vendor app while in pairing mode — it is not shown in Polyglot.
-4. If several unpaired devices appear at once, use **accessory_id** or **accessory_name** on the row to pick the right one (usually **DISCOVER** already set these).
-
-**Tips:**
-
-- Setup codes often **expire** when pairing mode ends; re-open pairing mode and use the **current** code if pairing fails.
-- After **DISCOVER**, refresh the PG3 **Configuration** page before editing typed rows.
-
-### Manual rows (QR code in vendor app only)
-
-You can **add row** manually in **HomeKit pairing slots** instead of waiting for **DISCOVER**.
-
-Some products (e.g. **Ecobee**) show a **QR code** in their app for **Apple Home**. That path is separate: for this hub you need the **numeric** setup code (often on a sticker or in docs). Run **DISCOVER** while the device is in pairing mode to fill **id** / **name**, or type them yourself.
-
-### Ecobee and Apple Home
-
-Ecobee may prompt you to add the thermostat to Apple Home. **Skip that** for this setup. The thermostat should be pairable only to **this** hub (unpaired from Apple Home).
-
----
-
-## Verify hub is ready for Ecobee
-
-On the **HomeKit Hub** controller node:
-
-| Driver | Good value | Meaning |
-|--------|------------|---------|
-| **ST** | `1` | Node Server connected to Polyglot. |
-| **GV0** | `1` | Bridge running (HomeKit + WebSocket server up). |
-| **GV1** | `2` | MQTT connected (when **`mqtt_enable`** is `true`). |
-
-If **GV0** is not `1` or **GV1** is not `2`, check PG3 **Notices** and `logs/debug.log` before installing Ecobee.
-
-Continue with [udi-poly-ecobee CONFIG.md](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
-
----
-
 ## Troubleshooting
 
 See **[DEBUGGING.md](DEBUGGING.md)** for step-by-step diagnosis (hub not ready, **Discover** with no rows, LAN/mDNS, Ecobee pairing, logs, and support checklist).
@@ -133,7 +161,7 @@ Symptoms: **DISCOVER** lists the device under **Already paired elsewhere**, or p
 3. Power-cycle the accessory (or vendor HomeKit reset if required).
 4. Wait 30–60 seconds for mDNS to settle.
 5. Run **DISCOVER** again; confirm the target is **unpaired**.
-6. Enter the current pairing code on the slot row and **Save**.
+6. Enter the pairing code **currently shown on the accessory** (re-open pairing mode if needed) on the slot row and **Save**.
 
 **UNPAIR** / **DELETE** on a slot row clears **this plugin's** pairing data only. If the accessory still advertises `paired=True`, repeat the steps above on the device side.
 
@@ -144,7 +172,7 @@ Other notes:
 
 ### Pairing code rejected or expired
 
-Re-open HomeKit pairing mode on the accessory and enter the **new** code shown on the device.
+Put the accessory back in HomeKit pairing mode and enter the **new** code shown on the device **at that moment** — codes change between sessions. See [Pairing code can change](#pairing-code-can-change).
 
 ---
 
@@ -195,7 +223,7 @@ On Node Server start, the controller clears all Notices before loading.
 | `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
 | `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
 | `change_node_names` | No | `true` (default) or `false` (string). When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
-| `generic_nodes_enable` | No | **Professional:** `false` (default) or `true`. Master switch for generic IoX child nodes. Requires per-pairing **`generic_nodes`** in Custom Typed. See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md). |
+| `generic_nodes_enable` | No | **Professional:** `false` (default) or `true`. Master switch for generic IoX child nodes. Also requires **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed. See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md). |
 | `hk_heat_cool_min_delta` | No | **Professional:** minimum heat/cool gap in °F when writing thermostat thresholds (default `3`). |
 
 **Professional device inventory:** JSON files are written to `persistent/<device_id>.json` on pair and health recovery. Use **Export device inventory** on a paired device node or include `persistent/` via **Download Log Package** (not excluded from support zips).
@@ -212,14 +240,17 @@ Same pattern as **udi-poly-notification**: one typed section with **multiple row
 
 In the Polyglot UI, open **Custom Typed Configuration Parameters** and use the list **“HomeKit pairing slots”**. **DISCOVER** automatically **adds a row** for each newly seen **unpaired** accessory. You can also **add row** / **remove** manually.
 
+**Browser refresh:** After **DISCOVER**, **add row**, or a plugin upgrade that adds new columns (e.g. **Create generic IoX control nodes (Professional)**), **reload the entire Configuration page in your browser** if rows or fields are missing—the typed-table refresh button alone is often not enough.
+
 | Field | Description |
 |-------|-------------|
 | **Slot** (`slot`) | Positive integer **1, 2, 3, …** Optional: if empty, the Hub picks the smallest unused slot. |
-| **HomeKit pairing code** (`hap_pin`) | Code shown on the accessory (e.g. `123-45-678`). Eight digits without dashes work. **Leave empty** to disassociate that slot. |
+| **HomeKit pairing code** (`hap_pin`) | **8-digit code on the accessory while pairing mode is active** (e.g. `123-45-678`; dashes optional). Codes can **change** each time pairing mode starts — enter what the device shows **when you save**, not an older code. **Leave empty** to disassociate that slot. |
 | **Accessory device id** (`accessory_id`) | Optional. Usually filled by **DISCOVER**. Use to disambiguate multiple unpaired devices. |
 | **Substring of accessory name** (`accessory_name`) | Optional extra filter. |
 | **Node key** (`node_key`) | Stable IoX child node identity (`hkp_<node_key>`). Auto-assigned; leave unchanged to keep the same IoX address across re-pair. |
 | **LAN host:port** (`discover_endpoint`) | Filled from **DISCOVER**; updated when IP pairing recovers after reboot (informational). |
+| **Create generic IoX control nodes (Professional)** (`generic_nodes`) | **Professional:** default **false**. Set **true** (and enable hub **`generic_nodes_enable`**) to manage this device with generic IoX nodes in this plugin instead of a separate vendor plugin. |
 
 - No fixed maximum number of rows.
 - If you removed a row by mistake, run **DISCOVER** again to repopulate.

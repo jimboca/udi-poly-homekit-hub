@@ -264,3 +264,17 @@ def test_append_pairing_rows_for_discover_load_failure():
     )
     assert out == (0, 0, 0)
     c.report_error.assert_called()
+
+
+def test_handler_stop_clears_generic_nodes_without_deleting():
+    c = _bare_controller()
+    c._generic_nodes = {'ge3811269468c9': MagicMock(address='ge3811269468c9')}
+    c._paired_nodes = {'c': MagicMock()}
+    c.poly = MagicMock()
+    c.bridge = None
+    c.mainloop = None
+    c._mqtt_transport_driver = 0
+    c.handler_stop()
+    assert c._generic_nodes == {}
+    assert c._paired_nodes == {}
+    c.poly.delNode.assert_not_called()

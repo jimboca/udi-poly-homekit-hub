@@ -31,15 +31,15 @@ On **Professional**, the hub can create IoX child nodes from standard HomeKit pr
 
 For now, only **generic** light and switch node types are supported (**HKHubLight**, **HKHubSwitch**). Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
 
-Generic nodes are **off by default**. Enable **`generic_nodes_enable`** on the controller and **`generic_nodes`** on the pairing row in Custom Typed configuration (see **[CONFIG.md — Professional edition](CONFIG.md#professional-edition)**). Existing sites that use **udi-poly-ecobee** or other vendor plugins can leave both off and keep using those plugins for control.
+Generic nodes are **off by default**. Enable **`generic_nodes_enable`** on the controller and **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed configuration (see **[CONFIG.md — Professional edition](CONFIG.md#professional-edition)**). Reload the **Configuration** page in your browser if those controls do not appear after upgrade. Existing sites that use **udi-poly-ecobee** or other vendor plugins can leave both off and keep using those plugins for control.
 
 Professional also exports a full HAP capability snapshot per device (auto on pair/reconnect, or **Export device inventory** on a paired device node). See **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for using that JSON to add vendor-specific node types over time.
 
 ## Start here
 
-**[CONFIG.md](CONFIG.md)** — step-by-step setup, especially **[Ecobee + IoX quick start](CONFIG.md#ecobee--iox-quick-start)** and **[Professional edition](CONFIG.md#professional-edition)**.
+**[CONFIG.md](CONFIG.md)** — setup in order: **[Pairing accessories](CONFIG.md#pairing-accessories)** (all editions), then **[Professional edition](CONFIG.md#professional-edition)** or **[Ecobee + udi-poly-ecobee](CONFIG.md#ecobee--udi-poly-ecobee)**.
 
-That guide covers **DISCOVER**, entering the HomeKit pairing code, verifying the hub is ready, and linking to the Ecobee plugin (or hub-only generic nodes on Professional).
+That guide covers **DISCOVER**, entering the HomeKit pairing code (use the code shown **when you enter it**), verifying the hub is ready, and linking to the Ecobee plugin or hub-only generic nodes on Professional.
 
 **[DEBUGGING.md](DEBUGGING.md)** — when pairing or **Discover** does not work as expected.
 
