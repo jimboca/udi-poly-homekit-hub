@@ -58,6 +58,15 @@
   <editor id="I_ONOFF">
     <range uom="25" min="0" max="1" prec="0" nls="EN_ONOFF"/>
   </editor>
+  <editor id="BOOL">
+    <range uom="2" subset="0,1" nls="EN_BOOL" />
+  </editor>
+  <editor id="I_BATTERY_PCT">
+    <range uom="51" min="0" max="100" step="1" prec="0" />
+  </editor>
+  <editor id="I_TSTAT_OCC">
+    <range uom="25" subset="0-2" nls="EN_OCC" />
+  </editor>
   <editor id="I_DIMMER">
     <range uom="56" min="0" max="100" step="1" prec="0" />
   </editor>

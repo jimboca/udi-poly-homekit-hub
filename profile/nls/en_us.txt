@@ -62,6 +62,8 @@ ND-HKHubSwitch-NAME = HomeKit Switch
 ND-HKHubSwitch-ICON = Relay
 ND-HKHubBinarySensor-NAME = HomeKit Sensor
 ND-HKHubBinarySensor-ICON = Sensor
+ND-HKHubSensor-NAME = HomeKit Sensor
+ND-HKHubSensor-ICON = Sensor
 CMD-hkpair-EXPORT_INVENTORY-NAME = Export device inventory
 CMD-hkctl-GENERIC_NODES-NAME = Generic nodes (info)
 
@@ -115,9 +117,11 @@ CMD-hkswitch-DOF-NAME = Off
 CMD-hkswitch-QUERY-NAME = Query
 
 ST-hksensor-ST-NAME = Temperature
-ST-hksensor-GV1-NAME = Motion
-ST-hksensor-GV2-NAME = Contact
+ST-hksensor-GV1-NAME = Occupancy
+ST-hksensor-GV2-NAME = Responding
 ST-hksensor-CLIHUM-NAME = Humidity
+ST-hksensor-BATLVL-NAME = Battery Level
+ST-hksensor-BATLOW-NAME = Battery Low
 CMD-hksensor-QUERY-NAME = Query
 
 # Generic IoX editor state labels (Professional)
@@ -137,6 +141,13 @@ EN_PM2-2 = Hold Indefinite
 
 EN_ONOFF-0 = Off
 EN_ONOFF-1 = On
+
+EN_BOOL-0 = False
+EN_BOOL-1 = True
+
+EN_OCC-0 = No
+EN_OCC-1 = Yes
+EN_OCC-2 = NA
 
 HKCLIMATE-0 = Away
 HKCLIMATE-1 = Home

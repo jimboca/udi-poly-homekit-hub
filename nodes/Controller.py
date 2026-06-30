@@ -4,6 +4,7 @@
 import asyncio
 import html
 import json
+import time
 from pathlib import Path
 from threading import Thread, Timer
 from typing import Any, Dict, List, Optional, Set
@@ -37,11 +38,19 @@ from dev_settings import (
     resolve_edition,
 )
 from homekit_hub.paths import ensure_persistent_dir
+from homekit_hub.config_debug import export_config_debug
 import homekit_hub.hap_apply as hap_apply
-from node_funcs import generic_node_address, generic_node_title, legacy_generic_node_address
+from homekit_hub.char_map import (
+    accessory_display_name_from_snapshot_rows,
+    builtin_motion_sensor_mirror_characteristic,
+    is_builtin_room_sensor_signal,
+)
+from homekit_hub.device_classifier import classify_sensor_aids
+from node_funcs import generic_node_address, generic_node_title, legacy_generic_node_address, sensor_node_title
 from .BinarySensorNode import BinarySensorNode
 from .EcobeeThermostatNode import EcobeeThermostatNode
 from .LightNode import LightNode
+from .SensorNode import SensorNode
 from .SwitchNode import SwitchNode
 from .ThermostatNode import ThermostatNode
 
@@ -166,6 +175,7 @@ class Controller(Node):
         self.handler_typedparams_st = None
         self.handler_typed_data_st = None
         self.handler_config_done_st = None
+        self.n_queue: list[str] = []
         self._config_snap: dict[str, Any] | None = None
         self._known_paired_ids: Set[str] = set()
         self._pair_success_notice_polls_remaining = 0
@@ -183,6 +193,11 @@ class Controller(Node):
         # %% professional-only begin
         self.edition = 'Standard'
         self._generic_nodes: dict[str, Any] = {}
+        self._sensor_by_key: dict[tuple[str, int], Any] = {}
+        self._motion_sensor_by_device: dict[str, Any] = {}
+        self._thermostat_control_aid: dict[str, int] = {}
+        self._existing_sensor_addnode_retried: set[str] = set()
+        self._config_debug_export_token = 0
         # %% professional-only end
 
         self.init_typed_params()
@@ -196,8 +211,21 @@ class Controller(Node):
         poly.subscribe(poly.CUSTOMTYPEDDATA, self.handler_typed_data)
         poly.subscribe(poly.CONFIGDONE, self.handler_config_done)
         poly.subscribe(poly.LOGLEVEL, self.handler_log_level)
+        poly.subscribe(poly.ADDNODEDONE, self.handler_add_node_done)
         poly.ready()
         poly.addNode(self, conn_status="ST")
+
+    def _schedule_config_debug_export(self, reason: str) -> None:
+        """Debounced redacted config dump to log + ``persistent/hub_config_debug.txt``."""
+        token = self._config_debug_export_token + 1
+        self._config_debug_export_token = token
+
+        def _fire() -> None:
+            if self._config_debug_export_token != token:
+                return
+            export_config_debug(self, reason=reason, log=LOGGER)
+
+        Timer(0.25, _fire).start()
 
     def init_typed_params(self) -> None:
         """Custom Typed: one isList section for HomeKit pairings (see CONFIG.md). Same idea as udi-poly-notification `init_typed()`."""
@@ -668,12 +696,13 @@ class Controller(Node):
         self._ensure_pairing_row_node_keys()
         self._ensure_pairing_row_generic_nodes_default()
 
-        # %% professional-only begin
-        self._update_edition()
         try:
             ensure_persistent_dir()
         except Exception:
             LOGGER.exception('ensure_persistent_dir on bootstrap')
+
+        # %% professional-only begin
+        self._update_edition()
         # %% professional-only end
 
         self.mainloop = asyncio.new_event_loop()
@@ -741,6 +770,7 @@ class Controller(Node):
         self.heartbeat()
         self.ready = True
         LOGGER.info("HomeKit Hub ready")
+        self._schedule_config_debug_export('bootstrap')
 
     def report_error(
         self,
@@ -814,6 +844,22 @@ class Controller(Node):
     def handler_log_level(self, level):
         LOGGER.info(f"log level {level}")
 
+    def handler_add_node_done(self, node: Any) -> None:
+        if isinstance(node, dict):
+            addr = node.get('address')
+        else:
+            addr = getattr(node, 'address', None)
+        if addr is not None:
+            self.node_queue({'address': addr})
+
+    def node_queue(self, data: Dict[str, Any]) -> None:
+        self.n_queue.append(data['address'])
+
+    def wait_for_node_done(self) -> None:
+        while len(self.n_queue) == 0:
+            time.sleep(0.1)
+        self.n_queue.pop()
+
     def _check_asyncio_loop_thread_health(self) -> None:
         """If the asyncio loop thread dies while the hub is ready, surface bridge failure on ISY.
 
@@ -856,6 +902,7 @@ class Controller(Node):
         # %% professional-only begin
         self._resync_all_generic_nodes()
         # %% professional-only end
+        self._schedule_config_debug_export('customdata')
 
     def _paired_slots_from_data(self) -> dict[int, str]:
         try:
@@ -1279,6 +1326,7 @@ class Controller(Node):
         if params is not None and len(params) > 0:
             self.TypedParams.load(params)
         self.handler_typedparams_st = True
+        self._schedule_config_debug_export('customtypedparams')
 
     def handler_typed_data(self, data):
         LOGGER.debug("customtypeddata: %s", data)
@@ -1295,6 +1343,7 @@ class Controller(Node):
         # %% professional-only begin
         self._resync_all_generic_nodes()
         # %% professional-only end
+        self._schedule_config_debug_export('customtypeddata')
 
     def _refresh_change_node_names_flag(self) -> None:
         try:
@@ -1339,6 +1388,7 @@ class Controller(Node):
         # %% professional-only begin
         self._resync_all_generic_nodes()
         # %% professional-only end
+        self._schedule_config_debug_export('customparams')
 
     def handler_start(self):
         self._async_loop_death_reported = False
@@ -1393,6 +1443,10 @@ class Controller(Node):
         # %% professional-only begin
         # Drop in-memory handles only; IoX keeps child nodes across plugin restarts.
         self._generic_nodes.clear()
+        self._sensor_by_key.clear()
+        self._motion_sensor_by_device.clear()
+        self._thermostat_control_aid.clear()
+        self._existing_sensor_addnode_retried.clear()
         # %% professional-only end
         try:
             self.setDriver("GV0", 0, report=True, force=True, uom=25)
@@ -2315,7 +2369,19 @@ class Controller(Node):
         rows = self.hub_snapshot_values(did)
         if not rows:
             return
-        applied = hap_apply.apply_snapshot_rows_to_generic_node(node, rows, log=LOGGER)
+        role = str(getattr(node, 'role', '') or '')
+        if role in ('sensor', 'motion_sensor') and hasattr(node, 'apply_driver_schema'):
+            node.apply_driver_schema(report=False)
+        if role in ('sensor', 'motion_sensor'):
+            applied = hap_apply.apply_snapshot_rows_to_sensor_node(
+                node,
+                rows,
+                aid=getattr(node, 'aid', None),
+                mirror_ambient=(role == 'motion_sensor'),
+                log=LOGGER,
+            )
+        else:
+            applied = hap_apply.apply_snapshot_rows_to_generic_node(node, rows, log=LOGGER)
         if applied and report:
             try:
                 node.reportDrivers()
@@ -2367,11 +2433,14 @@ class Controller(Node):
         classification: list,
         pairing: Any,
     ) -> None:
-        del alias, pairing
-        Timer(
-            0.0,
-            lambda: self._sync_generic_nodes(str(device_id).lower(), list(classification or [])),
-        ).start()
+        del alias, reason
+        did = str(device_id or '').strip().lower()
+
+        def _sync() -> None:
+            self._sync_generic_nodes(did, list(classification or []))
+            self._sync_sensor_nodes(did, pairing, list(classification or []))
+
+        Timer(0.0, _sync).start()
 
     def _generic_hap_event_callback(
         self,
@@ -2382,6 +2451,45 @@ class Controller(Node):
         label: str,
     ) -> None:
         did = str(device_id or '').strip().lower()
+        lbl = str(label or '')
+        ev_aid = int(aid)
+        ev_iid = int(iid)
+        ctrl = self._thermostat_control_aid.get(did)
+        if ctrl is not None and ev_aid == ctrl and builtin_motion_sensor_mirror_characteristic(lbl):
+            motion = self._motion_sensor_by_device.get(did)
+            if motion is None:
+                motion = self._ensure_builtin_motion_sensor(did, accessory_name_hint=None)
+            if motion is not None:
+                try:
+                    motion.on_hap_event(ev_aid, ev_iid, value, lbl)
+                except Exception:
+                    LOGGER.debug(
+                        'motion sensor HAP event failed for %s',
+                        getattr(motion, 'address', '?'),
+                        exc_info=True,
+                    )
+                if is_builtin_room_sensor_signal(lbl):
+                    return
+        sensor = self._sensor_by_key.get((did, ev_aid))
+        if sensor is None and ctrl is not None and ev_aid != ctrl:
+            sensor = self._ensure_sensor_node(
+                did,
+                ev_aid,
+                char_bindings={},
+                role='sensor',
+                accessory_name=None,
+                register_only=False,
+            )
+        if sensor is not None:
+            try:
+                sensor.on_hap_event(ev_aid, ev_iid, value, lbl)
+            except Exception:
+                LOGGER.debug(
+                    'sensor HAP event failed for %s',
+                    getattr(sensor, 'address', '?'),
+                    exc_info=True,
+                )
+            return
         for node in list(self._generic_nodes.values()):
             handler = getattr(node, 'on_hap_event', None)
             if not callable(handler):
@@ -2389,7 +2497,7 @@ class Controller(Node):
             if getattr(node, 'device_id', '').lower() != did:
                 continue
             try:
-                handler(int(aid), int(iid), value, str(label or ''))
+                handler(ev_aid, ev_iid, value, lbl)
             except Exception:
                 LOGGER.debug('generic node HAP event failed for %s', getattr(node, 'address', '?'), exc_info=True)
 
@@ -2405,26 +2513,40 @@ class Controller(Node):
                 self.mainloop,
             )
             try:
-                _alias, classification = fut.result(timeout=60)
+                _alias, classification, pairing = fut.result(timeout=60)
             except Exception:
                 LOGGER.exception('generic node resync classify failed for %s', did)
                 continue
             self._sync_generic_nodes(did, classification)
+            self._sync_sensor_nodes(did, pairing, classification)
 
-    async def _classify_device_async(self, device_id: str) -> tuple[str, list]:
+    async def _classify_device_async(self, device_id: str) -> tuple[str, list, Any]:
         from homekit_hub.device_classifier import classify_accessories
 
         pairing = self.bridge._pairing_for_device_id(device_id) if self.bridge else None
         if pairing is None:
-            return ('', [])
-        classification = classify_accessories(getattr(pairing, 'accessories', None))
-        return ('', classification)
+            return ('', [], None)
+        accessories = getattr(pairing, 'accessories', None)
+        classification = classify_accessories(accessories)
+        return ('', classification, pairing)
 
     def _delete_generic_node_by_address(self, addr: str) -> None:
         addr = str(addr or '').strip()
         if not addr:
             return
         node = self._generic_nodes.pop(addr, None)
+        if node is not None:
+            did = str(getattr(node, 'device_id', '') or '').strip().lower()
+            role = str(getattr(node, 'role', '') or '')
+            try:
+                aid = int(getattr(node, 'aid', 0) or 0)
+            except (TypeError, ValueError):
+                aid = 0
+            if role == 'motion_sensor':
+                if self._motion_sensor_by_device.get(did) is node:
+                    self._motion_sensor_by_device.pop(did, None)
+            elif did and aid > 0:
+                self._sensor_by_key.pop((did, aid), None)
         try:
             if hasattr(self.poly, 'delNode'):
                 self.poly.delNode(addr)
@@ -2468,11 +2590,574 @@ class Controller(Node):
             if node is None or getattr(node, 'device_id', '').lower() != did:
                 continue
             self._delete_generic_node_by_address(addr)
+        self._remove_sensor_nodes_for_device(did)
         self._reconcile_paired_node_title_for_device(did)
 
     def _remove_all_generic_nodes(self) -> None:
         for addr in list(self._generic_nodes.keys()):
             self._delete_generic_node_by_address(addr)
+
+    _THERMOSTAT_NODE_DEF_IDS = frozenset({'HKHubThermostat', 'HKHubEcobeeThermostat'})
+
+    def _thermostat_must_self_parent(self, node: Any, addr: str) -> bool:
+        node_def = str(getattr(node, 'id', '') or '')
+        if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
+            return False
+        return str(getattr(node, 'primary', '') or '') != str(addr or '')
+
+    def _pg3_node_meta(self, addr: str) -> Optional[dict]:
+        addr = str(addr or '').strip()
+        if not addr or not hasattr(self.poly, 'getNodesFromDb'):
+            return None
+        try:
+            rows = self.poly.getNodesFromDb([addr])
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                return rows[0]
+        except Exception:
+            LOGGER.debug('PG3 node meta lookup failed for %s', addr, exc_info=True)
+        return None
+
+    def _pg3_primary_mismatch(self, node: Any) -> bool:
+        addr = str(getattr(node, 'address', '') or '').strip()
+        if not addr:
+            return False
+        meta = self._pg3_node_meta(addr)
+        if meta is None:
+            return False
+        expected = str(getattr(node, 'primary', '') or '').strip()
+        if str(meta.get('primaryNode') or '').strip() != expected:
+            return True
+        node_def = str(getattr(node, 'id', '') or meta.get('nodeDefId') or '')
+        if node_def in self._THERMOSTAT_NODE_DEF_IDS:
+            if meta.get('isPrimary') in (0, '0', False):
+                return True
+        return False
+
+    def _purge_stale_pg3_node(self, addr: str, *, reason: str) -> None:
+        addr = str(addr or '').strip()
+        if not addr:
+            return
+        meta = self._pg3_node_meta(addr)
+        if meta is None:
+            return
+        LOGGER.info(
+            'Removing stale PG3/IoX node %s (%s; was parent=%s isPrimary=%s)',
+            addr,
+            reason,
+            meta.get('primaryNode'),
+            meta.get('isPrimary'),
+        )
+        self._generic_nodes.pop(addr, None)
+        try:
+            if hasattr(self.poly, 'delNode'):
+                self.poly.delNode(addr)
+        except Exception:
+            LOGGER.exception('Failed to purge stale PG3 node %s', addr)
+
+    def add_node(self, node: Any, *, wait: bool = True) -> Any:
+        """Publish addnode to PG3/IoX, optionally waiting for the ack (udi-poly-ecobee pattern)."""
+        addr = str(getattr(node, 'address', '') or '').strip()
+        if addr and self._pg3_primary_mismatch(node):
+            self._purge_stale_pg3_node(addr, reason='primary migration')
+        anode = self.poly.addNode(node)
+        LOGGER.debug('addNode -> %s (%s)', addr, getattr(node, 'id', '?'))
+        if wait:
+            self.wait_for_node_done()
+        if anode is None:
+            LOGGER.error('Failed to add node %s', addr or '?')
+        return anode
+
+    def _thermostat_generic_address(self, device_id: str) -> Optional[str]:
+        did = str(device_id or '').strip().lower()
+        for node in self._generic_nodes.values():
+            if getattr(node, 'device_id', '').lower() != did:
+                continue
+            node_def = str(getattr(node, 'id', '') or '')
+            if node_def in ('HKHubThermostat', 'HKHubEcobeeThermostat'):
+                return str(getattr(node, 'address', '') or '') or None
+        return None
+
+    def _sensor_parent_address(self, device_id: str) -> str:
+        parent = self._thermostat_generic_address(device_id)
+        if parent:
+            return parent
+        nk = self._node_key_for_device_id(device_id)
+        if nk:
+            return f'hkp_{nk}'
+        return self.address
+
+    def _resolve_control_aid(self, device_id: str, pairing: Any) -> Optional[int]:
+        did = str(device_id or '').strip().lower()
+        rows = self.hub_snapshot_values(did)
+        accessories = getattr(pairing, 'accessories', None) if pairing is not None else None
+        from homekit_hub.device_classifier import resolve_control_aid
+
+        ctrl = resolve_control_aid(accessories, snapshot_values=rows or None)
+        if ctrl is not None:
+            self._thermostat_control_aid[did] = int(ctrl)
+        return ctrl
+
+    def _accessory_name_from_pairing(self, pairing: Any, aid: int) -> Optional[str]:
+        from homekit_hub.device_classifier import _accessory_information_name
+
+        for acc in getattr(pairing, 'accessories', None) or []:
+            try:
+                acc_aid = int(getattr(acc, 'aid', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if acc_aid == int(aid):
+                return _accessory_information_name(acc)
+        return None
+
+    def _prefetch_sensor_nodes_from_accessories(
+        self,
+        device_id: str,
+        pairing: Any,
+        control_aid: Optional[int],
+    ) -> None:
+        if pairing is None or control_aid is None:
+            return
+        did = str(device_id or '').strip().lower()
+        for acc in getattr(pairing, 'accessories', None) or []:
+            try:
+                aid = int(getattr(acc, 'aid', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if aid <= 0 or aid == int(control_aid):
+                continue
+            from homekit_hub.device_classifier import _accessory_information_name
+
+            nm = _accessory_information_name(acc)
+            if not nm:
+                continue
+            self._ensure_sensor_node(
+                did,
+                aid,
+                char_bindings={},
+                role='sensor',
+                accessory_name=nm,
+                register_only=False,
+            )
+
+    def _reuse_existing_sensor_node(
+        self,
+        node: Any,
+        *,
+        device_id: str,
+        aid: int,
+        role: str,
+        char_bindings: dict,
+        register_only: bool,
+        addr: str,
+    ) -> Any:
+        """Re-bind a cached/PG3 sensor node and push corrected driver uoms to IoX."""
+        did = str(device_id or '').strip().lower()
+        key = (did, int(aid))
+        if hasattr(node, 'char_bindings'):
+            node.char_bindings = dict(char_bindings or {})
+        if hasattr(node, 'role'):
+            node.role = str(role or 'sensor')
+        if hasattr(node, 'apply_driver_schema'):
+            node.apply_driver_schema(report=True)
+        if str(role or '') == 'motion_sensor':
+            self._motion_sensor_by_device[did] = node
+        else:
+            self._sensor_by_key[key] = node
+        self._generic_nodes[addr] = node
+        if register_only:
+            return node
+        self._retry_existing_sensor_addnode(node, addr)
+        self._schedule_refresh_generic_node(node)
+        return node
+
+    def _ensure_sensor_node(
+        self,
+        device_id: str,
+        aid: int,
+        *,
+        char_bindings: dict,
+        role: str,
+        accessory_name: Optional[str],
+        register_only: bool,
+    ) -> Optional[Any]:
+        did = str(device_id or '').strip().lower()
+        key = (did, int(aid))
+        if role == 'motion_sensor':
+            existing = self._motion_sensor_by_device.get(did)
+            if existing is not None:
+                row = {
+                    'aid': int(aid),
+                    'role': 'motion_sensor',
+                    'node_def_id': 'HKHubSensor',
+                    'char_bindings': dict(char_bindings or {}),
+                }
+                return self._reuse_existing_sensor_node(
+                    existing,
+                    device_id=did,
+                    aid=int(aid),
+                    role=role,
+                    char_bindings=char_bindings or {},
+                    register_only=register_only,
+                    addr=self._generic_node_address(did, row),
+                )
+        elif key in self._sensor_by_key:
+            return self._sensor_by_key[key]
+        row = {
+            'aid': int(aid),
+            'role': str(role or 'sensor'),
+            'node_def_id': 'HKHubSensor',
+            'char_bindings': dict(char_bindings or {}),
+        }
+        addr = self._generic_node_address(did, row)
+        node = self.poly.getNode(addr)
+        if node is not None and not isinstance(node, (SensorNode, BinarySensorNode)):
+            LOGGER.warning(
+                'Sensor address %s is already used by a non-sensor node; skipping aid=%s',
+                addr,
+                aid,
+            )
+            return None
+        if node is not None:
+            return self._reuse_existing_sensor_node(
+                node,
+                device_id=did,
+                aid=int(aid),
+                role=role,
+                char_bindings=char_bindings or {},
+                register_only=register_only,
+                addr=addr,
+            )
+        if register_only:
+            return None
+        display = self._pairing_display_name(did)
+        title = sensor_node_title(display, accessory_name, str(role or 'sensor'))
+        primary = self._sensor_parent_address(did)
+        node = SensorNode(
+            self,
+            primary,
+            addr,
+            title,
+            device_id=did,
+            aid=int(aid),
+            char_bindings=dict(char_bindings or {}),
+            role=str(role or 'sensor'),
+        )
+        if self._pg3_node_meta(addr) is not None:
+            LOGGER.info(
+                'Re-hydrating sensor IoX node %s (%s) for %s aid=%s',
+                addr,
+                role,
+                did,
+                aid,
+            )
+            return self._reuse_existing_sensor_node(
+                node,
+                device_id=did,
+                aid=int(aid),
+                role=role,
+                char_bindings=char_bindings or {},
+                register_only=register_only,
+                addr=addr,
+            )
+        self.add_node(node)
+        LOGGER.info('Created sensor IoX node %s (%s) for %s aid=%s', addr, role, did, aid)
+        if hasattr(node, 'apply_driver_schema'):
+            node.apply_driver_schema(report=True)
+        self._generic_nodes[addr] = node
+        if role == 'motion_sensor':
+            self._motion_sensor_by_device[did] = node
+        else:
+            self._sensor_by_key[key] = node
+        self._retry_existing_sensor_addnode(node, addr)
+        self._schedule_refresh_generic_node(node)
+        return node
+
+    def _sensor_driver_schema_stale(self, node: Any) -> bool:
+        """True when PG3 DB driver uoms/names differ from the current role schema."""
+        role = str(getattr(node, 'role', '') or 'sensor')
+        schema = SensorNode._drivers_for_role(role)
+        expected = {str(s['driver']): s for s in schema}
+        addr = str(getattr(node, 'address', '') or '')
+        if not addr:
+            return False
+        try:
+            db_rows = self.poly.db_getNodeDrivers(addr) or []
+        except Exception:
+            return False
+        db_by_key: dict[str, dict] = {}
+        for drv in db_rows:
+            if not isinstance(drv, dict) or not drv.get('driver'):
+                continue
+            db_by_key[str(drv['driver'])] = drv
+        if not db_by_key:
+            return False
+        for key, spec in expected.items():
+            drv = db_by_key.get(key)
+            if drv is None:
+                return True
+            try:
+                if int(drv.get('uom')) != int(spec['uom']):
+                    return True
+            except (TypeError, ValueError):
+                return True
+            if str(drv.get('name') or '') != str(spec.get('name') or ''):
+                return True
+        for key in db_by_key:
+            if key == 'CLIHUM' and role == 'motion_sensor':
+                continue
+            if key not in expected:
+                return True
+        return False
+
+    def _recreate_stale_sensor_node(self, node: Any, addr: str) -> None:
+        """Delete and re-add a sensor so IoX/PG3 pick up corrected driver uoms."""
+        addr = str(addr or '').strip()
+        if not addr:
+            return
+        LOGGER.info('Recreating sensor IoX node %s to fix stale driver uoms/names', addr)
+        role = str(getattr(node, 'role', '') or 'sensor')
+        did = str(getattr(node, 'device_id', '') or '').strip().lower()
+        try:
+            aid = int(getattr(node, 'aid', 0) or 0)
+        except (TypeError, ValueError):
+            aid = 0
+        self._existing_sensor_addnode_retried.discard(addr)
+        if addr in self._generic_nodes:
+            self._delete_generic_node_by_address(addr)
+        else:
+            if role == 'motion_sensor' and self._motion_sensor_by_device.get(did) is node:
+                self._motion_sensor_by_device.pop(did, None)
+            elif did and aid > 0 and self._sensor_by_key.get((did, aid)) is node:
+                self._sensor_by_key.pop((did, aid), None)
+            self._purge_stale_pg3_node(addr, reason='driver schema migration')
+        try:
+            if hasattr(node, 'apply_driver_schema'):
+                node.apply_driver_schema(report=False)
+            self.add_node(node, wait=True)
+            self._existing_sensor_addnode_retried.add(addr)
+            self._generic_nodes[addr] = node
+            if role == 'motion_sensor':
+                self._motion_sensor_by_device[did] = node
+            elif did and aid > 0:
+                self._sensor_by_key[(did, aid)] = node
+            if hasattr(node, 'apply_driver_schema'):
+                node.apply_driver_schema(report=True)
+        except Exception:
+            LOGGER.exception('Failed to recreate stale sensor node %s', addr)
+
+    def _retry_existing_sensor_addnode(self, node: Any, addr: str) -> None:
+        """Ensure IoX/PG3 have current sensor driver uoms; recreate when stale."""
+        addr = str(addr or getattr(node, 'address', '') or '').strip()
+        if not addr:
+            return
+        if not self._sensor_driver_schema_stale(node):
+            self._existing_sensor_addnode_retried.add(addr)
+            return
+        meta = self._pg3_node_meta(addr)
+        if meta is not None or addr in self._existing_sensor_addnode_retried:
+            self._recreate_stale_sensor_node(node, addr)
+            return
+        self._existing_sensor_addnode_retried.add(addr)
+        try:
+            if hasattr(node, 'apply_driver_schema'):
+                node.apply_driver_schema(report=False)
+            self.add_node(node, wait=True)
+            LOGGER.warning(
+                'Sensor %s already existed in PG3; re-sent addnode to IoX (parent=%s)',
+                addr,
+                getattr(node, 'primary', '?'),
+            )
+        except Exception:
+            LOGGER.debug('Sensor %s addnode retry failed', addr, exc_info=True)
+            return
+        if self._sensor_driver_schema_stale(node):
+            self._recreate_stale_sensor_node(node, addr)
+
+    def _ensure_builtin_motion_sensor(
+        self,
+        device_id: str,
+        *,
+        accessory_name_hint: Optional[str],
+    ) -> Optional[Any]:
+        did = str(device_id or '').strip().lower()
+        existing = self._motion_sensor_by_device.get(did)
+        if existing is not None:
+            addr = str(getattr(existing, 'address', '') or '')
+            if hasattr(existing, 'apply_driver_schema'):
+                existing.apply_driver_schema(report=True)
+            self._retry_existing_sensor_addnode(existing, addr)
+            return existing
+        ctrl = self._thermostat_control_aid.get(did)
+        if ctrl is None:
+            return None
+        display = self._pairing_display_name(did)
+        return self._ensure_sensor_node(
+            did,
+            int(ctrl),
+            char_bindings={},
+            role='motion_sensor',
+            accessory_name=accessory_name_hint or display,
+            register_only=False,
+        )
+
+    def _sync_sensor_nodes_from_snapshot(self, device_id: str, control_aid: Optional[int]) -> None:
+        did = str(device_id or '').strip().lower()
+        rows = self.hub_snapshot_values(did)
+        if not rows:
+            return
+        from homekit_hub.char_map import thermostat_control_aid_from_snapshot_values
+
+        ctrl = thermostat_control_aid_from_snapshot_values(rows)
+        if ctrl is not None:
+            self._thermostat_control_aid[did] = int(ctrl)
+            control_aid = int(ctrl)
+        elif control_aid is not None:
+            self._thermostat_control_aid[did] = int(control_aid)
+        by_aid = hap_apply.group_snapshot_rows_by_aid(rows)
+        for aid, aid_rows in by_aid.items():
+            if control_aid is not None and int(aid) == int(control_aid):
+                motion_rows = [
+                    r
+                    for r in aid_rows
+                    if r.get('value') is not None
+                    and is_builtin_room_sensor_signal(str(r.get('characteristic') or ''))
+                ]
+                if motion_rows:
+                    hint = accessory_display_name_from_snapshot_rows(aid_rows)
+                    motion = self._ensure_builtin_motion_sensor(did, accessory_name_hint=hint)
+                    if motion is not None:
+                        hap_apply.apply_snapshot_rows_to_sensor_node(
+                            motion,
+                            aid_rows,
+                            aid=int(aid),
+                            mirror_ambient=True,
+                            log=LOGGER,
+                        )
+                        nm = sensor_node_title(
+                            self._pairing_display_name(did),
+                            hint,
+                            'motion_sensor',
+                        )
+                        if nm != getattr(motion, 'name', None):
+                            try:
+                                motion.rename(nm)
+                                motion.name = nm
+                            except Exception:
+                                LOGGER.debug('motion sensor rename failed for %s', did, exc_info=True)
+                continue
+            acc_name = accessory_display_name_from_snapshot_rows(aid_rows)
+            sensor = self._ensure_sensor_node(
+                did,
+                int(aid),
+                char_bindings={},
+                role='sensor',
+                accessory_name=acc_name,
+                register_only=False,
+            )
+            if sensor is None:
+                continue
+            if acc_name:
+                nm = sensor_node_title(self._pairing_display_name(did), acc_name, 'sensor')
+                if nm != getattr(sensor, 'name', None):
+                    try:
+                        sensor.rename(nm)
+                        sensor.name = nm
+                    except Exception:
+                        LOGGER.debug(
+                            'sensor rename failed for %s aid=%s',
+                            did,
+                            aid,
+                            exc_info=True,
+                        )
+            hap_apply.apply_snapshot_rows_to_sensor_node(
+                sensor,
+                aid_rows,
+                aid=int(aid),
+                log=LOGGER,
+            )
+
+    def _sync_sensor_nodes(self, device_id: str, pairing: Any, classification: list) -> None:
+        if not self.is_professional():
+            return
+        did = str(device_id or '').strip().lower()
+        if not did:
+            return
+        if not self._device_generic_nodes_enabled(did):
+            self._remove_sensor_nodes_for_device(did)
+            for legacy_role in ('sensor', 'motion_sensor', 'binary_sensor'):
+                for aid in range(1, 32):
+                    legacy_addr = generic_node_address(did, aid, legacy_role)
+                    if legacy_addr in self._generic_nodes:
+                        self._delete_generic_node_by_address(legacy_addr)
+            return
+        ctrl = self._resolve_control_aid(did, pairing)
+        accessories = getattr(pairing, 'accessories', None) if pairing is not None else None
+        sensor_rows = classify_sensor_aids(
+            accessories,
+            control_aid=ctrl,
+            snapshot_values=self.hub_snapshot_values(did) or None,
+        )
+        self._prefetch_sensor_nodes_from_accessories(did, pairing, ctrl)
+        desired_addrs = {self._generic_node_address(did, row) for row in sensor_rows}
+        for addr in list(self._generic_nodes.keys()):
+            node = self._generic_nodes.get(addr)
+            if node is None or getattr(node, 'device_id', '').lower() != did:
+                continue
+            role = str(getattr(node, 'role', '') or '')
+            if role in ('sensor', 'motion_sensor') and addr not in desired_addrs:
+                self._delete_generic_node_by_address(addr)
+        for row in sensor_rows:
+            if not isinstance(row, dict):
+                continue
+            role = str(row.get('role') or 'sensor')
+            aid = int(row.get('aid') or 0)
+            bindings = row.get('char_bindings') if isinstance(row.get('char_bindings'), dict) else {}
+            acc_name = row.get('accessory_name')
+            if isinstance(acc_name, str):
+                acc_name = acc_name.strip() or None
+            else:
+                acc_name = self._accessory_name_from_pairing(pairing, aid)
+            node = self._ensure_sensor_node(
+                did,
+                aid,
+                char_bindings=bindings,
+                role=role,
+                accessory_name=acc_name,
+                register_only=False,
+            )
+            if node is not None and acc_name:
+                nm = sensor_node_title(self._pairing_display_name(did), acc_name, role)
+                if nm != getattr(node, 'name', None):
+                    try:
+                        node.rename(nm)
+                        node.name = nm
+                    except Exception:
+                        LOGGER.debug('sensor title reconcile failed for %s aid=%s', did, aid, exc_info=True)
+        self._sync_sensor_nodes_from_snapshot(did, ctrl)
+        if ctrl is not None:
+            self._ensure_builtin_motion_sensor(
+                did,
+                accessory_name_hint=self._pairing_display_name(did),
+            )
+        for legacy_role in ('binary_sensor',):
+            for row in classification or []:
+                if not isinstance(row, dict):
+                    continue
+                legacy_addr = generic_node_address(
+                    did,
+                    int(row.get('aid') or 0),
+                    legacy_role,
+                )
+                if legacy_addr in self._generic_nodes:
+                    self._delete_generic_node_by_address(legacy_addr)
+
+    def _remove_sensor_nodes_for_device(self, device_id: str) -> None:
+        did = str(device_id or '').strip().lower()
+        for key in list(self._sensor_by_key.keys()):
+            if key[0] == did:
+                self._sensor_by_key.pop(key, None)
+        self._motion_sensor_by_device.pop(did, None)
+        self._thermostat_control_aid.pop(did, None)
 
     def _sync_generic_nodes(self, device_id: str, classification: list) -> None:
         if not self.is_professional():
@@ -2489,6 +3174,16 @@ class Controller(Node):
         self._remove_legacy_generic_nodes_for_device(did, classification)
         display = self._pairing_display_name(did)
         role_rows = [row for row in classification if isinstance(row, dict)]
+        if not role_rows:
+            from homekit_hub.device_classifier import classification_diagnostic_summary
+
+            pairing = self.bridge._pairing_for_device_id(did) if self.bridge else None
+            accessories = getattr(pairing, 'accessories', None) if pairing else None
+            LOGGER.warning(
+                'Generic IoX nodes enabled for %s but HAP classification is empty (%s)',
+                did,
+                classification_diagnostic_summary(accessories),
+            )
         sibling_count = len(role_rows)
         desired_addrs = {self._generic_node_address(did, row) for row in role_rows}
         for addr in list(self._generic_nodes.keys()):
@@ -2512,11 +3207,29 @@ class Controller(Node):
             )
             existing = self._generic_nodes.get(addr)
             if existing is not None:
-                existing.char_bindings = dict(bindings)
-                self._schedule_refresh_generic_node(existing)
-                continue
+                if self._thermostat_must_self_parent(existing, addr):
+                    LOGGER.info(
+                        'Thermostat %s parent is %s; recreating as self-parented for sensor children',
+                        addr,
+                        getattr(existing, 'primary', '?'),
+                    )
+                    self._delete_generic_node_by_address(addr)
+                else:
+                    existing.char_bindings = dict(bindings)
+                    if self._pg3_primary_mismatch(existing):
+                        self.add_node(existing)
+                    self._schedule_refresh_generic_node(existing)
+                    continue
             try:
                 node = self.poly.getNode(addr)
+                if node is not None and self._thermostat_must_self_parent(node, addr):
+                    LOGGER.info(
+                        'Thermostat %s parent is %s; recreating as self-parented for sensor children',
+                        addr,
+                        getattr(node, 'primary', '?'),
+                    )
+                    self._delete_generic_node_by_address(addr)
+                    node = None
                 if node is None:
                     if node_def == 'HKHubEcobeeThermostat':
                         node = EcobeeThermostatNode(
@@ -2534,15 +3247,24 @@ class Controller(Node):
                         node = SwitchNode(
                             self, addr, title, device_id=did, aid=aid, char_bindings=bindings
                         )
-                    elif node_def == 'HKHubBinarySensor':
-                        node = BinarySensorNode(
-                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                    elif node_def in ('HKHubBinarySensor', 'HKHubSensor'):
+                        node = SensorNode(
+                            self,
+                            self.address,
+                            addr,
+                            title,
+                            device_id=did,
+                            aid=aid,
+                            char_bindings=bindings,
+                            role=str(row.get('role') or 'sensor'),
                         )
                     else:
                         continue
-                    self.poly.addNode(node)
+                    self.add_node(node)
                     LOGGER.info('Created generic IoX node %s (%s) for %s', addr, node_def, did)
                 else:
+                    if self._pg3_primary_mismatch(node):
+                        self.add_node(node)
                     if hasattr(node, 'char_bindings'):
                         node.char_bindings = dict(bindings)
                 self._generic_nodes[addr] = node

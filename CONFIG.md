@@ -24,7 +24,7 @@ Applies to **Standard** and **Professional**. **No iPhone, iPad, Mac, or Apple H
 
 1. Add **HomeKit Hub** from the PG3 store and start the Node Server.
 2. Put the accessory in **HomeKit pairing mode** (see vendor docs). Confirm it is **unpaired** from Apple Home and other controllers.
-3. On the **HomeKit Hub** controller node, run **DISCOVER**.
+3. On the **HomeKit Hub** controller node, run **DISCOVER**.  PG3 will show Notices about what is happening and what it found.
 4. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Reload the Configuration page in your browser** if the new row does not appear yet (the table refresh button alone may not be enough).
 5. Find the row for your device (id and name are filled in by **DISCOVER**). In **HomeKit pairing code** (`hap_pin`), enter the **8-digit code currently shown on the accessory** while it is in pairing mode (`12345678` or `123-45-678` — either format works). **Save**.
 6. Wait for pairing to finish. A **Paired HomeKit device** child node should appear; **ST** should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
@@ -89,7 +89,9 @@ When generic control is enabled (below), the hub can create these child node typ
 | Ecobee thermostat | **HKHubEcobeeThermostat** (comfort / `GV3`, schedule mode, setpoints) |
 | Light | **HKHubLight** |
 | Switch / outlet | **HKHubSwitch** |
-| Contact, motion, occupancy, … | **HKHubBinarySensor** |
+| Contact, motion, occupancy (standalone accessory) | **HKHubSensor** (per HAP `aid`) |
+| Ecobee room sensors (separate `aid`s) | **HKHubSensor** child per sensor |
+| Built-in motion on thermostat `aid` | **HKHubSensor** · motion child |
 
 For now, only **generic** light and switch node types are supported (**HKHubLight**, **HKHubSwitch**). Capability-specific variants (dimmer vs color, etc.) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)**.
 

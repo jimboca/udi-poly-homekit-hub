@@ -9,6 +9,7 @@ from node_funcs import (
     id_to_address,
     legacy_generic_node_address,
     paired_slot_node_title,
+    sensor_node_title,
     uuid_to_address,
 )
 
@@ -57,3 +58,18 @@ def test_generic_node_title_multi_role_adds_role_suffix():
         generic_node_title('JimBo Dev', 'thermostat', sibling_count=2)
         == 'JimBo Dev Thermostat'
     )
+
+
+def test_sensor_node_address_stable_per_aid():
+    a = generic_node_address('44:be:73:09:47:20', 3, 'sensor')
+    b = generic_node_address('44:be:73:09:47:20', 3, 'sensor')
+    c = generic_node_address('44:be:73:09:47:20', 4, 'sensor')
+    d = generic_node_address('44:be:73:09:47:20', 2, 'motion_sensor')
+    assert a == b
+    assert a != c
+    assert a != d
+
+
+def test_sensor_node_title_room_and_motion():
+    assert sensor_node_title('Ecobee', 'Master Bedroom', 'sensor') == 'Master Bedroom'
+    assert sensor_node_title('Ecobee', 'Downstairs', 'motion_sensor') == 'Downstairs · motion'

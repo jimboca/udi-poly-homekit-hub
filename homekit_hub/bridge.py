@@ -61,7 +61,7 @@ from .mqtt_topics import (
     sanitize_client_slug,
 )
 # %% professional-only begin
-from homekit_hub.device_classifier import classify_accessories
+from homekit_hub.device_classifier import classify_accessories, classification_diagnostic_summary
 from homekit_hub.paths import ensure_persistent_dir
 # %% professional-only end
 
@@ -2930,6 +2930,13 @@ class HomeKitHubBridge:
                 len(roles),
                 reason,
             )
+            if n_acc > 0 and not roles:
+                self.log.warning(
+                    'HAP classification empty for %s (%d accessories): %s',
+                    device_id,
+                    n_acc,
+                    classification_diagnostic_summary(accessories),
+                )
             notice = self._inventory_notice
             if notice is not None:
                 try:

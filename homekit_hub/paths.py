@@ -15,3 +15,8 @@ def ensure_persistent_dir() -> Path:
 def inventory_json_path(device_id: str) -> Path:
     safe = str(device_id or '').strip().replace(':', '_')
     return ensure_persistent_dir() / f'{safe}.json'
+
+
+def config_debug_path() -> Path:
+    """Latest human-readable hub configuration snapshot for support."""
+    return ensure_persistent_dir() / 'hub_config_debug.txt'

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 
 from homekit_hub.bridge import DATA_KEY_LAST_HAP_DISCOVER, TYPED_PAIRING_SLOTS_KEY
+from node_funcs import generic_node_address
 from nodes.Controller import ERR_ASYNC_LOOP_DEAD, Controller, _DEFAULT_BRIDGE_PARAMS
 
 
@@ -60,6 +61,12 @@ def _bare_controller():
     c.handler_data_st = None
     c.handler_typedparams_st = None
     c.handler_typed_data_st = None
+    c._generic_nodes = {}
+    c._sensor_by_key = {}
+    c._motion_sensor_by_device = {}
+    c._thermostat_control_aid = {}
+    c._existing_sensor_addnode_retried = set()
+    c.n_queue = []
     return c
 
 
@@ -269,6 +276,9 @@ def test_append_pairing_rows_for_discover_load_failure():
 def test_handler_stop_clears_generic_nodes_without_deleting():
     c = _bare_controller()
     c._generic_nodes = {'ge3811269468c9': MagicMock(address='ge3811269468c9')}
+    c._sensor_by_key = {('aa:bb', 3): MagicMock()}
+    c._motion_sensor_by_device = {'aa:bb': MagicMock()}
+    c._thermostat_control_aid = {'aa:bb': 2}
     c._paired_nodes = {'c': MagicMock()}
     c.poly = MagicMock()
     c.bridge = None
@@ -276,5 +286,170 @@ def test_handler_stop_clears_generic_nodes_without_deleting():
     c._mqtt_transport_driver = 0
     c.handler_stop()
     assert c._generic_nodes == {}
+    assert c._sensor_by_key == {}
+    assert c._motion_sensor_by_device == {}
+    assert c._thermostat_control_aid == {}
     assert c._paired_nodes == {}
     c.poly.delNode.assert_not_called()
+
+
+def test_thermostat_must_self_parent_when_parented_to_controller():
+    c = _bare_controller()
+    node = MagicMock(id='HKHubEcobeeThermostat', primary='controller', address='ge3811269468c9')
+    assert c._thermostat_must_self_parent(node, 'ge3811269468c9') is True
+
+
+def test_thermostat_must_self_parent_ok_when_self_parented():
+    c = _bare_controller()
+    node = MagicMock(id='HKHubThermostat', primary='ge3811269468c9', address='ge3811269468c9')
+    assert c._thermostat_must_self_parent(node, 'ge3811269468c9') is False
+
+
+def test_pg3_primary_mismatch_when_controller_parent():
+    c = _bare_controller()
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubEcobeeThermostat',
+            'primaryNode': 'controller',
+            'isPrimary': 0,
+        }
+    ]
+    node = MagicMock(
+        id='HKHubEcobeeThermostat',
+        address='ge3811269468c9',
+        primary='ge3811269468c9',
+    )
+    assert c._pg3_primary_mismatch(node) is True
+
+
+def test_pg3_primary_mismatch_false_when_self_parented():
+    c = _bare_controller()
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubEcobeeThermostat',
+            'primaryNode': 'ge3811269468c9',
+            'isPrimary': 1,
+        }
+    ]
+    node = MagicMock(
+        id='HKHubEcobeeThermostat',
+        address='ge3811269468c9',
+        primary='ge3811269468c9',
+    )
+    assert c._pg3_primary_mismatch(node) is False
+
+
+def test_add_node_purges_when_pg3_primary_wrong():
+    c = _bare_controller()
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'primaryNode': 'controller',
+            'isPrimary': 0,
+        }
+    ]
+    c.poly.addNode.return_value = MagicMock()
+    c._purge_stale_pg3_node = MagicMock()
+    c.wait_for_node_done = MagicMock()
+    node = MagicMock(
+        id='HKHubEcobeeThermostat',
+        address='ge3811269468c9',
+        primary='ge3811269468c9',
+    )
+    c.add_node(node)
+    c._purge_stale_pg3_node.assert_called_once_with(
+        'ge3811269468c9',
+        reason='primary migration',
+    )
+    c.poly.addNode.assert_called_once_with(node)
+    c.wait_for_node_done.assert_called_once()
+
+
+def test_node_queue_unblocks_wait_for_node_done():
+    c = _bare_controller()
+    c.n_queue = []
+
+    def _release() -> None:
+        c.node_queue({'address': 'ge3811269468c9'})
+
+    from threading import Timer
+
+    Timer(0.05, _release).start()
+    c.wait_for_node_done()
+    assert c.n_queue == []
+
+
+def test_handler_add_node_done_enqueues_address():
+    c = _bare_controller()
+    c.node_queue = MagicMock()
+    c.handler_add_node_done({'address': 'g4470f9aa21fa7'})
+    c.node_queue.assert_called_once_with({'address': 'g4470f9aa21fa7'})
+
+
+def test_ensure_sensor_node_adds_when_missing():
+    c = _bare_controller()
+    c.edition = 'Professional'
+    c.is_professional = lambda: True
+    c._generic_nodes = {}
+    c._sensor_by_key = {}
+    c._motion_sensor_by_device = {}
+    c._thermostat_control_aid = {'44:be:73:09:47:20': 2}
+    c._pairing_display_name = lambda _did: 'Ecobee'
+    c._sensor_parent_address = lambda _did: 'hkp_c'
+    c._generic_node_address = lambda did, row: generic_node_address(
+        did, int(row['aid']), str(row['role'])
+    )
+    c._schedule_refresh_generic_node = MagicMock()
+    c.add_node = MagicMock(side_effect=lambda node, wait=True: node)
+    c.poly = MagicMock()
+    c.poly.getNode.return_value = None
+    c.poly.db_getNodeDrivers.return_value = []
+    c.poly.getNodesFromDb.return_value = []
+    c.address = 'controller'
+    node = c._ensure_sensor_node(
+        '44:be:73:09:47:20',
+        3,
+        char_bindings={},
+        role='sensor',
+        accessory_name='Master Bedroom',
+        register_only=False,
+    )
+    assert node is not None
+    c.add_node.assert_called_once()
+    key = ('44:be:73:09:47:20', 3)
+    assert key in c._sensor_by_key
+
+
+def test_retry_existing_sensor_recreates_when_pg3_uoms_stale():
+    c = _bare_controller()
+    c._existing_sensor_addnode_retried = set()
+    c._generic_nodes = {}
+    c._motion_sensor_by_device = {}
+    c._sensor_by_key = {}
+    c.poly = MagicMock()
+    addr = 'ga31a1dfbd9b71'
+    node = MagicMock(
+        address=addr,
+        role='motion_sensor',
+        device_id='44:be:73:09:47:20',
+        aid=1,
+        primary='ge3811269468c9',
+    )
+    node.apply_driver_schema = MagicMock()
+    c.poly.getNodesFromDb.return_value = [{'address': addr, 'nodeDefId': 'HKHubSensor'}]
+    c.poly.db_getNodeDrivers.return_value = [
+        {'driver': 'GV2', 'value': 0, 'uom': 25, 'name': 'Contact'},
+        {'driver': 'BATLOW', 'value': 0, 'uom': 25, 'name': 'Low battery'},
+        {'driver': 'ST', 'value': 82, 'uom': 17, 'name': 'Temperature'},
+        {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Motion/Occupancy'},
+        {'driver': 'BATLVL', 'value': 0, 'uom': 22, 'name': 'Battery'},
+        {'driver': 'CLIHUM', 'value': 30, 'uom': 22, 'name': 'Humidity'},
+    ]
+    c._recreate_stale_sensor_node = MagicMock()
+    c._retry_existing_sensor_addnode(node, addr)
+    c._recreate_stale_sensor_node.assert_called_once_with(node, addr)

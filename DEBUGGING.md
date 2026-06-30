@@ -79,6 +79,19 @@ Increase log detail in Polyglot if needed (Node Server log level).
 
 If the log does not make the problem obvious, use **Download Log Package** on the Node Server page and PM the file to the plugin author.
 
+### Configuration snapshot (support)
+
+On startup and whenever Custom Params / Custom Data / Custom Typed configuration changes, the hub writes a **redacted** configuration report:
+
+| Location | What to look for |
+|----------|------------------|
+| **`persistent/hub_config_debug.txt`** | Full latest snapshot (pairing codes and passwords are **not** stored in plain text) |
+| **`logs/debug.log`** | Same content, one line per row prefixed with **`CONFIG `** (grep for `CONFIG` or `configuration snapshot`) |
+
+The report includes runtime flags (handler readiness, edition, paired device ids), merged Custom Params, typed pairing rows (with friendly labels), and summarized custom data (pairing slot keys, last DISCOVER preview). Use it when escalating pairing or MQTT issues without pasting secrets into chat.
+
+**Download Log Package** includes `persistent/` when present.
+
 ---
 
 ## Discover does nothing or adds no rows

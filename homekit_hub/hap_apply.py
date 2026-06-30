@@ -7,7 +7,13 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from hub_node_funcs import climateMap, getMapName, hap_event_matches_node, toF
 
-from homekit_hub.char_map import CharBucket, classify, normalize_characteristic_label, normalize_hap_uuid
+from homekit_hub.char_map import (
+    CharBucket,
+    builtin_motion_sensor_mirror_characteristic,
+    classify,
+    normalize_characteristic_label,
+    normalize_hap_uuid,
+)
 
 if TYPE_CHECKING:
     from typing import Any as HomeKitThermostat
@@ -783,14 +789,14 @@ def apply_characteristic_to_switch(
     return True
 
 
-def apply_characteristic_to_binary_sensor(
+def apply_characteristic_to_sensor(
     node: Any,
     characteristic: str,
     value: Any,
     *,
     log: Optional[logging.Logger] = None,
 ) -> bool:
-    """Map HAP sensor characteristics to HKHubBinarySensor IoX drivers."""
+    """Map HAP sensor characteristics to HKHubSensor IoX drivers."""
     lg = log or _LOG
     bucket = classify(characteristic, 0)
     if bucket == CharBucket.UNKNOWN:
@@ -804,9 +810,14 @@ def apply_characteristic_to_binary_sensor(
     try:
         if 'CURRENT_TEMPERATURE' in norm or norm.endswith('TEMPERATURE_CURRENT'):
             _set_node_driver(node, 'ST', driver_st_from_hap_celsius(use_c, float(value)))
+            role = str(getattr(node, 'role', '') or '').strip().lower()
+            if role in ('sensor', 'motion_sensor'):
+                _set_node_driver(node, 'GV2', 1)
             return True
         if 'RELATIVE_HUMIDITY' in norm and 'TARGET' not in norm:
-            _set_node_driver(node, 'CLIHUM', int(round(float(value))))
+            role = str(getattr(node, 'role', '') or '').strip().lower()
+            if role != 'motion_sensor':
+                _set_node_driver(node, 'CLIHUM', int(round(float(value))))
             return True
         if is_hap_contact_state_characteristic(characteristic):
             _set_node_driver(node, 'GV2', hap_contact_state_to_iox(value))
@@ -814,21 +825,102 @@ def apply_characteristic_to_binary_sensor(
         if 'OCCUPANCY' in norm or 'MOTION_DETECTED' in norm:
             _set_node_driver(node, 'GV1', hap_on_to_iox(value))
             return True
+        if 'BATTERY_LEVEL' in norm:
+            _set_node_driver(node, 'BATLVL', int(round(float(value))))
+            return True
+        if 'STATUS_LO_BATT' in norm or 'STATUS_LOW_BATTERY' in norm:
+            _set_node_driver(node, 'BATLOW', hap_on_to_iox(value))
+            return True
     except Exception:
-        lg.debug('binary_sensor hap_apply failed for %s=%r', characteristic, value, exc_info=True)
+        lg.debug('sensor hap_apply failed for %s=%r', characteristic, value, exc_info=True)
         return True
     return True
 
 
-def apply_characteristic_to_sensor(
+def apply_characteristic_to_binary_sensor(
     node: Any,
     characteristic: str,
     value: Any,
     *,
     log: Optional[logging.Logger] = None,
 ) -> bool:
-    """Backward-compatible alias for :func:`apply_characteristic_to_binary_sensor`."""
-    return apply_characteristic_to_binary_sensor(node, characteristic, value, log=log)
+    """Backward-compatible alias for :func:`apply_characteristic_to_sensor`."""
+    return apply_characteristic_to_sensor(node, characteristic, value, log=log)
+
+
+def group_snapshot_rows_by_aid(rows: Sequence[Mapping[str, Any]]) -> Dict[int, list[dict[str, Any]]]:
+    """Group hub snapshot / get rows by HAP accessory ``aid``."""
+    out: Dict[int, list[dict[str, Any]]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            aid = int(row.get('aid'))
+        except (TypeError, ValueError):
+            continue
+        out.setdefault(aid, []).append(dict(row))
+    return out
+
+
+def apply_snapshot_rows_to_sensor_node(
+    node: Any,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    aid: Optional[int] = None,
+    mirror_ambient: bool = False,
+    log: Optional[logging.Logger] = None,
+) -> int:
+    """
+    Apply snapshot rows for one sensor IoX node.
+
+    When *mirror_ambient* is true (built-in motion child), also apply current temperature /
+    relative humidity from the thermostat control ``aid``.
+    """
+    lg = log or _LOG
+    if not rows:
+        return 0
+    try:
+        node_aid = int(aid if aid is not None else getattr(node, 'aid', 0))
+    except (TypeError, ValueError):
+        return 0
+    applicable: list[tuple[int, int, Any, str]] = []
+    for row in rows:
+        if not isinstance(row, dict) or 'value' not in row:
+            continue
+        try:
+            row_aid = int(row.get('aid'))
+            iid = int(row.get('iid'))
+        except (TypeError, ValueError):
+            continue
+        if row_aid != node_aid:
+            continue
+        label = str(row.get('characteristic') or '')
+        if mirror_ambient and not builtin_motion_sensor_mirror_characteristic(label):
+            continue
+        if not mirror_ambient and not hap_event_matches_node(row_aid, iid, node):
+            continue
+        applicable.append((row_aid, iid, row.get('value'), label))
+    applicable.sort(key=lambda item: (_snapshot_char_priority(item[3]), item[0], item[1]))
+    applied = 0
+    for _row_aid, _iid, value, label in applicable:
+        try:
+            handler = getattr(node, 'on_hap_event', None)
+            if callable(handler):
+                handler(_row_aid, _iid, value, label)
+                applied += 1
+                continue
+            apply_fn = getattr(node, 'apply_hub_characteristic', None)
+            if callable(apply_fn) and apply_fn(label, value):
+                applied += 1
+        except Exception:
+            lg.debug(
+                'sensor snapshot apply failed for %s %s=%r',
+                getattr(node, 'address', '?'),
+                label,
+                value,
+                exc_info=True,
+            )
+    return applied
 
 
 def _snapshot_char_priority(characteristic: str) -> int:
@@ -867,6 +959,10 @@ def _snapshot_char_priority(characteristic: str) -> int:
         return 47
     if 'MOTION_DETECTED' in norm or 'OCCUPANCY' in norm:
         return 48
+    if 'BATTERY_LEVEL' in norm:
+        return 62
+    if 'STATUS_LO_BATT' in norm or 'STATUS_LOW_BATTERY' in norm:
+        return 63
     return 50
 
 

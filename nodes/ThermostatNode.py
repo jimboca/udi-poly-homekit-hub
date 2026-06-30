@@ -38,7 +38,9 @@ class ThermostatNode(Node):
         self.use_celsius = bool(use_celsius)
         self._hap_cur_hc_four_value = False
         nm = get_valid_node_name(name) or 'HK Thermostat'
-        super().__init__(controller.poly, controller.address, address, nm)
+        # Self-parented primary node so room sensors can nest underneath (udi-poly-ecobee HK pattern).
+        super().__init__(controller.poly, address, address, nm)
+        self.isPrimary = True
         self.name = nm
         self.setDriver('ST', 0, report=False, force=True)
 

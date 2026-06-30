@@ -1,10 +1,11 @@
 """HomeKit Hub Node Server nodes."""
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 from .Controller import Controller as Controller  # noqa: E402,F401
 
 # %% professional-only begin
 from .BinarySensorNode import BinarySensorNode  # noqa: E402,F401
+from .SensorNode import SensorNode  # noqa: E402,F401
 from .EcobeeThermostatNode import EcobeeThermostatNode  # noqa: E402,F401
 from .LightNode import LightNode  # noqa: E402,F401
 from .SwitchNode import SwitchNode  # noqa: E402,F401

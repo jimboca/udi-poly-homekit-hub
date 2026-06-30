@@ -19,7 +19,19 @@ Runtime node creation uses the **live** HAP tree via `device_classifier` — the
 | `generic_nodes_enable` | Controller Custom Params | `false` |
 | **Create generic IoX control nodes (Professional)** (`generic_nodes`) | Custom Typed → HomeKit pairing slots | `false` |
 
-When both are true, the hub creates child nodes (`HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubSwitch`, `HKHubBinarySensor`) from HAP classification.
+When both are true, the hub creates child nodes (`HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubSwitch`, `HKHubSensor`) from HAP classification.
+
+### Sensor model (per-aid)
+
+Generic sensors use **one IoX child per HAP accessory `aid`**, not one node per HAP service. This matches Ecobee room sensors (separate aids with temperature/humidity) and avoids address collisions when multiple sensor services share the same aid.
+
+| Pattern | Classifier | IoX node |
+|---------|------------|----------|
+| Thermostat controls | `classify_accessories` → `thermostat` | `HKHubThermostat` / `HKHubEcobeeThermostat` |
+| Room sensor aids | `classify_sensor_aids` → `sensor` | `HKHubSensor` |
+| Motion on control aid | `classify_sensor_aids` → `motion_sensor` | `HKHubSensor` (`· motion` title) |
+
+`HKHubBinarySensor` remains as a backward-compatible nodedef id for existing sites; new sensor children use `HKHubSensor` with battery drivers (`BATLVL`, `BATLOW`).
 
 If **Create generic IoX control nodes (Professional)** is missing from **HomeKit pairing slots**, reload the **Configuration** page in your browser (full page reload, not only the table refresh button).
 

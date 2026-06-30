@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 from homekit_hub.hap_apply import (
     ECOBEE_HK_COMFORT_TEMP,
     apply_characteristic_to_binary_sensor,
     apply_characteristic_to_light,
+    apply_characteristic_to_sensor,
     apply_characteristic_to_switch,
     apply_characteristic_to_thermostat,
     apply_snapshot_rows_to_generic_node,
+    group_snapshot_rows_by_aid,
     clifs_to_hap_fan_target,
     gv3_command_needs_setpoints,
     gv3_to_comfort_ref,
@@ -372,6 +374,55 @@ def test_apply_binary_sensor_temperature_does_not_touch_gv2():
     node.set_driver_safe.assert_called_once()
     args = node.set_driver_safe.call_args[0]
     assert args[0] == 'ST'
+
+
+def test_apply_sensor_temperature_sets_responding_for_motion():
+    node = MagicMock()
+    node.use_celsius = False
+    node.role = 'motion_sensor'
+    assert apply_characteristic_to_sensor(node, 'CURRENT_TEMPERATURE', 21.5) is True
+    assert node.set_driver_safe.call_count == 2
+    node.set_driver_safe.assert_any_call('ST', ANY, report=True)
+    node.set_driver_safe.assert_any_call('GV2', 1, report=True)
+
+
+def test_apply_sensor_battery_maps_batlvl_and_batlow():
+    node = MagicMock()
+    node.use_celsius = False
+    assert apply_characteristic_to_sensor(node, 'BATTERY_LEVEL', 87.4) is True
+    node.set_driver_safe.assert_called_with('BATLVL', 87, report=True)
+    node.reset_mock()
+    assert apply_characteristic_to_sensor(node, 'STATUS_LO_BATT', True) is True
+    node.set_driver_safe.assert_called_with('BATLOW', 1, report=True)
+
+
+def test_group_snapshot_rows_by_aid():
+    rows = [
+        {'aid': 2, 'iid': 1, 'characteristic': 'x', 'value': 1},
+        {'aid': 3, 'iid': 1, 'characteristic': 'y', 'value': 2},
+        {'aid': 2, 'iid': 2, 'characteristic': 'z', 'value': 3},
+    ]
+    grouped = group_snapshot_rows_by_aid(rows)
+    assert set(grouped.keys()) == {2, 3}
+    assert len(grouped[2]) == 2
+
+
+def test_apply_snapshot_rows_to_sensor_node_motion_mirror():
+    from homekit_hub.hap_apply import apply_snapshot_rows_to_sensor_node
+
+    node = MagicMock()
+    node.aid = 2
+    node.char_bindings = {}
+    node.use_celsius = False
+    node.on_hap_event = MagicMock()
+    rows = [
+        {'aid': 2, 'iid': 1, 'characteristic': 'MOTION_DETECTED', 'value': True},
+        {'aid': 2, 'iid': 2, 'characteristic': 'CURRENT_TEMPERATURE', 'value': 21.0},
+        {'aid': 3, 'iid': 1, 'characteristic': 'CURRENT_TEMPERATURE', 'value': 19.0},
+    ]
+    applied = apply_snapshot_rows_to_sensor_node(node, rows, aid=2, mirror_ambient=True)
+    assert applied == 2
+    assert node.on_hap_event.call_count == 2
 
 
 def test_hap_event_matches_node_primary_aid():

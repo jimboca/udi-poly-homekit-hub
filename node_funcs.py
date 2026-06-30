@@ -51,6 +51,25 @@ def paired_slot_node_title(display_name: str, *, generic_nodes_enabled: bool) ->
     return base
 
 
+def sensor_node_title(
+    display_name: str,
+    accessory_name: Optional[str],
+    role: str,
+) -> str:
+    """IoX title for a per-aid sensor child (room sensor or built-in motion)."""
+    if str(role or '').strip().lower() == 'motion_sensor':
+        base = str(accessory_name or display_name or 'Thermostat').strip() or 'Thermostat'
+        if '· motion' in base:
+            title = base
+        else:
+            title = f'{base} · motion'
+    else:
+        title = str(accessory_name or display_name or 'HK Sensor').strip() or 'HK Sensor'
+    if len(title) > 80:
+        return title[:77] + '...'
+    return title
+
+
 def generic_node_title(display_name: str, role: str, *, sibling_count: int) -> str:
     """IoX title for a generic control child; single-role devices keep the clean display name."""
     base = str(display_name or '').strip() or 'HK Device'

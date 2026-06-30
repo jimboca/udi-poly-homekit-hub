@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-06-30
+
+Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Important — upgrade impact
+
+- **(Professional)** **Existing generic IoX nodes are deleted and re-added on first sync after upgrade** so thermostat and sensor children get the correct parent (`primary` address) and fresh driver metadata. Node **addresses are preserved** where possible, but you may need to re-open IoX Admin Console and re-place nodes in folders. This is required to fix incorrect parent links from earlier 2.0.x builds and stale driver UOMs (e.g. motion **Responding** / **Battery Low** showing raw `0` instead of False/True).
+
+### Added
+
+- **(Professional)** **`HKHubSensor` nodedef** and **`SensorNode`:** room sensors, contact sensors, and Ecobee-style motion children with temperature, humidity (non-motion), occupancy, battery level/low, and **Responding** drivers aligned with **udi-poly-ecobee** patterns.
+- **(Professional)** **Sensor sync:** HAP classifier expands per-accessory sensor AIDs; controller `_sync_sensor_nodes` creates motion children under thermostats, mirrors builtin motion from ambient service, and routes HAP events to sensor nodes.
+- **(Professional)** **`node_queue` / `wait_for_node_done`:** serializes `addNode` so parent thermostats exist before sensor children register (Ecobee hub pattern).
+- **(Professional)** **Redacted config debug export** (`homekit_hub/config_debug.py`) to log and `persistent/hub_config_debug.txt` on bootstrap and config changes.
+- **(Professional)** **Tests:** sensor classifier, `hap_apply` sensor paths, controller stale-schema recreate, config debug.
+
+### Changed
+
+- **(Standard + Professional)** **Version 2.0.2** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt` aligned for IoX profile/NLS refresh.
+- **(Professional)** **Thermostat IoX parent:** generic thermostat nodes use the hub controller address as `primary` (self-parent) instead of the paired device slot node.
+- **(Professional)** **`PLUGIN_AUTHORING.md`**, **`CONFIG.md`**, **`DEBUGGING.md`:** sensor node behavior, motion mirroring, and upgrade notes.
+
+### Fixed
+
+- **(Professional)** **Motion sensor IoX display:** **GV2** (Responding) and **BATLOW** use BOOL UOM (2) with **Occupancy** editor on **GV1**; profile editors and NLS updated. Stale nodes from 2.0.0–2.0.1 are recreated when PG3 driver UOMs/names no longer match the schema.
+- **(Professional)** **Motion snapshot:** skip **CLIHUM** writes on motion-role nodes (humidity mirrored from ambient service only where applicable).
+- **(Professional)** **Ecobee thermostat + sensor tree:** sensor children parent under the thermostat IoX node; builtin motion sensor ensured after each sensor sync pass.
+
 ## [2.0.1] - 2026-06-30
 
 Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
