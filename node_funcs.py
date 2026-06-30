@@ -53,7 +53,7 @@ def paired_slot_node_title(display_name: str, *, generic_nodes_enabled: bool) ->
 
 def sensor_node_title(
     display_name: str,
-    accessory_name: Optional[str],
+    accessory_name: str | None,
     role: str,
 ) -> str:
     """IoX title for a per-aid sensor child (room sensor or built-in motion)."""
