@@ -3,6 +3,7 @@ __pycache__/
 .ruff_cache/
 *.py[cod]
 logs/
+debug.log
 polyglot.py
 build.txt
 .env
