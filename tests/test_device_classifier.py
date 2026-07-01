@@ -140,7 +140,7 @@ def test_classify_accessories_from_inventory_label_fixture():
     import json
     from pathlib import Path
 
-    inv_path = Path(__file__).resolve().parent.parent / 'persistent' / '44_be_73_09_47_20.json'
+    inv_path = Path(__file__).resolve().parent / 'fixtures' / '44_be_73_09_47_20.json'
     inv = json.loads(inv_path.read_text(encoding='utf-8'))
 
     class _InvChar:

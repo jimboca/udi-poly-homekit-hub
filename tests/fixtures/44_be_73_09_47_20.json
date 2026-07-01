@@ -1,0 +1,1125 @@
+{
+  "accessories": [
+    {
+      "aid": 1,
+      "services": [
+        {
+          "characteristics": [
+            {
+              "aid": 1,
+              "char_bucket": "unknown",
+              "format": "bool",
+              "iid": 6,
+              "perms": [
+                "pw"
+              ],
+              "service_iid": 1,
+              "type": "IDENTIFY",
+              "uuid": "000000140000100080000026bb765291",
+              "value": null
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 3,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "MANUFACTURER",
+              "uuid": "000000200000100080000026bb765291",
+              "value": "ecobee Inc."
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 5,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "MODEL",
+              "uuid": "000000210000100080000026bb765291",
+              "value": "ecobee3 lite"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 2,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "JimBo Dev"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 4,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "SERIAL_NUMBER",
+              "uuid": "000000300000100080000026bb765291",
+              "value": "411956665463"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 8,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "FIRMWARE_REVISION",
+              "uuid": "000000520000100080000026bb765291",
+              "value": "4.8.70240"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 11,
+              "perms": [
+                "pr",
+                "hd"
+              ],
+              "service_iid": 1,
+              "type": "34AB8811-AC7F-4340-BAC3-FD6A85F9943B",
+              "uuid": "34ab8811ac7f4340bac3fd6a85f9943b",
+              "value": "4.1;3fac0fb4"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "data",
+              "iid": 10,
+              "perms": [
+                "pr",
+                "hd"
+              ],
+              "service_iid": 1,
+              "type": "PRODUCT_DATA",
+              "uuid": "000002200000100080000026bb765291",
+              "value": "u4qz9YgSXzQ="
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint32",
+              "iid": 9,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 1,
+              "type": "ACCESSORY_PROPERTIES",
+              "uuid": "000000a60000100080000026bb765291",
+              "value": 0
+            }
+          ],
+          "iid": 1,
+          "type": "0000003E-0000-1000-8000-0026BB765291"
+        },
+        {
+          "characteristics": [
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 31,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 30,
+              "type": "VERSION",
+              "uuid": "000000370000100080000026bb765291",
+              "value": "1.1.0"
+            }
+          ],
+          "iid": 30,
+          "type": "000000A2-0000-1000-8000-0026BB765291"
+        },
+        {
+          "characteristics": [
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 17,
+              "maxValue": 2,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "HEATING_COOLING_CURRENT",
+              "uuid": "0000000f0000100080000026bb765291",
+              "value": 2
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 18,
+              "maxValue": 3,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "pw",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "HEATING_COOLING_TARGET",
+              "uuid": "000000330000100080000026bb765291",
+              "value": 3
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "float",
+              "iid": 19,
+              "maxValue": 40.0,
+              "minStep": 0.1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "TEMPERATURE_CURRENT",
+              "unit": "celsius",
+              "uuid": "000000110000100080000026bb765291",
+              "value": 27.4
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "float",
+              "iid": 20,
+              "maxValue": 33.3,
+              "minStep": 0.1,
+              "minValue": 7.2,
+              "perms": [
+                "pr",
+                "pw",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "TEMPERATURE_TARGET",
+              "unit": "celsius",
+              "uuid": "000000350000100080000026bb765291",
+              "value": 22.2
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 21,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "pw",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "TEMPERATURE_UNITS",
+              "uuid": "000000360000100080000026bb765291",
+              "value": 1
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "float",
+              "iid": 22,
+              "maxValue": 33.3,
+              "minStep": 0.1,
+              "minValue": 18.3,
+              "perms": [
+                "pr",
+                "pw",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "TEMPERATURE_COOLING_THRESHOLD",
+              "unit": "celsius",
+              "uuid": "0000000d0000100080000026bb765291",
+              "value": 24.4
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "float",
+              "iid": 23,
+              "maxValue": 26.1,
+              "minStep": 0.1,
+              "minValue": 7.2,
+              "perms": [
+                "pr",
+                "pw",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "TEMPERATURE_HEATING_THRESHOLD",
+              "unit": "celsius",
+              "uuid": "000000120000100080000026bb765291",
+              "value": 20.0
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "float",
+              "iid": 24,
+              "maxValue": 100.0,
+              "minStep": 1.0,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "RELATIVE_HUMIDITY_CURRENT",
+              "unit": "percentage",
+              "uuid": "000000100000100080000026bb765291",
+              "value": 31.0
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 27,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "JimBo Dev"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 75,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "pw",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "FAN_STATE_TARGET",
+              "uuid": "000000bf0000100080000026bb765291",
+              "value": 1
+            },
+            {
+              "aid": 1,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 76,
+              "maxValue": 2,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 16,
+              "type": "FAN_STATE_CURRENT",
+              "uuid": "000000af0000100080000026bb765291",
+              "value": 2
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 33,
+              "maxValue": 3,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_CURRENT_MODE",
+              "uuid": "b7ddb9a354bb457291d2f1f5b0510f8c",
+              "value": 0
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "float",
+              "iid": 34,
+              "maxValue": 26.1,
+              "minStep": 0.1,
+              "minValue": 7.2,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_HOME_TARGET_HEAT",
+              "unit": "celsius",
+              "uuid": "e4489bbc5227456993e5b345e3e5508f",
+              "value": 20.0
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "float",
+              "iid": 35,
+              "maxValue": 33.3,
+              "minStep": 0.1,
+              "minValue": 18.3,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_HOME_TARGET_COOL",
+              "unit": "celsius",
+              "uuid": "7d381baa20f940e59be9aeb92d4becef",
+              "value": 24.4
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "float",
+              "iid": 36,
+              "maxValue": 26.1,
+              "minStep": 0.1,
+              "minValue": 7.2,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_SLEEP_TARGET_HEAT",
+              "unit": "celsius",
+              "uuid": "73aab542892a4439879ad2a883724b69",
+              "value": 17.8
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "float",
+              "iid": 37,
+              "maxValue": 33.3,
+              "minStep": 0.1,
+              "minValue": 18.3,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_SLEEP_TARGET_COOL",
+              "unit": "celsius",
+              "uuid": "5da985f0898a4850b987b76c6c78d670",
+              "value": 27.8
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "float",
+              "iid": 38,
+              "maxValue": 26.1,
+              "minStep": 0.1,
+              "minValue": 7.2,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_AWAY_TARGET_HEAT",
+              "unit": "celsius",
+              "uuid": "05b973746dc0439ba0faca33f612d425",
+              "value": 16.7
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "float",
+              "iid": 39,
+              "maxValue": 33.3,
+              "minStep": 0.1,
+              "minValue": 18.3,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_AWAY_TARGET_COOL",
+              "unit": "celsius",
+              "uuid": "a251f6e7ac4641909c5d3d06277bdf9f",
+              "value": 24.4
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 40,
+              "maxValue": 3,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_SET_HOLD_SCHEDULE",
+              "uuid": "1b300bc2cffc47ff89f9bd6ccf5f2853",
+              "value": null
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 41,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_TIMESTAMP",
+              "uuid": "1621f5561367443caf1982af018e99de",
+              "value": "2014-01-03T00:00:00-07:00T"
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "bool",
+              "iid": 48,
+              "perms": [
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_CLEAR_HOLD",
+              "uuid": "fa128de69d7d49a4b6d84e4e234dee38",
+              "value": null
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 49,
+              "maxValue": 4,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "4A6AE4F6-036C-495D-87CC-B3702B437741",
+              "uuid": "4a6ae4f6036c495d87ccb3702b437741",
+              "value": 1
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 50,
+              "maxValue": 3,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "DB7BF261-7042-4194-8BD1-3AA22830AEDD",
+              "uuid": "db7bf261704241948bd13aa22830aedd",
+              "value": 0
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "bool",
+              "iid": 51,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "41935E3E-B54D-42E9-B8B9-D33C6319F0AF",
+              "uuid": "41935e3eb54d42e9b8b9d33c6319f0af",
+              "value": false
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 52,
+              "maxValue": 100,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "pw"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_FAN_WRITE_SPEED",
+              "unit": "percentage",
+              "uuid": "c35da3c0e00440e3b15346655cdd9214",
+              "value": 0
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 53,
+              "maxValue": 100,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_FAN_READ_SPEED",
+              "unit": "percentage",
+              "uuid": "48f62aec41714b4a8f0e1eeb6708b3fb",
+              "value": 100
+            },
+            {
+              "aid": 1,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 54,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 16,
+              "type": "VENDOR_ECOBEE_ALERT_TEXT",
+              "uuid": "1b1515f2cc45409f991fc480987f92c3",
+              "value": "It's time to have your HVAC system inspected. Your last inspection was on Jan 23, 2022.\n\nContact a "
+            }
+          ],
+          "iid": 16,
+          "type": "0000004A-0000-1000-8000-0026BB765291"
+        }
+      ]
+    },
+    {
+      "aid": 4295505355,
+      "services": [
+        {
+          "characteristics": [
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 2,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "Test Sensor"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 3,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "MANUFACTURER",
+              "uuid": "000000200000100080000026bb765291",
+              "value": "ecobee Inc."
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 4,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "SERIAL_NUMBER",
+              "uuid": "000000300000100080000026bb765291",
+              "value": "VRSP"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 5,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "MODEL",
+              "uuid": "000000210000100080000026bb765291",
+              "value": "EBRSE4"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 8,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 1,
+              "type": "FIRMWARE_REVISION",
+              "uuid": "000000520000100080000026bb765291",
+              "value": "1.0.0"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "unknown",
+              "format": "bool",
+              "iid": 6,
+              "perms": [
+                "pw"
+              ],
+              "service_iid": 1,
+              "type": "IDENTIFY",
+              "uuid": "000000140000100080000026bb765291",
+              "value": null
+            }
+          ],
+          "iid": 1,
+          "type": "0000003E-0000-1000-8000-0026BB765291"
+        },
+        {
+          "characteristics": [
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "uint8",
+              "iid": 193,
+              "maxValue": 2,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 192,
+              "type": "CHARGING_STATE",
+              "uuid": "0000008f0000100080000026bb765291",
+              "value": 2
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 194,
+              "maxValue": 100,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 192,
+              "type": "BATTERY_LEVEL",
+              "unit": "percentage",
+              "uuid": "000000680000100080000026bb765291",
+              "value": 100
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 195,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 192,
+              "type": "STATUS_LO_BATT",
+              "uuid": "000000790000100080000026bb765291",
+              "value": 1
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 196,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 192,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "Test Sensor"
+            }
+          ],
+          "iid": 192,
+          "type": "00000096-0000-1000-8000-0026BB765291"
+        },
+        {
+          "characteristics": [
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "float",
+              "iid": 209,
+              "maxValue": 100.0,
+              "minStep": 0.1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 208,
+              "type": "TEMPERATURE_CURRENT",
+              "unit": "celsius",
+              "uuid": "000000110000100080000026bb765291",
+              "value": 100.0
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 210,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 208,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "Test Sensor Temperature"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "bool",
+              "iid": 211,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 208,
+              "type": "STATUS_ACTIVE",
+              "uuid": "000000750000100080000026bb765291",
+              "value": false
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 212,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 208,
+              "type": "STATUS_LO_BATT",
+              "uuid": "000000790000100080000026bb765291",
+              "value": 1
+            }
+          ],
+          "iid": 208,
+          "type": "0000008A-0000-1000-8000-0026BB765291"
+        },
+        {
+          "characteristics": [
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 65,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 57,
+              "type": "OCCUPANCY_DETECTED",
+              "uuid": "000000710000100080000026bb765291",
+              "value": 1
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 29,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 57,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "Test Sensor Occupancy"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "bool",
+              "iid": 117,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 57,
+              "type": "STATUS_ACTIVE",
+              "uuid": "000000750000100080000026bb765291",
+              "value": false
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 116,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 57,
+              "type": "STATUS_LO_BATT",
+              "uuid": "000000790000100080000026bb765291",
+              "value": 1
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "int",
+              "iid": 68,
+              "maxValue": 86400,
+              "minStep": 1,
+              "minValue": -1,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 57,
+              "type": "A8F798E0-4A40-11E6-BDF4-0800200C9A66",
+              "unit": "seconds",
+              "uuid": "a8f798e04a4011e6bdf40800200c9a66",
+              "value": -1
+            }
+          ],
+          "iid": 57,
+          "type": "00000086-0000-1000-8000-0026BB765291"
+        },
+        {
+          "characteristics": [
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "bool",
+              "iid": 66,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 56,
+              "type": "MOTION_DETECTED",
+              "uuid": "000000220000100080000026bb765291",
+              "value": false
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "string",
+              "iid": 28,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 56,
+              "type": "NAME",
+              "uuid": "000000230000100080000026bb765291",
+              "value": "Test Sensor Motion"
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "bool",
+              "iid": 101,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 56,
+              "type": "STATUS_ACTIVE",
+              "uuid": "000000750000100080000026bb765291",
+              "value": false
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "mapped",
+              "format": "uint8",
+              "iid": 100,
+              "maxValue": 1,
+              "minStep": 1,
+              "minValue": 0,
+              "perms": [
+                "pr",
+                "ev"
+              ],
+              "service_iid": 56,
+              "type": "STATUS_LO_BATT",
+              "uuid": "000000790000100080000026bb765291",
+              "value": 1
+            },
+            {
+              "aid": 4295505355,
+              "char_bucket": "informational",
+              "format": "int",
+              "iid": 67,
+              "maxValue": 86400,
+              "minStep": 1,
+              "minValue": -1,
+              "perms": [
+                "pr"
+              ],
+              "service_iid": 56,
+              "type": "BFE61C70-4A40-11E6-BDF4-0800200C9A66",
+              "unit": "seconds",
+              "uuid": "bfe61c704a4011e6bdf40800200c9a66",
+              "value": -1
+            }
+          ],
+          "iid": 56,
+          "type": "00000085-0000-1000-8000-0026BB765291"
+        }
+      ]
+    }
+  ],
+  "alias": "slot_1",
+  "detected_roles": [
+    "sensor",
+    "thermostat"
+  ],
+  "device_id": "44:be:73:09:47:20",
+  "generated_at": "2026-06-30T23:15:44.979997+00:00",
+  "metadata": {},
+  "plugin_hints": {
+    "ai_prompt": "HomeKit Hub device inventory. Use vendor_characteristics and unmapped UUIDs to author vendor-specific nodeDefs. Runtime sync uses classify_accessories(), not this file.",
+    "classification": [
+      {
+        "aid": 1,
+        "char_bindings": {
+          "COOLING_THRESHOLD": {
+            "aid": 1,
+            "iid": 22
+          },
+          "CURRENT_HEATING_COOLING_STATE": {
+            "aid": 1,
+            "iid": 17
+          },
+          "CURRENT_TEMPERATURE": {
+            "aid": 1,
+            "iid": 19
+          },
+          "HEATING_THRESHOLD": {
+            "aid": 1,
+            "iid": 23
+          },
+          "RELATIVE_HUMIDITY": {
+            "aid": 1,
+            "iid": 24
+          },
+          "TARGET_HEATING_COOLING_STATE": {
+            "aid": 1,
+            "iid": 18
+          },
+          "TARGET_TEMPERATURE": {
+            "aid": 1,
+            "iid": 20
+          },
+          "TEMPERATURE_DISPLAY_UNITS": {
+            "aid": 1,
+            "iid": 21
+          },
+          "VENDOR_ECOBEE_CLEAR_HOLD": {
+            "aid": 1,
+            "iid": 33
+          },
+          "VENDOR_ECOBEE_CURRENT_MODE": {
+            "aid": 1,
+            "iid": 33
+          },
+          "VENDOR_ECOBEE_SET_HOLD_SCHEDULE": {
+            "aid": 1,
+            "iid": 33
+          }
+        },
+        "node_def_id": "HKHubEcobeeThermostat",
+        "role": "thermostat",
+        "service_iid": 16,
+        "vendor": "ecobee"
+      }
+    ],
+    "detected_roles": [
+      "sensor",
+      "thermostat"
+    ],
+    "vendor_characteristics": [
+      "IDENTIFY",
+      "MANUFACTURER",
+      "MODEL",
+      "NAME",
+      "SERIAL_NUMBER",
+      "FIRMWARE_REVISION",
+      "34ab8811ac7f4340bac3fd6a85f9943b",
+      "PRODUCT_DATA",
+      "ACCESSORY_PROPERTIES",
+      "VERSION",
+      "HEATING_COOLING_CURRENT",
+      "HEATING_COOLING_TARGET",
+      "TEMPERATURE_CURRENT",
+      "TEMPERATURE_TARGET",
+      "TEMPERATURE_UNITS",
+      "TEMPERATURE_COOLING_THRESHOLD",
+      "TEMPERATURE_HEATING_THRESHOLD",
+      "RELATIVE_HUMIDITY_CURRENT",
+      "FAN_STATE_TARGET",
+      "FAN_STATE_CURRENT",
+      "VENDOR_ECOBEE_CURRENT_MODE",
+      "VENDOR_ECOBEE_HOME_TARGET_HEAT",
+      "VENDOR_ECOBEE_HOME_TARGET_COOL",
+      "VENDOR_ECOBEE_SLEEP_TARGET_HEAT",
+      "VENDOR_ECOBEE_SLEEP_TARGET_COOL",
+      "VENDOR_ECOBEE_AWAY_TARGET_HEAT",
+      "VENDOR_ECOBEE_AWAY_TARGET_COOL",
+      "VENDOR_ECOBEE_SET_HOLD_SCHEDULE",
+      "VENDOR_ECOBEE_NEXT_SCHEDULED_CHANGE_TIME",
+      "VENDOR_ECOBEE_CLEAR_HOLD",
+      "4a6ae4f6036c495d87ccb3702b437741",
+      "db7bf261704241948bd13aa22830aedd",
+      "41935e3eb54d42e9b8b9d33c6319f0af",
+      "VENDOR_ECOBEE_FAN_WRITE_SPEED",
+      "VENDOR_ECOBEE_FAN_READ_SPEED",
+      "VENDOR_ECOBEE_ALERT_TEXT",
+      "CHARGING_STATE",
+      "BATTERY_LEVEL",
+      "STATUS_LO_BATT",
+      "STATUS_ACTIVE",
+      "OCCUPANCY_DETECTED",
+      "a8f798e04a4011e6bdf40800200c9a66",
+      "MOTION_DETECTED",
+      "bfe61c704a4011e6bdf40800200c9a66"
+    ]
+  },
+  "reason": "pairing_active",
+  "schema_version": 1
+}
