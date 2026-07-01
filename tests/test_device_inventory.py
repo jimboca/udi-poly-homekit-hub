@@ -6,7 +6,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from homekit_hub.device_classifier import classify_accessories
-from homekit_hub.device_inventory import build_device_inventory, export_device_inventory
+from homekit_hub.device_inventory import (
+    build_device_inventory,
+    export_device_inventory,
+    log_all_persistent_inventories,
+)
 from homekit_hub.paths import ensure_persistent_dir, inventory_json_path
 
 
@@ -86,6 +90,43 @@ def test_export_device_inventory_writes_file(tmp_path, monkeypatch):
     assert path.is_file()
     text = path.read_text(encoding='utf-8')
     assert 'health_recovered' in text
+
+
+def test_log_device_inventory_export_emits_inventory_lines(tmp_path, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.chdir(tmp_path)
+    pairing = MagicMock()
+    pairing.accessories = []
+    log = logging.getLogger('test.device_inventory')
+    with caplog.at_level(logging.INFO, logger='test.device_inventory'):
+        path = export_device_inventory(
+            device_id='aa:bb:cc:dd:ee:ff',
+            alias='slot_1',
+            pairing=pairing,
+            reason='pairing_active',
+            log=log,
+        )
+    assert path.is_file()
+    assert any('INVENTORY begin device_id=aa:bb:cc:dd:ee:ff' in r.message for r in caplog.records)
+    assert any(r.message.startswith('INVENTORY ') and '"device_id"' in r.message for r in caplog.records)
+    assert any('INVENTORY end device_id=aa:bb:cc:dd:ee:ff' in r.message for r in caplog.records)
+
+
+def test_log_all_persistent_inventories_reads_json_files(tmp_path, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.chdir(tmp_path)
+    ensure_persistent_dir()
+    inventory_json_path('9e:12:68:6a:6e:26').write_text(
+        '{"device_id":"9e:12:68:6a:6e:26","reason":"pairing_active","accessories":[]}',
+        encoding='utf-8',
+    )
+    log = logging.getLogger('test.device_inventory.all')
+    with caplog.at_level(logging.INFO, logger='test.device_inventory.all'):
+        n = log_all_persistent_inventories(log=log)
+    assert n == 1
+    assert any('INVENTORY persistent: 1 file(s)' in r.message for r in caplog.records)
 
 
 def test_classify_empty_accessories():

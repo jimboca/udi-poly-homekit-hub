@@ -152,6 +152,30 @@ class EcobeeThermostatNode(ThermostatNode):
     def _after_setpoint_write(self, cmd: dict) -> None:
         self._mark_hold_active(cmd)
 
+    def cmd_set_pf(self, cmd):
+        driver = cmd.get('cmd')
+        if driver not in ('CLISPH', 'CLISPC'):
+            return super().cmd_set_pf(cmd)
+        try:
+            heat = float(self.getDriver('CLISPH'))
+            cool = float(self.getDriver('CLISPC'))
+        except (TypeError, ValueError):
+            return
+        if driver == 'CLISPH':
+            heat = float(cmd['value'])
+        else:
+            cool = float(cmd['value'])
+        span = self._heat_cool_min_span()
+        if cool < heat + span:
+            if driver == 'CLISPH':
+                cool = heat + span
+            else:
+                heat = cool - span
+        if self._hub_write_hold_setpoints(heat, cool):
+            self.set_clisph(heat)
+            self.set_clispc(cool)
+            self._after_setpoint_write(cmd)
+
     def sync_clismd_from_hap_state(self) -> None:
         """Update ``CLISMD`` from HAP comfort byte + active vs program setpoints."""
         hub_byte = getattr(self, '_hk_last_comfort_byte', None)

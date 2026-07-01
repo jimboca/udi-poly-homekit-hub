@@ -1,6 +1,6 @@
 """HomeKit Hub Node Server nodes."""
 
-VERSION = "2.0.4"
+VERSION = "2.0.5"
 from .Controller import Controller as Controller  # noqa: E402,F401
 
 # %% professional-only begin

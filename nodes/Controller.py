@@ -2350,6 +2350,22 @@ class Controller(Node):
             LOGGER.exception('hub_write failed for %s %s', device_id, char_spec)
             return False
 
+    def hub_write_by_iid(self, device_id: str, aid: int, iid: int, value: Any) -> bool:
+        if not (self.bridge and self.mainloop):
+            return False
+        fut = asyncio.run_coroutine_threadsafe(
+            self.bridge.put_characteristic_by_iid(device_id, int(aid), int(iid), value),
+            self.mainloop,
+        )
+        try:
+            err = fut.result(timeout=30)
+            return err is None
+        except Exception:
+            LOGGER.exception(
+                'hub_write_by_iid failed for %s aid=%s iid=%s', device_id, aid, iid
+            )
+            return False
+
     def hub_snapshot_values(self, device_id: str) -> list:
         """Return hub snapshot rows for *device_id* (empty list on failure)."""
         if not (self.bridge and self.mainloop):
@@ -3354,7 +3370,23 @@ class Controller(Node):
                         getattr(existing, 'primary', '?'),
                     )
                     self._delete_generic_node_by_address(addr)
+                    existing = None
                 else:
+                    actual_def = str(getattr(existing, 'id', '') or '')
+                    if (
+                        node_def in self._THERMOSTAT_NODE_DEF_IDS
+                        and actual_def in self._THERMOSTAT_NODE_DEF_IDS
+                        and actual_def != node_def
+                    ):
+                        LOGGER.info(
+                            'Recreating thermostat IoX node %s (%s -> %s)',
+                            addr,
+                            actual_def,
+                            node_def,
+                        )
+                        self._delete_generic_node_by_address(addr)
+                        existing = None
+                if existing is not None:
                     existing.char_bindings = dict(bindings)
                     if self._pg3_primary_mismatch(existing):
                         self.add_node(existing)

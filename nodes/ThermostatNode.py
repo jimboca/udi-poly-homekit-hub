@@ -84,7 +84,38 @@ class ThermostatNode(Node):
         self.apply_hub_characteristic(label, value)
 
     def _hub_write(self, hap_name: str, hap_value: Any) -> bool:
-        return self.controller.hub_write(self.device_id, hap_name, hap_value)
+        binding_key = self._HAP_WRITE_BINDING_KEY.get(hap_name)
+        if binding_key:
+            ref = self._char_binding_ref(binding_key)
+            if ref is not None:
+                try:
+                    aid = int(ref['aid'])
+                    iid = int(ref['iid'])
+                except (KeyError, TypeError, ValueError):
+                    aid = iid = 0
+                if aid > 0 and iid > 0:
+                    ok = self.controller.hub_write_by_iid(
+                        self.device_id, aid, iid, hap_value
+                    )
+                    if not ok:
+                        LOGGER.info(
+                            'HomeKit %s: %s write failed aid=%s iid=%s value=%r',
+                            self.address,
+                            binding_key,
+                            aid,
+                            iid,
+                            hap_value,
+                        )
+                    return ok
+        ok = self.controller.hub_write(self.device_id, hap_name, hap_value)
+        if not ok:
+            LOGGER.info(
+                'HomeKit %s: %s write failed value=%r',
+                self.address,
+                hap_name,
+                hap_value,
+            )
+        return ok
 
     def _climd_write_mode(self) -> int:
         try:
@@ -95,14 +126,25 @@ class ThermostatNode(Node):
     def _heat_cool_min_span(self) -> float:
         return heat_cool_min_span_degrees(self.use_celsius, self.controller._bridge_get_params())
 
+    def _has_char_binding(self, name: str) -> bool:
+        bindings = getattr(self, 'char_bindings', None) or {}
+        return str(name or '').strip().upper() in bindings
+
+    def _char_binding_ref(self, name: str) -> dict | None:
+        bindings = getattr(self, 'char_bindings', None) or {}
+        hit = bindings.get(str(name or '').strip().upper())
+        return hit if isinstance(hit, dict) else None
+
     def _after_setpoint_write(self, cmd: dict) -> None:
         """Hook after a successful CLISPH/CLISPC hub write (Ecobee: schedule hold)."""
 
     def _hap_char_for_heat_driver_write(self) -> str:
         m = self._climd_write_mode()
-        if m == 3:
+        if m in (2, 3):
             return hap_apply.hap_name_heating_threshold()
-        if m == 2:
+        if self._has_char_binding('TARGET_TEMPERATURE'):
+            return hap_apply.hap_name_target_temperature()
+        if self._has_char_binding('HEATING_THRESHOLD'):
             return hap_apply.hap_name_heating_threshold()
         return hap_apply.hap_name_target_temperature()
 
@@ -110,9 +152,25 @@ class ThermostatNode(Node):
         m = self._climd_write_mode()
         if m == 3:
             return hap_apply.hap_name_cooling_threshold()
+        if m == 2:
+            if self._has_char_binding('TARGET_TEMPERATURE'):
+                return hap_apply.hap_name_target_temperature()
+            if self._has_char_binding('COOLING_THRESHOLD'):
+                return hap_apply.hap_name_cooling_threshold()
+            return hap_apply.hap_name_target_temperature()
         if m in (1, 4):
             return hap_apply.hap_name_cooling_threshold()
+        if self._has_char_binding('COOLING_THRESHOLD'):
+            return hap_apply.hap_name_cooling_threshold()
         return hap_apply.hap_name_target_temperature()
+
+    _HAP_WRITE_BINDING_KEY = {
+        hap_apply.hap_name_target_temperature(): 'TARGET_TEMPERATURE',
+        hap_apply.hap_name_heating_threshold(): 'HEATING_THRESHOLD',
+        hap_apply.hap_name_cooling_threshold(): 'COOLING_THRESHOLD',
+        hap_apply.hap_name_target_heating_cooling(): 'TARGET_HEATING_COOLING_STATE',
+        hap_apply.hap_name_target_fan_state(): 'TARGET_FAN_STATE',
+    }
 
     def query(self, cmd=None):
         del cmd

@@ -339,6 +339,9 @@ def export_config_debug(
         lg.info('HomeKit Hub configuration snapshot (%s) written to %s', reason, path)
         for line in text.splitlines():
             lg.info('CONFIG %s', line)
+        from homekit_hub.device_inventory import log_all_persistent_inventories
+
+        log_all_persistent_inventories(log=lg)
         return path
     except Exception:
         lg.exception('HomeKit Hub configuration snapshot export failed (%s)', reason)

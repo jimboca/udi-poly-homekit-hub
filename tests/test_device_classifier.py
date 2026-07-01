@@ -158,6 +158,100 @@ def test_classify_accessories_accepts_characteristic_name_strings():
     assert 'CURRENT_TEMPERATURE' in rows[0]['char_bindings']
 
 
+def test_classify_accessories_ecobee_via_vendor_bindings():
+    """Vendor chars on the thermostat service classify as HKHubEcobeeThermostat."""
+    vendor_mode = 'B7DDB9A3-54BB-4572-91D2-F1F5B0510F8C'
+    thermostat = _Acc(
+        2,
+        [
+            _Svc(
+                10,
+                ServicesTypes.THERMOSTAT,
+                [
+                    _Char(11, CharacteristicsTypes.TEMPERATURE_CURRENT),
+                    _Char(12, CharacteristicsTypes.HEATING_COOLING_TARGET),
+                    _Char(13, CharacteristicsTypes.TEMPERATURE_HEATING_THRESHOLD),
+                    _Char(14, CharacteristicsTypes.TEMPERATURE_COOLING_THRESHOLD),
+                    _Char(15, vendor_mode),
+                ],
+            ),
+        ],
+    )
+    rows = classify_accessories([thermostat])
+    tstat = next(r for r in rows if r['role'] == 'thermostat')
+    assert tstat['node_def_id'] == 'HKHubEcobeeThermostat'
+    assert 'VENDOR_ECOBEE_CURRENT_MODE' in tstat['char_bindings']
+
+
+def _honeywell_t10_room_sensor(aid: int, name: str):
+    return _Acc(
+        aid,
+        [
+            _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, [_Char(1, CharacteristicsTypes.NAME, name)]),
+            _Svc(
+                40,
+                ServicesTypes.TEMPERATURE_SENSOR,
+                [
+                    _Char(41, CharacteristicsTypes.TEMPERATURE_CURRENT),
+                    _Char(42, CharacteristicsTypes.RELATIVE_HUMIDITY_CURRENT),
+                    _Char(43, CharacteristicsTypes.OCCUPANCY_DETECTED),
+                    _Char(44, CharacteristicsTypes.BATTERY_LEVEL),
+                    _Char(45, CharacteristicsTypes.STATUS_LO_BATT),
+                ],
+            ),
+        ],
+    )
+
+
+def test_classify_sensor_aids_honeywell_t10_redlink_sensors():
+    """Honeywell T10 + RedLINK room sensors (aids 1,2,5,6,7 from field pairing)."""
+    thermostat = _Acc(
+        2,
+        [
+            _Svc(
+                1,
+                ServicesTypes.ACCESSORY_INFORMATION,
+                [_Char(1, CharacteristicsTypes.NAME, 'T10 Thermostat')],
+            ),
+            _Svc(
+                10,
+                ServicesTypes.THERMOSTAT,
+                [
+                    _Char(11, CharacteristicsTypes.TEMPERATURE_CURRENT),
+                    _Char(12, CharacteristicsTypes.TEMPERATURE_TARGET),
+                    _Char(13, CharacteristicsTypes.TEMPERATURE_HEATING_THRESHOLD),
+                    _Char(14, CharacteristicsTypes.TEMPERATURE_COOLING_THRESHOLD),
+                    _Char(15, CharacteristicsTypes.HEATING_COOLING_TARGET),
+                    _Char(16, CharacteristicsTypes.RELATIVE_HUMIDITY_CURRENT),
+                    _Char(17, CharacteristicsTypes.OCCUPANCY_DETECTED),
+                ],
+            ),
+        ],
+    )
+    accessories = [
+        _honeywell_t10_room_sensor(1, 'TSTAT-434E76'),
+        thermostat,
+        _honeywell_t10_room_sensor(5, 'Fireplace Air Sensor 01'),
+        _honeywell_t10_room_sensor(6, 'Master Bedroom Air Sensor 02'),
+        _honeywell_t10_room_sensor(7, 'Lwr Bed Air Sensor 03'),
+    ]
+    tstat_rows = classify_accessories(accessories)
+    assert len(tstat_rows) == 1
+    assert tstat_rows[0]['role'] == 'thermostat'
+    assert tstat_rows[0]['node_def_id'] == 'HKHubThermostat'
+    assert 'TARGET_TEMPERATURE' in tstat_rows[0]['char_bindings']
+
+    sensor_rows = classify_sensor_aids(accessories, control_aid=2)
+    room = [r for r in sensor_rows if r['role'] == 'sensor']
+    assert {r['aid'] for r in room} == {1, 5, 6, 7}
+    assert all(r['node_def_id'] == 'HKHubSensor' for r in room)
+    assert all('RELATIVE_HUMIDITY' in r['char_bindings'] for r in room)
+    motion = next(r for r in sensor_rows if r['role'] == 'motion_sensor')
+    assert motion['aid'] == 2
+    assert motion['node_def_id'] == 'HKHubMotionSensor'
+    assert 'OCCUPANCY_DETECTED' in motion['char_bindings']
+
+
 def test_classify_accessories_from_inventory_label_fixture():
     import json
     from pathlib import Path

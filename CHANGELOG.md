@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-06-25
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+Beta follow-up (Honeywell T10 / multi-accessory thermostats with **Professional generic nodes**):
+
+| Issue | Symptom | Fixed in 2.0.5 |
+|-------|---------|----------------|
+| Heat setpoint programming | `CLISPH` does not change physical thermostat (Honeywell T10) | **Yes** — heat/cool mode writes `TARGET_TEMPERATURE` when bound; auto mode uses thresholds |
+| Wrong HAP target | Name-only writes hit first matching characteristic across accessories | **Yes** — thermostat writes use node `char_bindings` aid/iid via `hub_write_by_iid` |
+| Support log gaps | `persistent/*.json` device inventory not in PG3 log package | **Yes** — full inventory JSON mirrored to log as `INVENTORY` lines (pairing export + config snapshot) |
+
+### Fixed
+
+- **(Professional)** **Honeywell / generic thermostat setpoints:** `CLISPH`/`CLISPC` in heat or cool mode prefer `TARGET_TEMPERATURE` when the device exposes target temp plus heating/cooling thresholds (T10-style). Threshold-only devices still use threshold characteristics; auto mode writes both thresholds.
+- **(Professional)** **Binding-aware HAP writes:** `ThermostatNode._hub_write()` resolves the node's bound aid/iid before falling back to global characteristic name lookup — critical for pairings with multiple accessories (e.g. T10 + RedLINK room sensors on aids 1, 5, 6, 7).
+- **(Professional)** **Failed write visibility:** thermostat hub writes log at INFO when HAP `put_characteristic` returns failure (aid, iid, characteristic, value).
+- **(Professional)** **Ecobee setpoint holds:** `EcobeeThermostatNode` writes heating/cooling thresholds together and activates schedule hold after successful `CLISPH`/`CLISPC` programming.
+- **(Professional)** **Ecobee vs generic classification:** Ecobee vendor fingerprint detected pairing-wide; thermostat nodedef migrates when classification changes (`HKHubThermostat` ↔ `HKHubEcobeeThermostat`).
+
+### Added
+
+- **(Professional)** **Device inventory in debug log:** `persistent/<device_id>.json` contents emitted as `INVENTORY begin` … `INVENTORY end` lines when inventory is exported and again on configuration snapshot export — PG3 log packages now include full HAP aid/iid trees for remote support.
+- **(Professional)** **Tests:** Honeywell T10 + RedLINK sensor classification fixture; thermostat setpoint write path tests (`TARGET_TEMPERATURE` vs thresholds, binding-aware writes).
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.5** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.4] - 2026-06-25
 
 Edition tags: **(Professional)** = Professional store zip only.

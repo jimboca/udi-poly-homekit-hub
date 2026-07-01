@@ -196,6 +196,21 @@ def _accessory_has_ecobee_fingerprint(acc: Any) -> bool:
     return False
 
 
+def _bindings_indicate_ecobee(bindings: Any) -> bool:
+    """True when thermostat char bindings include Ecobee vendor HAP characteristics."""
+    if not isinstance(bindings, dict):
+        return False
+    return any('VENDOR_ECOBEE' in str(k).upper() for k in bindings)
+
+
+def _pairing_has_ecobee_fingerprint(accessories: Any) -> bool:
+    """True when any accessory on the pairing exposes Ecobee vendor HAP characteristics."""
+    for acc in accessories or []:
+        if _accessory_has_ecobee_fingerprint(acc):
+            return True
+    return False
+
+
 def _bind_service_chars(aid: int, svc: Any, names: tuple[str, ...]) -> Dict[str, Dict[str, int]]:
     out: Dict[str, Dict[str, int]] = {}
     for name in names:
@@ -374,15 +389,17 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
     if not accessories:
         return []
     rows: List[Dict[str, Any]] = []
+    pairing_ecobee = _pairing_has_ecobee_fingerprint(accessories)
     for acc in accessories:
         aid = int(getattr(acc, 'aid', 0) or 0)
-        ecobee = _accessory_has_ecobee_fingerprint(acc)
+        ecobee = pairing_ecobee or _accessory_has_ecobee_fingerprint(acc)
         for svc in getattr(acc, 'services', None) or []:
             su = _service_uuid(svc)
             svc_iid = int(getattr(svc, 'iid', 0) or 0)
             if su in _THERMOSTAT_SERVICE_UUIDS:
-                node_def = 'HKHubEcobeeThermostat' if ecobee else 'HKHubThermostat'
                 bindings = _bind_service_chars(aid, svc, _CHAR_BINDINGS_THERMOSTAT)
+                ecobee = ecobee or _bindings_indicate_ecobee(bindings)
+                node_def = 'HKHubEcobeeThermostat' if ecobee else 'HKHubThermostat'
                 if bindings:
                     rows.append(
                         {

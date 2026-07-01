@@ -2918,6 +2918,7 @@ class HomeKitHubBridge:
                 alias=alias,
                 pairing=pairing,
                 reason=reason,
+                log=self.log,
             )
             accessories = getattr(pairing, 'accessories', None) or []
             n_acc = sum(1 for _ in accessories) if accessories else 0
