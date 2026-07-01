@@ -1357,7 +1357,7 @@ class HomeKitHubBridge:
             Callable[[str, int, int, Any, str], None]
         ] = None,
         is_professional: Optional[Callable[[], bool]] = None,
-        inventory_notice: Optional[Callable[[str, str], None]] = None,
+        inventory_notice: Optional[Callable[[str, str, str], None]] = None,
         # %% professional-only end
     ) -> None:
         self.log = logger
@@ -2940,7 +2940,7 @@ class HomeKitHubBridge:
             notice = self._inventory_notice
             if notice is not None:
                 try:
-                    notice(device_id, str(path))
+                    notice(device_id, str(path), reason)
                 except Exception:
                     self.log.exception('inventory_notice callback failed')
             return path

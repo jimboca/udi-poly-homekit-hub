@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from homekit_hub.bridge import DATA_KEY_LAST_HAP_DISCOVER, TYPED_PAIRING_SLOTS_KEY
 from node_funcs import generic_node_address
 from nodes.Controller import ERR_ASYNC_LOOP_DEAD, Controller, _DEFAULT_BRIDGE_PARAMS
+from nodes.SensorNode import SensorNode
 
 
 class FakeTypedData:
@@ -453,3 +454,69 @@ def test_retry_existing_sensor_recreates_when_pg3_uoms_stale():
     c._recreate_stale_sensor_node = MagicMock()
     c._retry_existing_sensor_addnode(node, addr)
     c._recreate_stale_sensor_node.assert_called_once_with(node, addr)
+
+
+def test_motion_sensor_schema_includes_clihum_not_battery():
+    schema = SensorNode._drivers_for_role('motion_sensor')
+    keys = {s['driver'] for s in schema}
+    assert 'CLIHUM' in keys
+    assert 'BATLVL' not in keys
+    assert 'BATLOW' not in keys
+
+
+def test_apply_driver_schema_skips_deferred_zeros():
+    poly = MagicMock()
+    poly.db_getNodeDrivers.return_value = [
+        {'driver': 'ST', 'value': 74},
+        {'driver': 'CLIHUM', 'value': 0},
+        {'driver': 'BATLVL', 'value': 0},
+    ]
+    controller = MagicMock(poly=poly)
+    node = SensorNode(
+        controller,
+        'parent',
+        'gsensoraddr01',
+        'Kitchen',
+        device_id='aa:bb:cc:dd:ee:ff',
+        aid=3,
+        char_bindings={},
+        role='sensor',
+    )
+    node.setDriver = MagicMock()
+    node.apply_driver_schema(report=True)
+    reported = {call.args[0] for call in node.setDriver.call_args_list}
+    assert 'ST' in reported
+    assert 'CLIHUM' not in reported
+    assert 'BATLVL' not in reported
+
+
+def test_reuse_existing_sensor_node_report_only_when_stale():
+    c = _bare_controller()
+    c.is_professional = lambda: True
+    c._generic_nodes = {}
+    c._sensor_by_key = {}
+    c._motion_sensor_by_device = {}
+    c._retry_existing_sensor_addnode = MagicMock()
+    c._schedule_refresh_generic_node = MagicMock()
+    c._sensor_driver_schema_stale = MagicMock(return_value=False)
+    node = MagicMock(role='sensor', address='gsensoraddr01')
+    node.apply_driver_schema = MagicMock()
+    c._reuse_existing_sensor_node(
+        node,
+        device_id='aa:bb:cc:dd:ee:ff',
+        aid=3,
+        role='sensor',
+        char_bindings={},
+        register_only=False,
+        addr='gsensoraddr01',
+    )
+    node.apply_driver_schema.assert_called_once_with(report=False)
+
+
+def test_inventory_notice_only_on_manual_export():
+    c = _bare_controller()
+    c.Notices = MagicMock()
+    c._inventory_export_notice_callback('aa:bb', '/tmp/x.json', 'pair')
+    c.Notices.__setitem__.assert_not_called()
+    c._inventory_export_notice_callback('aa:bb', '/tmp/x.json', 'manual_export')
+    c.Notices.__setitem__.assert_called_once()

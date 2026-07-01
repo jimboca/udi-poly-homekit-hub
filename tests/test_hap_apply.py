@@ -386,6 +386,22 @@ def test_apply_sensor_temperature_sets_responding_for_motion():
     node.set_driver_safe.assert_any_call('GV2', 1, report=True)
 
 
+def test_apply_sensor_motion_humidity_maps_clihum():
+    node = MagicMock()
+    node.use_celsius = False
+    node.role = 'motion_sensor'
+    assert apply_characteristic_to_sensor(node, 'RELATIVE_HUMIDITY_CURRENT', 42.6) is True
+    node.set_driver_safe.assert_called_with('CLIHUM', 43, report=True)
+
+
+def test_apply_sensor_motion_ignores_battery():
+    node = MagicMock()
+    node.use_celsius = False
+    node.role = 'motion_sensor'
+    assert apply_characteristic_to_sensor(node, 'BATTERY_LEVEL', 87.4) is True
+    node.set_driver_safe.assert_not_called()
+
+
 def test_apply_sensor_battery_maps_batlvl_and_batlow():
     node = MagicMock()
     node.use_celsius = False

@@ -197,6 +197,7 @@ class Controller(Node):
         self._motion_sensor_by_device: dict[str, Any] = {}
         self._thermostat_control_aid: dict[str, int] = {}
         self._existing_sensor_addnode_retried: set[str] = set()
+        self._sensor_longpoll_ticks = 0
         self._config_debug_export_token = 0
         # %% professional-only end
 
@@ -1479,6 +1480,7 @@ class Controller(Node):
         if polltype == "longPoll":
             self._check_asyncio_loop_thread_health()
             self.heartbeat()
+            self._maybe_refresh_generic_sensor_nodes()
             if self._pair_success_notice_polls_remaining > 0:
                 self._pair_success_notice_polls_remaining -= 1
                 if self._pair_success_notice_polls_remaining == 0:
@@ -2391,7 +2393,35 @@ class Controller(Node):
     def _schedule_refresh_generic_node(self, node: Any) -> None:
         Timer(0.0, lambda: self.refresh_generic_node(node)).start()
 
-    def _inventory_export_notice_callback(self, device_id: str, path: str) -> None:
+    _SENSOR_REFRESH_LONGPOLLS = 15
+
+    def _maybe_refresh_generic_sensor_nodes(self) -> None:
+        """Periodic HAP snapshot refresh for sparse Ecobee room-sensor reporters."""
+        if not self.is_professional() or not self.ready:
+            return
+        self._sensor_longpoll_ticks += 1
+        if self._sensor_longpoll_ticks % self._SENSOR_REFRESH_LONGPOLLS != 0:
+            return
+        nodes = [
+            n
+            for n in self._generic_nodes.values()
+            if str(getattr(n, 'role', '') or '') in ('sensor', 'motion_sensor')
+        ]
+        if not nodes:
+            return
+        for i, node in enumerate(nodes):
+            Timer(i * 0.5, lambda n=node: self.refresh_generic_node(n)).start()
+
+    def _inventory_export_notice_callback(self, device_id: str, path: str, reason: str = '') -> None:
+        if str(reason or '').strip().lower() != 'manual_export':
+            try:
+                self.Notices.delete('homekit_inventory_export')
+            except Exception:
+                try:
+                    del self.Notices['homekit_inventory_export']
+                except Exception:
+                    pass
+            return
         self.Notices['homekit_inventory_export'] = (
             '<b>Device inventory exported</b><br/>'
             f'device_id: <code>{html.escape(device_id)}</code><br/>'
@@ -2758,7 +2788,8 @@ class Controller(Node):
         if hasattr(node, 'role'):
             node.role = str(role or 'sensor')
         if hasattr(node, 'apply_driver_schema'):
-            node.apply_driver_schema(report=True)
+            stale = self._sensor_driver_schema_stale(node)
+            node.apply_driver_schema(report=stale)
         if str(role or '') == 'motion_sensor':
             self._motion_sensor_by_device[did] = node
         else:
@@ -2903,8 +2934,6 @@ class Controller(Node):
             if str(drv.get('name') or '') != str(spec.get('name') or ''):
                 return True
         for key in db_by_key:
-            if key == 'CLIHUM' and role == 'motion_sensor':
-                continue
             if key not in expected:
                 return True
         return False

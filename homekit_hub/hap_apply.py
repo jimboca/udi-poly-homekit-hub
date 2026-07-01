@@ -815,9 +815,7 @@ def apply_characteristic_to_sensor(
                 _set_node_driver(node, 'GV2', 1)
             return True
         if 'RELATIVE_HUMIDITY' in norm and 'TARGET' not in norm:
-            role = str(getattr(node, 'role', '') or '').strip().lower()
-            if role != 'motion_sensor':
-                _set_node_driver(node, 'CLIHUM', int(round(float(value))))
+            _set_node_driver(node, 'CLIHUM', int(round(float(value))))
             return True
         if is_hap_contact_state_characteristic(characteristic):
             _set_node_driver(node, 'GV2', hap_contact_state_to_iox(value))
@@ -826,9 +824,15 @@ def apply_characteristic_to_sensor(
             _set_node_driver(node, 'GV1', hap_on_to_iox(value))
             return True
         if 'BATTERY_LEVEL' in norm:
+            role = str(getattr(node, 'role', '') or '').strip().lower()
+            if role == 'motion_sensor':
+                return True
             _set_node_driver(node, 'BATLVL', int(round(float(value))))
             return True
         if 'STATUS_LO_BATT' in norm or 'STATUS_LOW_BATTERY' in norm:
+            role = str(getattr(node, 'role', '') or '').strip().lower()
+            if role == 'motion_sensor':
+                return True
             _set_node_driver(node, 'BATLOW', hap_on_to_iox(value))
             return True
     except Exception:

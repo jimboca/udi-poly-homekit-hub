@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Set
 
 from udi_interface import Node
 
@@ -12,6 +12,9 @@ from hub_node_funcs import get_valid_node_name, hap_event_matches_node
 
 if TYPE_CHECKING:
     from .Controller import Controller
+
+_DEFERRED_SENSOR_DRIVERS = frozenset({'CLIHUM', 'BATLVL', 'BATLOW'})
+_DEFERRED_MOTION_DRIVERS = frozenset({'CLIHUM'})
 
 
 class SensorNode(Node):
@@ -38,31 +41,57 @@ class SensorNode(Node):
         self.use_celsius = False
         self.address = str(address)
         self.primary = str(primary_addr)
+        self._driver_seen: Set[str] = set()
         nm = get_valid_node_name(name) or 'HK Sensor'
         schema = self._drivers_for_role(self.role)
         super().__init__(controller.poly, primary_addr, address, nm)
         self.name = nm
         self.drivers = self._driver_schema_from_db(controller.poly, address, schema)
+        self._seed_driver_seen_from_values()
+        controller.poly.subscribe(controller.poly.START, self.handler_start, address)
 
     def _poly(self) -> Any:
         return getattr(self, 'poly', None) or self.controller.poly
+
+    @staticmethod
+    def _deferred_drivers(role: str) -> frozenset[str]:
+        r = str(role or 'sensor').strip().lower()
+        if r == 'motion_sensor':
+            return _DEFERRED_MOTION_DRIVERS
+        return _DEFERRED_SENSOR_DRIVERS
+
+    def _seed_driver_seen_from_values(self) -> None:
+        deferred = self._deferred_drivers(self.role)
+        for spec in self.drivers:
+            drv = str(spec.get('driver') or '')
+            if drv not in deferred:
+                continue
+            val = spec.get('value')
+            if val not in (None, 0, '0', 0.0):
+                self._driver_seen.add(drv)
 
     def apply_driver_schema(self, *, report: bool = False) -> None:
         """Re-apply nodedef driver uoms/names; keep PG3 values but not stale uoms."""
         schema = self._drivers_for_role(self.role)
         self.drivers = self._driver_schema_from_db(self._poly(), self.address, schema)
-        if report:
-            for spec in self.drivers:
-                try:
-                    self.setDriver(
-                        spec['driver'],
-                        spec['value'],
-                        report=True,
-                        force=True,
-                        uom=spec['uom'],
-                    )
-                except Exception:
-                    pass
+        self._seed_driver_seen_from_values()
+        if not report:
+            return
+        deferred = self._deferred_drivers(self.role)
+        for spec in self.drivers:
+            drv = str(spec.get('driver') or '')
+            if drv in deferred and drv not in self._driver_seen:
+                continue
+            try:
+                self.setDriver(
+                    drv,
+                    spec['value'],
+                    report=True,
+                    force=True,
+                    uom=spec['uom'],
+                )
+            except Exception:
+                pass
 
     @staticmethod
     def _driver_schema_from_db(poly: Any, address: str, schema: list) -> list:
@@ -90,17 +119,21 @@ class SensorNode(Node):
             {'driver': 'ST', 'value': 0, 'uom': 17, 'name': 'Temperature'},
             {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Occupancy'},
             {'driver': 'GV2', 'value': 0, 'uom': 2, 'name': 'Responding'},
-            {'driver': 'BATLVL', 'value': 0, 'uom': 51, 'name': 'Battery Level'},
-            {'driver': 'BATLOW', 'value': 0, 'uom': 2, 'name': 'Battery Low'},
         ]
-        if r != 'motion_sensor':
-            drivers.insert(
-                3,
-                {'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'},
+        if r == 'motion_sensor':
+            drivers.append({'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'})
+        else:
+            drivers.extend(
+                [
+                    {'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'},
+                    {'driver': 'BATLVL', 'value': 0, 'uom': 51, 'name': 'Battery Level'},
+                    {'driver': 'BATLOW', 'value': 0, 'uom': 2, 'name': 'Battery Low'},
+                ]
             )
         return drivers
 
     def set_driver_safe(self, driver: str, val: Any, report: bool = True) -> None:
+        self._driver_seen.add(str(driver))
         try:
             self.setDriver(driver, val, report=report, force=True)
         except Exception:
@@ -113,6 +146,9 @@ class SensorNode(Node):
         if not hap_event_matches_node(aid, iid, self):
             return
         hap_apply.apply_characteristic_to_sensor(self, label, value)
+
+    def handler_start(self) -> None:
+        self.query()
 
     def query(self, cmd=None):
         del cmd

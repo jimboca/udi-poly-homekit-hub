@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-06-25
+
+Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+Beta sensor evaluation (Ecobee thermostats with **Professional generic nodes**) — what we found and what this release fixes:
+
+| Report | Symptom | Evaluation | Fixed in 2.0.3 |
+|--------|---------|------------|----------------|
+| **#3** | Thermostat motion child humidity blank | Motion mirror path blocked `CLIHUM` for `motion_sensor` role | **Yes** — humidity mirrored to motion child |
+| **#4** | Room sensors show 0% humidity | Many Ecobee room sensors do not expose HAP humidity; plugin published default 0 at addnode | **Partially** — humidity stays blank until first HAP reading; true 0% still shown when reported |
+| **#5** | Motion child battery 0% | Mains-powered thermostat has no HAP battery char; motion schema included battery drivers | **Yes** — battery drivers removed from motion child |
+| **#6–7** | 15+ min delay; stale temp; 0% battery | Ecobee room sensors report infrequently (~15–25 min) **plus** re-hydrate pushed PG3 default zeros to IoX | **Yes** — re-hydrate no longer wipes live values; periodic snapshot refresh; QUERY on sensor start |
+| **#8** | Kitchen occupancy missing | Log showed Kitchen `GV1` updates; likely re-hydrate wipe or viewing Ecobee plugin nodes vs hub `HKHubSensor` children | **Likely** — re-hydrate fix should help; confirm you are viewing hub generic sensor nodes |
+| **#9** | Random thermostat notices | `homekit_inventory_export` PG3 Notice on every health/metadata refresh | **Yes** — automatic export unchanged; Notice only on manual **EXPORT_INVENTORY** |
+
+**Not a plugin bug:** GameRoom sensor never received any HAP updates in the submitted log — check Ecobee/HomeKit reachability for that sensor first.
+
+**Operator note:** Hub MQTT transport always runs for paired devices. If you use **udi-poly-ecobee**, leave hub **generic_nodes_enable** off unless you want a second IoX tree (different node addresses under the hub Node Server).
+
+### Fixed
+
+- **(Professional)** **Motion child humidity:** `CLIHUM` added to motion sensor schema; HAP relative humidity applied on mirror path (issue **#3**).
+- **(Professional)** **Re-hydrate wipe:** existing sensor nodes re-bind without `apply_driver_schema(report=True)` unless driver UOM/names are stale; snapshot refresh repopulates readings (issues **#6–8**).
+- **(Professional)** **Blank vs 0%:** humidity and battery drivers omitted from IoX until first HAP value; motion children no longer expose battery drivers (issues **#4**, **#5**, **#7**).
+- **(Professional)** **Sensor refresh:** `QUERY` on sensor node start; staggered longPoll snapshot refresh (~15 cycles) for sparse Ecobee reporters (issue **#6**).
+- **(Professional)** **Inventory Notice:** `persistent/<device_id>.json` still exported on pair/health; PG3 Notice only when you run **EXPORT_INVENTORY** manually (issue **#9**).
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.3** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.2] - 2026-06-30
 
 Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
