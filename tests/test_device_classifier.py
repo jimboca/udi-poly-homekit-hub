@@ -97,7 +97,29 @@ def test_classify_sensor_aids_emits_room_sensors_and_motion_child():
     assert {r['aid'] for r in sensor_rows} == {3, 4}
     motion = next(r for r in rows if r['role'] == 'motion_sensor')
     assert motion['aid'] == 2
+    assert motion['node_def_id'] == 'HKHubMotionSensor'
     assert 'MOTION_DETECTED' in motion['char_bindings']
+
+
+def test_classify_sensor_aids_dry_room_sensor():
+    dry = _Acc(
+        5,
+        [
+            _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, [_Char(1, CharacteristicsTypes.NAME, 'Foyer')]),
+            _Svc(
+                40,
+                ServicesTypes.TEMPERATURE_SENSOR,
+                [
+                    _Char(41, CharacteristicsTypes.TEMPERATURE_CURRENT),
+                    _Char(42, CharacteristicsTypes.BATTERY_LEVEL),
+                ],
+            ),
+        ],
+    )
+    rows = classify_sensor_aids([dry], control_aid=2)
+    sensor = next(r for r in rows if r['role'] == 'sensor')
+    assert sensor['node_def_id'] == 'HKHubSensorDry'
+    assert 'RELATIVE_HUMIDITY' not in sensor['char_bindings']
 
 
 def test_classify_sensor_aids_uses_snapshot_control_aid():

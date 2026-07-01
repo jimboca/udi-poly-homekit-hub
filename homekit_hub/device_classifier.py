@@ -80,6 +80,26 @@ _CHAR_BINDINGS_SENSOR = (
 
 _MOTION_SENSOR_CHAR_NAMES = frozenset({'MOTION_DETECTED', 'OCCUPANCY_DETECTED'})
 
+_SENSOR_NODE_DEF_HUMID = 'HKHubSensor'
+_SENSOR_NODE_DEF_DRY = 'HKHubSensorDry'
+_SENSOR_NODE_DEF_MOTION = 'HKHubMotionSensor'
+
+
+def expected_sensor_nodedef(role: str, char_bindings: Any) -> str:
+    """Pick IoX nodedef from HAP role and per-aid characteristic bindings."""
+    r = str(role or 'sensor').strip().lower()
+    if r == 'motion_sensor':
+        return _SENSOR_NODE_DEF_MOTION
+    bindings = char_bindings if isinstance(char_bindings, dict) else {}
+    if 'RELATIVE_HUMIDITY' in bindings:
+        return _SENSOR_NODE_DEF_HUMID
+    return _SENSOR_NODE_DEF_DRY
+
+
+def sensor_char_bindings_for_accessory(aid: int, acc: Any) -> Dict[str, Dict[str, int]]:
+    """Per-aid sensor characteristic bindings from a HAP accessory tree."""
+    return _bind_accessory_chars(int(aid), acc, _CHAR_BINDINGS_SENSOR)
+
 
 def _service_uuid(svc: Any) -> str:
     raw = getattr(svc, 'type', '') or ''
@@ -295,7 +315,7 @@ def classify_sensor_aids(
                     {
                         'aid': aid,
                         'role': 'motion_sensor',
-                        'node_def_id': 'HKHubSensor',
+                        'node_def_id': expected_sensor_nodedef('motion_sensor', motion_bindings),
                         'service_iid': 0,
                         'char_bindings': motion_bindings,
                         'accessory_name': acc_name,
@@ -308,7 +328,7 @@ def classify_sensor_aids(
                 {
                     'aid': aid,
                     'role': 'sensor',
-                    'node_def_id': 'HKHubSensor',
+                    'node_def_id': expected_sensor_nodedef('sensor', bindings),
                     'service_iid': 0,
                     'char_bindings': bindings,
                     'accessory_name': acc_name,

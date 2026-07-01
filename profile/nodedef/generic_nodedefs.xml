@@ -109,4 +109,33 @@
       </accepts>
     </cmds>
   </nodeDef>
+  <nodeDef id="HKHubSensorDry" nls="hksensor">
+    <editors />
+    <sts>
+      <st id="ST" editor="I_TEMP_F" />
+      <st id="GV1" editor="I_TSTAT_OCC" />
+      <st id="GV2" editor="BOOL" />
+      <st id="BATLVL" editor="I_BATTERY_PCT" />
+      <st id="BATLOW" editor="BOOL" />
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="QUERY" />
+      </accepts>
+    </cmds>
+  </nodeDef>
+  <nodeDef id="HKHubMotionSensor" nls="hksensor">
+    <editors />
+    <sts>
+      <st id="ST" editor="I_TEMP_F" />
+      <st id="GV1" editor="I_TSTAT_OCC" />
+      <st id="GV2" editor="BOOL" />
+      <st id="CLIHUM" editor="I_HUMIDITY" />
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="QUERY" />
+      </accepts>
+    </cmds>
+  </nodeDef>
 </nodeDefs>

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-06-25
+
+Edition tags: **(Professional)** = Professional store zip only.
+
+Beta follow-up (Ecobee thermostats with **Professional generic nodes**) — issues **#1**, **#3**, **#4**:
+
+| Report | Symptom | Fixed in 2.0.4 |
+|--------|---------|----------------|
+| **#1** | Room sensors without humidity hardware show **0%** humidity | **Yes** — `HKHubSensorDry` nodedef (no `CLIHUM` driver); humid room sensors keep `HKHubSensor` |
+| **#3** | Main Floor room sensors stale 15+ min after restart | **Yes** — one HAP snapshot per device, debounced startup refresh, periodic refresh by `device_id` |
+| **#4** | Thermostat QUERY does not refresh room sensors | **Yes** — thermostat QUERY runs device-scoped refresh for thermostat **and** all child sensors |
+
+### Fixed
+
+- **(Professional)** **Sensor nodedef split:** `HKHubSensor` (humid room), `HKHubSensorDry` (no HAP humidity hardware), `HKHubMotionSensor` (built-in motion; no battery drivers). Selection uses HAP `char_bindings` at discovery (mirrors ecobee `EcobeeSensorF` / `EcobeeSensorHF` pattern).
+- **(Professional)** **Device-scoped refresh:** `refresh_device_generic_nodes()` — one `hub_snapshot_values()` per thermostat device on startup (debounced), sensor/thermostat QUERY, and periodic longPoll refresh.
+- **(Professional)** **Deferred driver reporting:** sensor refresh uses `apply_driver_schema(report=True)` instead of raw `reportDrivers()`, so undeferred humidity/battery values are not overwritten with schema zeros.
+
+### Changed
+
+- **(Professional)** **Upgrade / migration:** On first start after updating to 2.0.4, existing sensor nodes with the wrong nodedef are **automatically deleted and re-added at the same address** (no re-pairing; no manual IoX delete). Log: `Recreating sensor IoX node …`. Dry room sensors lose spurious `CLIHUM`; motion children lose spurious `BATLVL`/`BATLOW`. Node names and addresses are preserved; programs keyed by address should be unaffected.
+- **(Standard + Professional)** Version **2.0.4** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.3] - 2026-06-25
 
 Edition tags: **(Standard)** = Standard store zip only; **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

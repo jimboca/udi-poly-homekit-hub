@@ -479,7 +479,7 @@ def test_apply_driver_schema_skips_deferred_zeros():
         'Kitchen',
         device_id='aa:bb:cc:dd:ee:ff',
         aid=3,
-        char_bindings={},
+        char_bindings={'RELATIVE_HUMIDITY': {'iid': 1, 'aid': 3}},
         role='sensor',
     )
     node.setDriver = MagicMock()
@@ -488,6 +488,55 @@ def test_apply_driver_schema_skips_deferred_zeros():
     assert 'ST' in reported
     assert 'CLIHUM' not in reported
     assert 'BATLVL' not in reported
+
+
+def test_dry_sensor_schema_omits_clihum():
+    schema = SensorNode._drivers_for_role('sensor', {})
+    keys = {s['driver'] for s in schema}
+    assert 'CLIHUM' not in keys
+    assert 'BATLVL' in keys
+
+
+def test_sensor_driver_schema_stale_wrong_nodedef():
+    c = _bare_controller()
+    c.poly = MagicMock()
+    c.poly.db_getNodeDrivers.return_value = [
+        {'driver': 'ST', 'value': 70, 'uom': 17, 'name': 'Temperature'},
+        {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Occupancy'},
+        {'driver': 'GV2', 'value': 1, 'uom': 2, 'name': 'Responding'},
+        {'driver': 'BATLVL', 'value': 90, 'uom': 51, 'name': 'Battery Level'},
+        {'driver': 'BATLOW', 'value': 0, 'uom': 2, 'name': 'Battery Low'},
+    ]
+    node = MagicMock(
+        role='sensor',
+        char_bindings={},
+        id='HKHubSensor',
+        address='gsensoraddr02',
+    )
+    assert c._sensor_driver_schema_stale(node) is True
+
+
+def test_refresh_device_generic_nodes_one_snapshot():
+    c = _bare_controller()
+    c.hub_snapshot_values = MagicMock(
+        return_value=[
+            {'aid': 2, 'characteristic': 'CurrentTemperature', 'value': 22.0},
+            {'aid': 3, 'characteristic': 'CurrentTemperature', 'value': 21.0},
+        ]
+    )
+    therm = MagicMock(device_id='aa:bb:cc:dd:ee:ff', role='', id='HKHubEcobeeThermostat')
+    sensor = MagicMock(
+        device_id='aa:bb:cc:dd:ee:ff',
+        role='sensor',
+        id='HKHubSensorDry',
+        aid=3,
+    )
+    sensor.apply_driver_schema = MagicMock()
+    other = MagicMock(device_id='11:22:33:44:55:66', role='sensor', id='HKHubSensorDry', aid=1)
+    c._generic_nodes = {'t': therm, 's': sensor, 'o': other}
+    c.refresh_device_generic_nodes('aa:bb:cc:dd:ee:ff')
+    c.hub_snapshot_values.assert_called_once_with('aa:bb:cc:dd:ee:ff')
+    sensor.apply_driver_schema.assert_called()
 
 
 def test_reuse_existing_sensor_node_report_only_when_stale():

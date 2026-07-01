@@ -116,6 +116,10 @@ class ThermostatNode(Node):
 
     def query(self, cmd=None):
         del cmd
+        refresh_device = getattr(self.controller, 'refresh_device_generic_nodes', None)
+        if callable(refresh_device):
+            refresh_device(self.device_id)
+            return
         refresh = getattr(self.controller, 'refresh_generic_node', None)
         if callable(refresh):
             refresh(self)

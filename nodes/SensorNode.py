@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING, Any, Dict, Set
 from udi_interface import Node
 
 import homekit_hub.hap_apply as hap_apply
+from homekit_hub.device_classifier import expected_sensor_nodedef
 from hub_node_funcs import get_valid_node_name, hap_event_matches_node
 
 if TYPE_CHECKING:
     from .Controller import Controller
 
-_DEFERRED_SENSOR_DRIVERS = frozenset({'CLIHUM', 'BATLVL', 'BATLOW'})
+_DEFERRED_DRY_SENSOR_DRIVERS = frozenset({'BATLVL', 'BATLOW'})
+_DEFERRED_HUMID_SENSOR_DRIVERS = frozenset({'CLIHUM', 'BATLVL', 'BATLOW'})
 _DEFERRED_MOTION_DRIVERS = frozenset({'CLIHUM'})
 
 
@@ -32,6 +34,7 @@ class SensorNode(Node):
         aid: int,
         char_bindings: Dict[str, Dict[str, int]],
         role: str = 'sensor',
+        node_def_id: str | None = None,
     ):
         self.controller = controller
         self.device_id = str(device_id).strip().lower()
@@ -42,8 +45,11 @@ class SensorNode(Node):
         self.address = str(address)
         self.primary = str(primary_addr)
         self._driver_seen: Set[str] = set()
+        self.id = str(
+            node_def_id or expected_sensor_nodedef(self.role, self.char_bindings)
+        )
         nm = get_valid_node_name(name) or 'HK Sensor'
-        schema = self._drivers_for_role(self.role)
+        schema = self._drivers_for_role(self.role, self.char_bindings)
         super().__init__(controller.poly, primary_addr, address, nm)
         self.name = nm
         self.drivers = self._driver_schema_from_db(controller.poly, address, schema)
@@ -54,14 +60,19 @@ class SensorNode(Node):
         return getattr(self, 'poly', None) or self.controller.poly
 
     @staticmethod
-    def _deferred_drivers(role: str) -> frozenset[str]:
+    def _deferred_drivers_for(role: str, char_bindings: Dict[str, Any] | None) -> frozenset[str]:
         r = str(role or 'sensor').strip().lower()
         if r == 'motion_sensor':
             return _DEFERRED_MOTION_DRIVERS
-        return _DEFERRED_SENSOR_DRIVERS
+        if 'RELATIVE_HUMIDITY' in (char_bindings or {}):
+            return _DEFERRED_HUMID_SENSOR_DRIVERS
+        return _DEFERRED_DRY_SENSOR_DRIVERS
+
+    def _deferred_drivers(self) -> frozenset[str]:
+        return self._deferred_drivers_for(self.role, self.char_bindings)
 
     def _seed_driver_seen_from_values(self) -> None:
-        deferred = self._deferred_drivers(self.role)
+        deferred = self._deferred_drivers()
         for spec in self.drivers:
             drv = str(spec.get('driver') or '')
             if drv not in deferred:
@@ -72,12 +83,12 @@ class SensorNode(Node):
 
     def apply_driver_schema(self, *, report: bool = False) -> None:
         """Re-apply nodedef driver uoms/names; keep PG3 values but not stale uoms."""
-        schema = self._drivers_for_role(self.role)
+        schema = self._drivers_for_role(self.role, self.char_bindings)
         self.drivers = self._driver_schema_from_db(self._poly(), self.address, schema)
         self._seed_driver_seen_from_values()
         if not report:
             return
-        deferred = self._deferred_drivers(self.role)
+        deferred = self._deferred_drivers()
         for spec in self.drivers:
             drv = str(spec.get('driver') or '')
             if drv in deferred and drv not in self._driver_seen:
@@ -112,9 +123,10 @@ class SensorNode(Node):
         return merged
 
     @staticmethod
-    def _drivers_for_role(role: str) -> list:
+    def _drivers_for_role(role: str, char_bindings: Dict[str, Any] | None = None) -> list:
         """IoX driver list — aligned with udi-poly-ecobee EcobeeSensorF/HF where applicable."""
         r = str(role or 'sensor').strip().lower()
+        bindings = char_bindings if isinstance(char_bindings, dict) else {}
         drivers = [
             {'driver': 'ST', 'value': 0, 'uom': 17, 'name': 'Temperature'},
             {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Occupancy'},
@@ -122,10 +134,17 @@ class SensorNode(Node):
         ]
         if r == 'motion_sensor':
             drivers.append({'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'})
-        else:
+        elif 'RELATIVE_HUMIDITY' in bindings:
             drivers.extend(
                 [
                     {'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'},
+                    {'driver': 'BATLVL', 'value': 0, 'uom': 51, 'name': 'Battery Level'},
+                    {'driver': 'BATLOW', 'value': 0, 'uom': 2, 'name': 'Battery Low'},
+                ]
+            )
+        else:
+            drivers.extend(
+                [
                     {'driver': 'BATLVL', 'value': 0, 'uom': 51, 'name': 'Battery Level'},
                     {'driver': 'BATLOW', 'value': 0, 'uom': 2, 'name': 'Battery Low'},
                 ]
@@ -152,6 +171,10 @@ class SensorNode(Node):
 
     def query(self, cmd=None):
         del cmd
+        schedule = getattr(self.controller, '_schedule_refresh_device_generic_nodes', None)
+        if callable(schedule):
+            schedule(self.device_id)
+            return
         refresh = getattr(self.controller, 'refresh_generic_node', None)
         if callable(refresh):
             refresh(self)
@@ -159,6 +182,18 @@ class SensorNode(Node):
             self.reportDrivers()
 
     commands = {'QUERY': query}
+
+
+class DrySensorNode(SensorNode):
+    """Room sensor without HAP relative-humidity hardware."""
+
+    id = 'HKHubSensorDry'
+
+
+class MotionSensorNode(SensorNode):
+    """Built-in thermostat motion child (ambient mirror; no battery)."""
+
+    id = 'HKHubMotionSensor'
 
 
 class BinarySensorNode(SensorNode):
