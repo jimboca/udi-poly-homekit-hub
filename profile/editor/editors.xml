@@ -31,6 +31,9 @@
   <editor id="I_CLISPC_F">
     <range uom="17" min="32" max="90" step="1" prec="0"/>
   </editor>
+  <editor id="I_SETTEMP_F">
+    <range uom="14" min="0" max="10" step="1" prec="0" />
+  </editor>
   <editor id="I_TSTAT_MODE">
     <range uom="67" subset="0-4" />
   </editor>
@@ -53,6 +56,13 @@
     <range uom="25" subset="0-2" nls="EN_PM2" />
   </editor>
   <editor id="I_TSTAT_ECO_MODE">
+    <range uom="25" subset="0-15" nls="HKCLIMATE" />
+  </editor>
+  <!-- Ecobee HomeKit comfort editors (static subset; matches EcobeeHKF nodedef shape). -->
+  <editor id="CTA_HK">
+    <range uom="25" subset="0-15" nls="HKCLIMATE" />
+  </editor>
+  <editor id="CT_HK">
     <range uom="25" subset="0-15" nls="HKCLIMATE" />
   </editor>
   <editor id="I_ONOFF">

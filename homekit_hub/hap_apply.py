@@ -528,11 +528,46 @@ def _fahrenheit_hap_c_bins(target_f: int) -> tuple[list[float], list[float]]:
     return floor_bins, tof_bins
 
 
+def _fahrenheit_trunc_display_f(c: float) -> int:
+    """Truncated exact °F display used by Ecobee / Honeywell HomeKit thermostats."""
+    return int(c * 1.8 + 32)
+
+
+def _fahrenheit_hap_c_bins_min_step(target_f: int, min_step: float) -> list[float]:
+    """HAP °C values on *min_step* grid whose truncated °F display equals *target_f*."""
+    t = int(target_f)
+    center = (t - 32) / 1.8
+    k0 = int(round(center / min_step))
+    hits: list[float] = []
+    for dk in range(-12, 13):
+        c = round((k0 + dk) * min_step, 10)
+        if _fahrenheit_trunc_display_f(c) == t:
+            hits.append(c)
+    return hits
+
+
+def _normalize_hap_min_step(hap_min_step: Optional[float]) -> Optional[float]:
+    if hap_min_step is None:
+        return None
+    try:
+        ms = float(hap_min_step)
+    except (TypeError, ValueError):
+        return None
+    return ms if ms > 0 else None
+
+
+def _quantize_hap_celsius(c: float, min_step: Optional[float]) -> float:
+    if min_step is None:
+        return round(float(c) * 10.0) / 10.0
+    return round(round(float(c) / min_step) * min_step, 10)
+
+
 def iox_temp_to_hap_celsius(
     node: 'HomeKitThermostat',
     driver_val: float,
     *,
     fahrenheit_wire_bias: Optional[str] = None,
+    hap_min_step: Optional[float] = None,
 ) -> float:
     """IoX thermostat temp driver → HAP **celsius** for ``put_characteristics``.
 
@@ -543,13 +578,21 @@ def iox_temp_to_hap_celsius(
     0.1 °C bin whose truncated display equals the target (e.g. **76 °F → 24.5 °C**, not 24.2 °C
     which displays **75**). Fall back to the lowest ``toF``-compatible bin when needed. ``high``
     keeps the highest ``toF`` bin for troubleshooting.
+
+    When *hap_min_step* is set (e.g. Honeywell T10 ``TEMPERATURE_TARGET`` uses **0.5 °C**), only
+    values on that grid are emitted — 0.1 °C Ecobee bins are rejected by HAP (-70410).
     """
+    min_step = _normalize_hap_min_step(hap_min_step)
+
     if node.use_celsius:
-        c = float(driver_val)
-        return round(float(c) * 10.0) / 10.0
+        return _quantize_hap_celsius(float(driver_val), min_step)
 
     if fahrenheit_wire_bias in ('low', 'high'):
         t = int(round(float(driver_val)))
+        if min_step is not None:
+            step_bins = _fahrenheit_hap_c_bins_min_step(t, min_step)
+            if step_bins:
+                return min(step_bins) if fahrenheit_wire_bias == 'low' else max(step_bins)
         floor_bins, tof_bins = _fahrenheit_hap_c_bins(t)
         if fahrenheit_wire_bias == 'low':
             if floor_bins:
@@ -563,7 +606,7 @@ def iox_temp_to_hap_celsius(
                 return max(floor_bins)
 
     c = _driver_st_to_hap_c(node, driver_val)
-    return round(float(c) * 10.0) / 10.0
+    return _quantize_hap_celsius(c, min_step)
 
 
 def climd_to_hap_target_mode(climd: int) -> int:

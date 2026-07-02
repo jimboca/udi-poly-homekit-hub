@@ -76,7 +76,7 @@ def test_clisph_writes_bound_aid_iid_for_honeywell():
     node = _make_node(
         ThermostatNode,
         char_bindings={
-            'TARGET_TEMPERATURE': {'aid': 2, 'iid': 12},
+            'TARGET_TEMPERATURE': {'aid': 2, 'iid': 12, 'minStep': 0.5},
             'HEATING_THRESHOLD': {'aid': 2, 'iid': 13},
             'COOLING_THRESHOLD': {'aid': 2, 'iid': 14},
         },
@@ -87,8 +87,26 @@ def test_clisph_writes_bound_aid_iid_for_honeywell():
     assert args[0] == 'aa:bb:cc:dd:ee:ff'
     assert args[1] == 2
     assert args[2] == 12
+    assert args[3] == 21.5
     node.controller.hub_write.assert_not_called()
     assert node.getDriver('CLISPH') == 70
+
+
+def test_clisph_writes_bound_aid_iid_for_honeywell_without_minstep_metadata():
+    """Legacy bindings without minStep still route to the correct characteristic."""
+    node = _make_node(
+        ThermostatNode,
+        char_bindings={
+            'TARGET_TEMPERATURE': {'aid': 2, 'iid': 12},
+            'HEATING_THRESHOLD': {'aid': 2, 'iid': 13},
+            'COOLING_THRESHOLD': {'aid': 2, 'iid': 14},
+        },
+    )
+    node.cmd_set_pf({'cmd': 'CLISPH', 'value': 70})
+    node.controller.hub_write_by_iid.assert_called_once()
+    args = node.controller.hub_write_by_iid.call_args[0]
+    assert args[2] == 12
+    assert args[3] == 21.2
 
 
 def test_ecobee_clisph_writes_both_thresholds():
@@ -104,3 +122,28 @@ def test_ecobee_clisph_writes_both_thresholds():
     assert hap_apply.hap_name_heating_threshold() in {w[0] for w in writes}
     assert hap_apply.hap_name_cooling_threshold() in {w[0] for w in writes}
     assert node.getDriver('CLISPH') == 70
+
+
+def test_brt_increments_heat_setpoint_via_target_temperature():
+    node = _make_node(
+        ThermostatNode,
+        char_bindings={
+            'TARGET_TEMPERATURE': {'aid': 2, 'iid': 12},
+            'HEATING_THRESHOLD': {'aid': 2, 'iid': 13},
+            'COOLING_THRESHOLD': {'aid': 2, 'iid': 14},
+        },
+    )
+    node.set_point({'cmd': 'BRT', 'value': 2})
+    node.controller.hub_write_by_iid.assert_called_once()
+    assert node.getDriver('CLISPH') == 70
+
+
+def test_dim_decrements_heat_setpoint():
+    node = _make_node(
+        ThermostatNode,
+        char_bindings={
+            'TARGET_TEMPERATURE': {'aid': 2, 'iid': 12},
+        },
+    )
+    node.set_point({'cmd': 'DIM', 'value': 1})
+    assert node.getDriver('CLISPH') == 67

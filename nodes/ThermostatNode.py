@@ -135,6 +135,30 @@ class ThermostatNode(Node):
         hit = bindings.get(str(name or '').strip().upper())
         return hit if isinstance(hit, dict) else None
 
+    def _hap_min_step_for_hap_name(self, hap_name: str) -> float | None:
+        binding_key = self._HAP_WRITE_BINDING_KEY.get(hap_name)
+        if not binding_key:
+            return None
+        ref = self._char_binding_ref(binding_key)
+        if not ref:
+            return None
+        ms = ref.get('minStep')
+        if ms is None:
+            return None
+        try:
+            step = float(ms)
+        except (TypeError, ValueError):
+            return None
+        return step if step > 0 else None
+
+    def _iox_temp_to_hap_wire(self, driver_val: float, hap_name: str) -> float:
+        return hap_apply.iox_temp_to_hap_celsius(
+            self,
+            driver_val,
+            fahrenheit_wire_bias='low',
+            hap_min_step=self._hap_min_step_for_hap_name(hap_name),
+        )
+
     def _after_setpoint_write(self, cmd: dict) -> None:
         """Hook after a successful CLISPH/CLISPC hub write (Ecobee: schedule hold)."""
 
@@ -194,8 +218,8 @@ class ThermostatNode(Node):
                 cool = float(self.getDriver('CLISPC'))
                 if cool < heat + span:
                     cool = heat + span
-                hv = hap_apply.iox_temp_to_hap_celsius(self, heat, fahrenheit_wire_bias='low')
-                cv = hap_apply.iox_temp_to_hap_celsius(self, cool, fahrenheit_wire_bias='low')
+                hv = self._iox_temp_to_hap_wire(heat, hap_apply.hap_name_heating_threshold())
+                cv = self._iox_temp_to_hap_wire(cool, hap_apply.hap_name_cooling_threshold())
                 if self._hub_write(hap_apply.hap_name_heating_threshold(), hv) and self._hub_write(
                     hap_apply.hap_name_cooling_threshold(), cv
                 ):
@@ -204,7 +228,7 @@ class ThermostatNode(Node):
                     self._after_setpoint_write(cmd)
                 return
             c = self._hap_char_for_heat_driver_write()
-            v = hap_apply.iox_temp_to_hap_celsius(self, heat, fahrenheit_wire_bias='low')
+            v = self._iox_temp_to_hap_wire(heat, c)
             if self._hub_write(c, v):
                 self.set_clisph(heat)
                 self._after_setpoint_write(cmd)
@@ -216,8 +240,8 @@ class ThermostatNode(Node):
                 heat = float(self.getDriver('CLISPH'))
                 if heat > cool - span:
                     heat = cool - span
-                hv = hap_apply.iox_temp_to_hap_celsius(self, heat, fahrenheit_wire_bias='low')
-                cv = hap_apply.iox_temp_to_hap_celsius(self, cool, fahrenheit_wire_bias='low')
+                hv = self._iox_temp_to_hap_wire(heat, hap_apply.hap_name_heating_threshold())
+                cv = self._iox_temp_to_hap_wire(cool, hap_apply.hap_name_cooling_threshold())
                 if self._hub_write(hap_apply.hap_name_heating_threshold(), hv) and self._hub_write(
                     hap_apply.hap_name_cooling_threshold(), cv
                 ):
@@ -226,7 +250,7 @@ class ThermostatNode(Node):
                     self._after_setpoint_write(cmd)
                 return
             c = self._hap_char_for_cool_driver_write()
-            v = hap_apply.iox_temp_to_hap_celsius(self, cool, fahrenheit_wire_bias='low')
+            v = self._iox_temp_to_hap_wire(cool, c)
             if self._hub_write(c, v):
                 self.set_clispc(cool)
                 self._after_setpoint_write(cmd)
@@ -244,6 +268,43 @@ class ThermostatNode(Node):
         if self._hub_write('TARGET_RELATIVE_HUMIDITY', int(cmd['value'])):
             self.set_driver_safe('GV1', int(cmd['value']))
 
+    def set_point(self, cmd):
+        step = float(cmd.get('value', 1))
+        if cmd.get('cmd') == 'DIM':
+            step = -step
+        mode = self._climd_write_mode()
+        if mode == 0:
+            return
+        span = self._heat_cool_min_span()
+        if mode == 3:
+            heat = float(self.getDriver('CLISPH')) + step
+            cool = float(self.getDriver('CLISPC')) + step
+            if cool < heat + span:
+                cool = heat + span
+            hv = self._iox_temp_to_hap_wire(heat, hap_apply.hap_name_heating_threshold())
+            cv = self._iox_temp_to_hap_wire(cool, hap_apply.hap_name_cooling_threshold())
+            if self._hub_write(hap_apply.hap_name_heating_threshold(), hv) and self._hub_write(
+                hap_apply.hap_name_cooling_threshold(), cv
+            ):
+                self.set_clisph(heat)
+                self.set_clispc(cool)
+                self._after_setpoint_write(cmd)
+            return
+        if mode in (1, 4):
+            nxt = float(self.getDriver('CLISPH')) + step
+            c = self._hap_char_for_heat_driver_write()
+            v = self._iox_temp_to_hap_wire(nxt, c)
+            if self._hub_write(c, v):
+                self.set_clisph(nxt)
+                self._after_setpoint_write(cmd)
+            return
+        nxt = float(self.getDriver('CLISPC')) + step
+        c = self._hap_char_for_cool_driver_write()
+        v = self._iox_temp_to_hap_wire(nxt, c)
+        if self._hub_write(c, v):
+            self.set_clispc(nxt)
+            self._after_setpoint_write(cmd)
+
     commands = {
         'QUERY': query,
         'CLISPH': cmd_set_pf,
@@ -251,6 +312,8 @@ class ThermostatNode(Node):
         'CLIFS': cmd_set_pf,
         'CLIMD': cmd_set_mode,
         'GV1': cmd_set_humidity,
+        'BRT': set_point,
+        'DIM': set_point,
     }
     drivers = [
         {'driver': 'ST', 'value': 0, 'uom': 17, 'name': 'Temperature'},

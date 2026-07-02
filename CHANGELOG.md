@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-06-25
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+Beta follow-up (Honeywell T10 heat setpoint rejected by HAP):
+
+| Issue | Symptom | Fixed in 2.0.6 |
+|-------|---------|----------------|
+| Heat setpoint on T10 | `CLISPH` 70°F → HAP write `21.2`°C fails; stat stays at 68°F | **Yes** — quantize to characteristic `minStep` (0.5°C); 70°F writes **21.5°C** |
+| Program command picker | HomeKit thermostats missing from Admin Console program actions | **Yes** — nodedef `accepts` aligned with Ecobee HomeKit template (`BRT`/`DIM`, Ecobee `GV3` editors) |
+
+### Fixed
+
+- **(Professional)** **Honeywell T10 `minStep` setpoints:** `TEMPERATURE_TARGET` uses **0.5°C** steps; Ecobee-oriented 0.1°C wire values (e.g. 70°F → 21.2°C) are rejected by HAP (-70410). Char bindings now carry HAP `minStep`; setpoint writes quantize to the bound characteristic grid (70°F → **21.5°C**).
+- **(Professional)** **HAP write diagnostics:** `hub_write_by_iid` logs the bridge error string (status / message) on failure.
+
+### Added
+
+- **(Professional)** **Thermostat program commands:** `HKHubThermostat` and `HKHubEcobeeThermostat` nodedefs accept `BRT`/`DIM` (optional step editor `I_SETTEMP_F`); `ThermostatNode.set_point()` implements increment/decrement.
+- **(Professional)** **Ecobee program profile:** `HKHubEcobeeThermostat` `GV3` status/command editors (`CTA_HK`, `CT_HK`) for Admin Console program picker parity with udi-poly-ecobee HomeKit template.
+- **(Professional)** **Tests:** Honeywell `minStep` 0.5°C conversion (70°F → 21.5°C); setpoint write asserts wire value when `minStep` is in bindings.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.6** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.5] - 2026-06-25
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

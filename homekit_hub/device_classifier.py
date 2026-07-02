@@ -169,18 +169,29 @@ def _binding_key_for_label(label: str) -> Optional[str]:
     return _CHAR_ALIAS_TO_BINDING.get(u)
 
 
-def _find_char(aid: int, svc: Any, *names: str) -> Optional[Dict[str, int]]:
+def _char_binding_ref(aid: int, ch: Any) -> Dict[str, Any]:
+    ref: Dict[str, Any] = {'aid': int(aid), 'iid': int(ch.iid)}
+    ms = getattr(ch, 'minStep', None)
+    if ms is not None:
+        try:
+            ref['minStep'] = float(ms)
+        except (TypeError, ValueError):
+            pass
+    return ref
+
+
+def _find_char(aid: int, svc: Any, *names: str) -> Optional[Dict[str, Any]]:
     want = {n.upper() for n in names}
     for ch in getattr(svc, 'characteristics', None) or []:
         label = (_char_name_for_type(getattr(ch, 'type', '')) or '').upper()
         binding_key = _binding_key_for_label(label) or label
         nu = normalize_hap_uuid(getattr(ch, 'type', ''))
         if binding_key in want or label in want or any(w in label for w in want):
-            return {'aid': int(aid), 'iid': int(ch.iid)}
+            return _char_binding_ref(aid, ch)
         if 'VENDOR_ECOBEE' in label and any('VENDOR_ECOBEE' in w for w in want):
-            return {'aid': int(aid), 'iid': int(ch.iid)}
+            return _char_binding_ref(aid, ch)
         if nu == _ECOBEE_CURRENT_MODE_UUID and 'VENDOR_ECOBEE_CURRENT_MODE' in want:
-            return {'aid': int(aid), 'iid': int(ch.iid)}
+            return _char_binding_ref(aid, ch)
     return None
 
 
@@ -222,7 +233,7 @@ def _bind_service_chars(aid: int, svc: Any, names: tuple[str, ...]) -> Dict[str,
             label = (_char_name_for_type(getattr(ch, 'type', '')) or '').upper()
             binding_key = _binding_key_for_label(label)
             if binding_key == name.upper():
-                out[name] = {'aid': int(aid), 'iid': int(ch.iid)}
+                out[name] = _char_binding_ref(aid, ch)
                 break
     return out
 

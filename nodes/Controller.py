@@ -2359,7 +2359,17 @@ class Controller(Node):
         )
         try:
             err = fut.result(timeout=30)
-            return err is None
+            if err:
+                LOGGER.info(
+                    'hub_write_by_iid failed for %s aid=%s iid=%s value=%r: %s',
+                    device_id,
+                    aid,
+                    iid,
+                    value,
+                    err,
+                )
+                return False
+            return True
         except Exception:
             LOGGER.exception(
                 'hub_write_by_iid failed for %s aid=%s iid=%s', device_id, aid, iid

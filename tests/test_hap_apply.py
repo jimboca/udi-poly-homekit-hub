@@ -134,6 +134,15 @@ def test_apply_temperature_target_cool_sets_cool_only():
     node.set_clisph.assert_not_called()
 
 
+def test_iox_temp_to_hap_honeywell_min_step_70f():
+    """Honeywell T10 TEMPERATURE_TARGET minStep 0.5 — 70 °F must wire as 21.5 °C, not 21.2."""
+    node = MagicMock()
+    node.use_celsius = False
+    assert iox_temp_to_hap_celsius(node, 70, fahrenheit_wire_bias='low', hap_min_step=0.5) == 21.5
+    assert iox_temp_to_hap_celsius(node, 68, fahrenheit_wire_bias='low', hap_min_step=0.5) == 20.0
+    assert iox_temp_to_hap_celsius(node, 72, fahrenheit_wire_bias='low', hap_min_step=0.5) == 22.5
+
+
 def test_iox_temp_to_hap_fahrenheit_low_bias_ecobee_display_parity():
     """Low bias: lowest 0.1 °C bin whose Ecobee UI ``int(C*1.8+32)`` matches target °F."""
     node = MagicMock()

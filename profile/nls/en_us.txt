@@ -82,6 +82,8 @@ CMD-hktherm-CLISPC-NAME = Cool setpoint
 CMD-hktherm-CLIMD-NAME = Mode
 CMD-hktherm-CLIFS-NAME = Fan mode
 CMD-hktherm-GV1-NAME = Humidity setpoint
+CMD-hktherm-BRT-NAME = Setpoint Up
+CMD-hktherm-DIM-NAME = Setpoint Down
 CMD-hktherm-QUERY-NAME = Query
 
 ST-hkecoth-ST-NAME = Temperature
@@ -102,6 +104,8 @@ CMD-hkecoth-CLIFS-NAME = Fan mode
 CMD-hkecoth-GV1-NAME = Humidity setpoint
 CMD-hkecoth-GV3-NAME = Comfort
 CMD-hkecoth-CLISMD-NAME = Schedule mode
+CMD-hkecoth-BRT-NAME = Setpoint Up
+CMD-hkecoth-DIM-NAME = Setpoint Down
 CMD-hkecoth-QUERY-NAME = Query
 
 ST-hklight-ST-NAME = Status

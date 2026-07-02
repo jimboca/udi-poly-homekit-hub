@@ -19,6 +19,8 @@
         <cmd id="CLIMD"><p id="" editor="I_TSTAT_MODE" init="CLIMD" /></cmd>
         <cmd id="CLIFS"><p id="" editor="I_TSTAT_FAN_MODE" init="CLIFS" /></cmd>
         <cmd id="GV1"><p id="" editor="I_TSTAT_HUM_SET" init="GV1" /></cmd>
+        <cmd id="BRT"><p id="" editor="I_SETTEMP_F" optional="T" /></cmd>
+        <cmd id="DIM"><p id="" editor="I_SETTEMP_F" optional="T" /></cmd>
         <cmd id="QUERY" />
       </accepts>
     </cmds>
@@ -36,7 +38,7 @@
       <st id="CLIFRS" editor="I_TSTAT_FAN_STATE" />
       <st id="GV1" editor="I_TSTAT_HUM_SET" />
       <st id="CLISMD" editor="I_TSTAT_PROG_MODE2" />
-      <st id="GV3" editor="I_TSTAT_ECO_MODE" />
+      <st id="GV3" editor="CTA_HK" />
     </sts>
     <cmds>
       <accepts>
@@ -46,7 +48,9 @@
         <cmd id="CLIFS"><p id="" editor="I_TSTAT_FAN_MODE" init="CLIFS" /></cmd>
         <cmd id="GV1"><p id="" editor="I_TSTAT_HUM_SET" init="GV1" /></cmd>
         <cmd id="CLISMD"><p id="" editor="I_TSTAT_PROG_MODE2" init="CLISMD" /></cmd>
-        <cmd id="GV3"><p id="" editor="I_TSTAT_ECO_MODE" init="GV3" /></cmd>
+        <cmd id="GV3"><p id="" editor="CT_HK" init="GV3" /></cmd>
+        <cmd id="BRT"><p id="" editor="I_SETTEMP_F" optional="T" /></cmd>
+        <cmd id="DIM"><p id="" editor="I_SETTEMP_F" optional="T" /></cmd>
         <cmd id="QUERY" />
       </accepts>
     </cmds>
