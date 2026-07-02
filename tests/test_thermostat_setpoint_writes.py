@@ -93,7 +93,7 @@ def test_clisph_writes_bound_aid_iid_for_honeywell():
 
 
 def test_clisph_writes_bound_aid_iid_for_honeywell_without_minstep_metadata():
-    """Legacy bindings without minStep still route to the correct characteristic."""
+    """Legacy bindings without minStep still quantize to T10 0.5 °C grid."""
     node = _make_node(
         ThermostatNode,
         char_bindings={
@@ -106,7 +106,25 @@ def test_clisph_writes_bound_aid_iid_for_honeywell_without_minstep_metadata():
     node.controller.hub_write_by_iid.assert_called_once()
     args = node.controller.hub_write_by_iid.call_args[0]
     assert args[2] == 12
-    assert args[3] == 21.2
+    assert args[3] == 21.5
+    node.cmd_set_pf({'cmd': 'CLISPH', 'value': 74})
+    assert node.controller.hub_write_by_iid.call_args[0][3] == 23.5
+
+
+def test_hap_setpoint_echo_guard_suppresses_one_degree_flip():
+    """Honeywell T10 may echo TEMPERATURE_TARGET ±1 °F right after a write."""
+    node = _make_node(
+        ThermostatNode,
+        char_bindings={
+            'TARGET_TEMPERATURE': {'aid': 2, 'iid': 38},
+        },
+    )
+    node.cmd_set_pf({'cmd': 'CLISPH', 'value': 74})
+    assert node.getDriver('CLISPH') == 74
+    node.on_hap_event(2, 38, 24.0, 'TEMPERATURE_TARGET')
+    assert node.getDriver('CLISPH') == 74
+    node.on_hap_event(2, 38, 23.5, 'TEMPERATURE_TARGET')
+    assert node.getDriver('CLISPH') == 74
 
 
 def test_ecobee_clisph_writes_both_thresholds():

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-06-25
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+Beta follow-up (Honeywell T10 program setpoint 74°F → 75°F display):
+
+| Issue | Symptom | Fixed in 2.0.7 |
+|-------|---------|----------------|
+| Heat setpoint readback | Program `CLISPH` 74°F writes correctly, then HAP echo flips IoX to **75°F** ~200 ms later | **Yes** — ignore ±1 °F `TEMPERATURE_TARGET` echoes for 3 s after a successful write |
+| Legacy `minStep` | Nodes paired before 2.0.6 could still wire Ecobee 0.1 °C bins (e.g. 74°F → 23.4°C) | **Yes** — `HKHubThermostat` falls back to **0.5°C** when binding omits `minStep` (74°F → **23.5°C**) |
+| °F read path | HAP °C converted with `toF()` round-trip at half-degree boundaries | **Yes** — truncated exact °F display (`int(C*1.8+32)`) on read, matching Honeywell/Ecobee UI |
+
+### Fixed
+
+- **(Professional)** **Honeywell T10 setpoint echo guard:** After a successful `CLISPH`/`CLISPC`/`BRT`/`DIM` write, suppress HAP `TEMPERATURE_TARGET` events that differ by ±1 °F from the value just written (T10 often reports 24.0 °C / 75 °F right after a 23.5 °C / 74 °F write).
+- **(Professional)** **`minStep` fallback:** `ThermostatNode` assumes **0.5°C** for `HKHubThermostat` `TARGET_TEMPERATURE` when char bindings lack `minStep` (stale nodes from before 2.0.6).
+- **(Professional)** **Truncated °F read path:** `driver_st_from_hap_celsius()` uses truncated exact °F for Fahrenheit thermostats (e.g. 22.5 °C → 72 °F, not 73 °F).
+
+### Added
+
+- **(Professional)** **Tests:** 74°F → 23.5°C with `minStep` 0.5; legacy binding fallback; echo guard; truncated read parity.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.7** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.6] - 2026-06-25
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

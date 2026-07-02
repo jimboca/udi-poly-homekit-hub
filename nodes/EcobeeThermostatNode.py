@@ -150,6 +150,7 @@ class EcobeeThermostatNode(ThermostatNode):
         self.set_clismd(hold_type)
 
     def _after_setpoint_write(self, cmd: dict) -> None:
+        super()._after_setpoint_write(cmd)
         self._mark_hold_active(cmd)
 
     def cmd_set_pf(self, cmd):

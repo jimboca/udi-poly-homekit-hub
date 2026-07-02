@@ -343,7 +343,9 @@ def hap_current_fan_state_to_clifrs(v: int) -> int:
 def driver_st_from_hap_celsius(use_celsius: bool, celsius: float) -> float:
     if use_celsius:
         return round(float(celsius) * 2) / 2
-    return float(toF(float(celsius)))
+    # Honeywell / Ecobee HomeKit UI uses truncated exact °F (``int(C * 1.8 + 32)``), not
+    # :func:`hub_node_funcs.toF` round-trip — e.g. 22.5 °C must read as 72 °F, not 73 °F.
+    return float(_fahrenheit_trunc_display_f(float(celsius)))
 
 
 def _driver_st_to_hap_c(node: 'HomeKitThermostat', driver_val: float) -> float:

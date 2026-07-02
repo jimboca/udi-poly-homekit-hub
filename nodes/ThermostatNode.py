@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, Dict
 
 from udi_interface import LOGGER, Node
 
 import homekit_hub.hap_apply as hap_apply
+from homekit_hub.char_map import normalize_characteristic_label
 from hub_node_funcs import get_valid_node_name, hap_event_matches_node, heat_cool_min_span_degrees
 
 if TYPE_CHECKING:
@@ -74,9 +76,75 @@ class ThermostatNode(Node):
         self.set_driver_safe('CLISPC', float(val))
 
     def apply_hub_characteristic(self, characteristic: str, value: Any) -> bool:
+        if self._hap_setpoint_guard_suppresses(characteristic, value):
+            return True
         return hap_apply.apply_characteristic_to_thermostat(
             self, characteristic, value, log=LOGGER
         )
+
+    def _setpoint_driver_for_characteristic(self, characteristic: str) -> str | None:
+        norm = normalize_characteristic_label(characteristic or '')
+        if 'HEATING_THRESHOLD' in norm or 'HEAT_TARGET' in norm:
+            return 'CLISPH'
+        if 'COOLING_THRESHOLD' in norm or 'COOL_TARGET' in norm:
+            return 'CLISPC'
+        if ('TARGET_TEMPERATURE' in norm or 'TEMPERATURE_TARGET' in norm) and 'THRESHOLD' not in norm:
+            mode = self._climd_write_mode()
+            if mode in (1, 4):
+                return 'CLISPH'
+            if mode == 2:
+                return 'CLISPC'
+        return None
+
+    def _hap_setpoint_guard_suppresses(self, characteristic: str, value: Any) -> bool:
+        """Drop ±1 °F HAP echoes right after a successful setpoint write (Honeywell T10)."""
+        guard = getattr(self, '_hap_setpoint_guard', None)
+        if not guard:
+            return False
+        driver, want_f, until = guard
+        if time.monotonic() > until:
+            self._hap_setpoint_guard = None
+            return False
+        target_driver = self._setpoint_driver_for_characteristic(characteristic)
+        if target_driver != driver:
+            return False
+        try:
+            incoming_f = float(
+                hap_apply.driver_st_from_hap_celsius(self.use_celsius, float(value))
+            )
+        except (TypeError, ValueError):
+            return False
+        if incoming_f != want_f and abs(incoming_f - want_f) <= 1.0:
+            LOGGER.debug(
+                'HomeKit %s: ignore HAP setpoint echo %s=%s (guarding %s=%s)',
+                self.address,
+                characteristic,
+                value,
+                driver,
+                want_f,
+            )
+            return True
+        return False
+
+    def _arm_setpoint_guard(self, driver: str, value_f: float) -> None:
+        self._hap_setpoint_guard = (str(driver), float(value_f), time.monotonic() + 3.0)
+
+    def _after_setpoint_write(self, cmd: dict) -> None:
+        """Hook after a successful CLISPH/CLISPC hub write (Ecobee: schedule hold)."""
+        driver = str(cmd.get('cmd', ''))
+        if driver == 'CLISPH':
+            guard_driver = 'CLISPH'
+        elif driver == 'CLISPC':
+            guard_driver = 'CLISPC'
+        elif driver in ('BRT', 'DIM'):
+            mode = self._climd_write_mode()
+            guard_driver = 'CLISPH' if mode in (1, 4) else 'CLISPC'
+        else:
+            return
+        try:
+            self._arm_setpoint_guard(guard_driver, float(self.getDriver(guard_driver)))
+        except (TypeError, ValueError):
+            pass
 
     def on_hap_event(self, aid: int, iid: int, value: Any, label: str) -> None:
         if not hap_event_matches_node(aid, iid, self):
@@ -140,16 +208,19 @@ class ThermostatNode(Node):
         if not binding_key:
             return None
         ref = self._char_binding_ref(binding_key)
-        if not ref:
-            return None
-        ms = ref.get('minStep')
-        if ms is None:
-            return None
-        try:
-            step = float(ms)
-        except (TypeError, ValueError):
-            return None
-        return step if step > 0 else None
+        if ref:
+            ms = ref.get('minStep')
+            if ms is not None:
+                try:
+                    step = float(ms)
+                except (TypeError, ValueError):
+                    step = 0.0
+                if step > 0:
+                    return step
+        # Stale bindings from before 2.0.6 may omit minStep; Honeywell T10 rejects 0.1 °C steps.
+        if binding_key == 'TARGET_TEMPERATURE' and str(getattr(self, 'id', '')) == 'HKHubThermostat':
+            return 0.5
+        return None
 
     def _iox_temp_to_hap_wire(self, driver_val: float, hap_name: str) -> float:
         return hap_apply.iox_temp_to_hap_celsius(
@@ -158,9 +229,6 @@ class ThermostatNode(Node):
             fahrenheit_wire_bias='low',
             hap_min_step=self._hap_min_step_for_hap_name(hap_name),
         )
-
-    def _after_setpoint_write(self, cmd: dict) -> None:
-        """Hook after a successful CLISPH/CLISPC hub write (Ecobee: schedule hold)."""
 
     def _hap_char_for_heat_driver_write(self) -> str:
         m = self._climd_write_mode()

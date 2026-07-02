@@ -6,6 +6,7 @@ from unittest.mock import ANY, MagicMock
 
 from homekit_hub.hap_apply import (
     ECOBEE_HK_COMFORT_TEMP,
+    driver_st_from_hap_celsius,
     apply_characteristic_to_binary_sensor,
     apply_characteristic_to_light,
     apply_characteristic_to_sensor,
@@ -141,6 +142,14 @@ def test_iox_temp_to_hap_honeywell_min_step_70f():
     assert iox_temp_to_hap_celsius(node, 70, fahrenheit_wire_bias='low', hap_min_step=0.5) == 21.5
     assert iox_temp_to_hap_celsius(node, 68, fahrenheit_wire_bias='low', hap_min_step=0.5) == 20.0
     assert iox_temp_to_hap_celsius(node, 72, fahrenheit_wire_bias='low', hap_min_step=0.5) == 22.5
+    assert iox_temp_to_hap_celsius(node, 74, fahrenheit_wire_bias='low', hap_min_step=0.5) == 23.5
+
+
+def test_driver_st_from_hap_celsius_truncated_fahrenheit_display():
+    """Read path matches Honeywell/Ecobee UI ``int(C * 1.8 + 32)`` (not :func:`toF` round)."""
+    assert driver_st_from_hap_celsius(False, 22.5) == 72.0
+    assert driver_st_from_hap_celsius(False, 23.5) == 74.0
+    assert driver_st_from_hap_celsius(False, 24.0) == 75.0
 
 
 def test_iox_temp_to_hap_fahrenheit_low_bias_ecobee_display_parity():
