@@ -2514,6 +2514,34 @@ class HomeKitHubBridge:
         await self._bump_ip_pairing_zeroconf(hk, alias, pairing, log_failures=False)
         return True
 
+    async def _restore_pairing_event_stream(self, alias: str, pairing) -> bool:
+        """Reattach the HAP listener and event subscriptions after a dropped session.
+
+        A power loss often ends in ``pairing.close()`` plus a fresh ``load_pairing``.
+        The new object can serve snapshot/get reads and still has an empty
+        ``subscriptions`` set, so characteristic events never resume until something
+        calls ``subscribe`` again. Returns False when that subscribe (or the
+        follow-up device-list push) fails so the probe will retry.
+        """
+        self._attach_listener(alias, pairing)
+        to_sub = _subscribable_characteristics(pairing)
+        if to_sub:
+            try:
+                await pairing.subscribe(to_sub)
+            except Exception:
+                self.log.exception(
+                    "pairing health recovery subscribe failed for %s", alias
+                )
+                return False
+        try:
+            await self._broadcast_device_list_update(reason=f"health_recovered:{alias}")
+        except Exception:
+            self.log.exception(
+                "pairing health recovery device-list broadcast failed for %s", alias
+            )
+            return False
+        return True
+
     async def _probe_pairings_health_once(self) -> None:
         hk = self._hk
         if not self._running or not hk:
@@ -2525,9 +2553,11 @@ class HomeKitHubBridge:
         for alias, pairing in list(aliases.items()):
             if pairing is None:
                 continue
+            read_failed = False
             try:
                 await pairing.list_accessories_and_characteristics()
             except Exception:
+                read_failed = True
                 await self._resync_ip_pairing_zeroconf(alias, pairing)
                 await asyncio.sleep(PAIRING_HEALTH_POST_RESYNC_INITIAL_SETTLE_SEC)
                 probe_ok = False
@@ -2602,19 +2632,18 @@ class HomeKitHubBridge:
                 )
                 continue
 
-            if alias not in self._pairing_unhealthy_aliases:
+            # A read that failed and then succeeded in this same pass used to skip
+            # restore: the alias is only added to ``_pairing_unhealthy_aliases`` when
+            # the pass still fails. Reload replaces the pairing object (empty
+            # subscriptions, listener removed, empty ``list_devices`` already sent).
+            # Without this, later healthy probes never subscribe, so events stay
+            # dead while snapshot/get keep working.
+            if not read_failed and alias not in self._pairing_unhealthy_aliases:
                 continue
 
-            self._attach_listener(alias, pairing)
-            to_sub = _subscribable_characteristics(pairing)
-            if to_sub:
-                try:
-                    await pairing.subscribe(to_sub)
-                except Exception:
-                    self.log.exception(
-                        "pairing health recovery subscribe failed for %s", alias
-                    )
-                    continue
+            if not await self._restore_pairing_event_stream(alias, pairing):
+                self._pairing_unhealthy_aliases.add(alias)
+                continue
             self._pairing_unhealthy_aliases.discard(alias)
             ep = _ip_lan_endpoint_str(pairing)
             if ep:

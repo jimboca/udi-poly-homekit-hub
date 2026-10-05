@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.18] - 2026-10-05
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Standard + Professional)** After an accessory power loss, a pairing reload that succeeds in the same health-probe pass re-subscribes HAP events and pushes ``list_devices`` again. Previously that pass broadcast an empty device list, left the new session without event subscriptions, and later probes treated the pairing as healthy, so characteristic updates stayed stopped while snapshot/get still worked.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.18** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.17] - 2026-07-12
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

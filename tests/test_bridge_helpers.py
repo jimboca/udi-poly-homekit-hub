@@ -938,3 +938,156 @@ def test_format_discover_attempt_history_html():
     assert "Discover attempt history" in html_out
     assert "Primary scan" in html_out
 
+
+def _health_probe_bridge() -> HomeKitHubBridge:
+    bridge = HomeKitHubBridge(
+        logging.getLogger("test_pairing_health"),
+        get_params=lambda: {},
+        get_pairing_slot_rows=lambda: [],
+        get_custom_data=lambda: {},
+        set_custom_data=lambda _d: None,
+    )
+    bridge._running = True
+    bridge._broadcast_device_list_update = AsyncMock()
+    bridge._on_pairing_ready = AsyncMock()
+    bridge._resync_ip_pairing_zeroconf = AsyncMock()
+    return bridge
+
+
+def _pairing(device_id: str) -> MagicMock:
+    pairing = MagicMock()
+    pairing.id = device_id
+    pairing.pairing_data = {}
+    pairing.list_accessories_and_characteristics = AsyncMock(return_value=[])
+    pairing.subscribe = AsyncMock()
+    pairing.dispatcher_connect = MagicMock(return_value=lambda: None)
+    return pairing
+
+
+def _fast_health_probe(monkeypatch) -> None:
+    for name, value in (
+        ("PAIRING_HEALTH_POST_RESYNC_RETRIES", 1),
+        ("PAIRING_HEALTH_POST_RESYNC_DELAY_SEC", 0),
+        ("PAIRING_HEALTH_POST_RESYNC_INITIAL_SETTLE_SEC", 0),
+        ("PAIRING_HEALTH_RETRY_LIST_SLEEP_SEC", 0),
+        ("PAIRING_HEALTH_RELOAD_SETTLE_SEC", 0),
+        ("PAIRING_HEALTH_RELOAD_LIST_TRIES", 1),
+    ):
+        monkeypatch.setattr(f"homekit_hub.bridge.{name}", value)
+
+
+@pytest.mark.asyncio
+async def test_health_probe_skips_restore_when_read_succeeds(monkeypatch):
+    """A healthy probe must not re-subscribe or push list_devices every pass."""
+    monkeypatch.setattr(
+        "homekit_hub.bridge._subscribable_characteristics", lambda _p: [(1, 8)]
+    )
+    bridge = _health_probe_bridge()
+    pairing = _pairing("96:c0:24:95:af:4e")
+    hk = MagicMock()
+    hk.aliases = {"slot_1": pairing}
+    bridge._hk = hk
+
+    await bridge._probe_pairings_health_once()
+
+    pairing.subscribe.assert_not_called()
+    bridge._broadcast_device_list_update.assert_not_called()
+    assert "slot_1" not in bridge._pairing_unhealthy_aliases
+
+
+@pytest.mark.asyncio
+async def test_health_probe_restores_events_after_same_cycle_reload(monkeypatch):
+    """Power-loss reload succeeds before the alias is marked unhealthy.
+
+    That used to skip subscribe, so events stayed dead while snapshots worked.
+    """
+    _fast_health_probe(monkeypatch)
+    monkeypatch.setattr(
+        "homekit_hub.bridge._subscribable_characteristics", lambda _p: [(1, 12)]
+    )
+    bridge = _health_probe_bridge()
+    down = _pairing("96:c0:24:95:af:4e")
+    down.list_accessories_and_characteristics = AsyncMock(
+        side_effect=RuntimeError("accessory unreachable")
+    )
+    restored = _pairing("96:c0:24:95:af:4e")
+    hk = MagicMock()
+    hk.aliases = {"slot_1": down}
+    bridge._hk = hk
+
+    async def reload(alias: str) -> bool:
+        hk.aliases[alias] = restored
+        return True
+
+    bridge._reload_saved_pairing_for_alias = AsyncMock(side_effect=reload)
+
+    await bridge._probe_pairings_health_once()
+
+    restored.subscribe.assert_awaited_once_with([(1, 12)])
+    restored.dispatcher_connect.assert_called_once()
+    bridge._broadcast_device_list_update.assert_awaited_once_with(
+        reason="health_recovered:slot_1"
+    )
+    assert "slot_1" not in bridge._pairing_unhealthy_aliases
+    bridge._on_pairing_ready.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_probe_restores_events_when_alias_already_unhealthy(monkeypatch):
+    monkeypatch.setattr(
+        "homekit_hub.bridge._subscribable_characteristics", lambda _p: [(1, 9)]
+    )
+    bridge = _health_probe_bridge()
+    pairing = _pairing("5d:1a:eb:a5:3c:3e")
+    hk = MagicMock()
+    hk.aliases = {"slot_2": pairing}
+    bridge._hk = hk
+    bridge._pairing_unhealthy_aliases.add("slot_2")
+
+    await bridge._probe_pairings_health_once()
+
+    pairing.subscribe.assert_awaited_once_with([(1, 9)])
+    bridge._broadcast_device_list_update.assert_awaited_once_with(
+        reason="health_recovered:slot_2"
+    )
+    assert bridge._pairing_unhealthy_aliases == set()
+
+
+@pytest.mark.asyncio
+async def test_health_probe_retries_subscribe_after_reload_failure(monkeypatch):
+    _fast_health_probe(monkeypatch)
+    monkeypatch.setattr(
+        "homekit_hub.bridge._subscribable_characteristics", lambda _p: [(1, 4)]
+    )
+    bridge = _health_probe_bridge()
+    down = _pairing("96:c0:24:95:af:4e")
+    down.list_accessories_and_characteristics = AsyncMock(
+        side_effect=RuntimeError("accessory unreachable")
+    )
+    restored = _pairing("96:c0:24:95:af:4e")
+    restored.subscribe = AsyncMock(side_effect=RuntimeError("subscribe rejected"))
+    hk = MagicMock()
+    hk.aliases = {"slot_1": down}
+    bridge._hk = hk
+
+    async def reload(alias: str) -> bool:
+        hk.aliases[alias] = restored
+        return True
+
+    bridge._reload_saved_pairing_for_alias = AsyncMock(side_effect=reload)
+
+    await bridge._probe_pairings_health_once()
+
+    assert bridge._pairing_unhealthy_aliases == {"slot_1"}
+    bridge._broadcast_device_list_update.assert_not_called()
+
+    restored.list_accessories_and_characteristics = AsyncMock(return_value=[])
+    restored.subscribe = AsyncMock()
+    await bridge._probe_pairings_health_once()
+
+    restored.subscribe.assert_awaited_once_with([(1, 4)])
+    bridge._broadcast_device_list_update.assert_awaited_once_with(
+        reason="health_recovered:slot_1"
+    )
+    assert bridge._pairing_unhealthy_aliases == set()
+
