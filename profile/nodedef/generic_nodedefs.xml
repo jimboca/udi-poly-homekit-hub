@@ -70,6 +70,23 @@
       </accepts>
     </cmds>
   </nodeDef>
+  <nodeDef id="HKHubFan" nls="hkfan">
+    <editors />
+    <sts>
+      <st id="ST" editor="I_ONOFF" />
+      <st id="GV0" editor="I_DIMMER" />
+      <st id="GV1" editor="I_FAN_DIR" />
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="DON" />
+        <cmd id="DOF" />
+        <cmd id="GV0"><p id="" editor="I_DIMMER" init="GV0" /></cmd>
+        <cmd id="GV1"><p id="" editor="I_FAN_DIR" init="GV1" /></cmd>
+        <cmd id="QUERY" />
+      </accepts>
+    </cmds>
+  </nodeDef>
   <nodeDef id="HKHubSwitch" nls="hkswitch">
     <editors />
     <sts>

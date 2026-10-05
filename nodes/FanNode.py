@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generic HomeKit light IoX node."""
+"""Generic HomeKit fan IoX node (Fan / Fan v2)."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from .Controller import Controller
 
 
-class LightNode(Node):
-    id = 'HKHubLight'
-    hint = '0x01010200'
+class FanNode(Node):
+    id = 'HKHubFan'
+    hint = '0x01020300'
 
     def __init__(
         self,
@@ -36,7 +36,7 @@ class LightNode(Node):
         self.device_id = str(device_id).strip().lower()
         self.aid = int(aid)
         self.char_bindings = dict(char_bindings or {})
-        nm = get_valid_node_name(name) or 'HK Light'
+        nm = get_valid_node_name(name) or 'HK Fan'
         super().__init__(controller.poly, controller.address, address, nm)
         self.name = nm
 
@@ -46,7 +46,7 @@ class LightNode(Node):
         except Exception:
             LOGGER.debug('setDriver %s=%r failed for %s', driver, val, self.address, exc_info=True)
 
-    def _write_char(self, binding_key: str, value: Any, *, hap_name: str) -> bool:
+    def _write_char(self, binding_key: str, value: Any, *, hap_name: str | None = None) -> bool:
         return hub_write_bound_characteristic(
             self.controller,
             self.device_id,
@@ -56,10 +56,23 @@ class LightNode(Node):
             hap_name_fallback=hap_name,
         )
 
+    def _set_power(self, on: bool) -> bool:
+        """Prefer Fan v2 **Active**; also write **On** when both are bound."""
+        ok = False
+        if 'ACTIVE' in self.char_bindings:
+            ok = self._write_char('ACTIVE', 1 if on else 0, hap_name=hap_apply.hap_name_active()) or ok
+        if 'ON' in self.char_bindings:
+            ok = self._write_char('ON', bool(on), hap_name=hap_apply.hap_name_on()) or ok
+        if not ok:
+            ok = self._write_char('ACTIVE', 1 if on else 0, hap_name=hap_apply.hap_name_active())
+            if not ok:
+                ok = self._write_char('ON', bool(on), hap_name=hap_apply.hap_name_on())
+        return ok
+
     def on_hap_event(self, aid: int, iid: int, value: Any, label: str) -> None:
         if not hap_event_matches_node(aid, iid, self):
             return
-        hap_apply.apply_characteristic_to_light(self, label, value, log=LOGGER)
+        hap_apply.apply_characteristic_to_fan(self, label, value, log=LOGGER)
 
     def query(self, cmd=None):
         del cmd
@@ -71,29 +84,43 @@ class LightNode(Node):
 
     def cmd_on(self, cmd=None):
         del cmd
-        if self._write_char('ON', True, hap_name=hap_apply.hap_name_on()):
+        if self._set_power(True):
             self.set_driver_safe('ST', 1)
 
     def cmd_off(self, cmd=None):
         del cmd
-        if self._write_char('ON', False, hap_name=hap_apply.hap_name_on()):
+        if self._set_power(False):
             self.set_driver_safe('ST', 0)
 
-    def cmd_set_brightness(self, cmd):
+    def cmd_set_speed(self, cmd):
         try:
             val = int(cmd['value'])
         except (KeyError, TypeError, ValueError):
             return
-        if self._write_char('BRIGHTNESS', val, hap_name=hap_apply.hap_name_brightness()):
+        val = max(0, min(100, val))
+        if self._write_char('ROTATION_SPEED', val, hap_name=hap_apply.hap_name_rotation_speed()):
             self.set_driver_safe('GV0', val)
+
+    def cmd_set_direction(self, cmd):
+        try:
+            val = int(cmd['value'])
+        except (KeyError, TypeError, ValueError):
+            return
+        val = 1 if val else 0
+        if self._write_char(
+            'ROTATION_DIRECTION', val, hap_name=hap_apply.hap_name_rotation_direction()
+        ):
+            self.set_driver_safe('GV1', val)
 
     commands = {
         'QUERY': query,
         'DON': cmd_on,
         'DOF': cmd_off,
-        'GV0': cmd_set_brightness,
+        'GV0': cmd_set_speed,
+        'GV1': cmd_set_direction,
     }
     drivers = [
-        {'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Light'},
-        {'driver': 'GV0', 'value': 0, 'uom': 56, 'name': 'Brightness'},
+        {'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Fan'},
+        {'driver': 'GV0', 'value': 0, 'uom': 56, 'name': 'Speed'},
+        {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Direction'},
     ]

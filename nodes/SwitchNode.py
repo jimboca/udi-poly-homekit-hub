@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Any, Dict
 from udi_interface import Node
 
 import homekit_hub.hap_apply as hap_apply
-from hub_node_funcs import get_valid_node_name, hap_event_matches_node
+from hub_node_funcs import (
+    get_valid_node_name,
+    hap_event_matches_node,
+    hub_write_bound_characteristic,
+)
 
 if TYPE_CHECKING:
     from .Controller import Controller
@@ -42,6 +46,16 @@ class SwitchNode(Node):
         except Exception:
             pass
 
+    def _write_char(self, binding_key: str, value: Any, *, hap_name: str) -> bool:
+        return hub_write_bound_characteristic(
+            self.controller,
+            self.device_id,
+            self.char_bindings,
+            binding_key,
+            value,
+            hap_name_fallback=hap_name,
+        )
+
     def on_hap_event(self, aid: int, iid: int, value: Any, label: str) -> None:
         if not hap_event_matches_node(aid, iid, self):
             return
@@ -57,12 +71,12 @@ class SwitchNode(Node):
 
     def cmd_on(self, cmd=None):
         del cmd
-        if self.controller.hub_write(self.device_id, hap_apply.hap_name_on(), True):
+        if self._write_char('ON', True, hap_name=hap_apply.hap_name_on()):
             self.set_driver_safe('ST', 1)
 
     def cmd_off(self, cmd=None):
         del cmd
-        if self.controller.hub_write(self.device_id, hap_apply.hap_name_on(), False):
+        if self._write_char('ON', False, hap_name=hap_apply.hap_name_on()):
             self.set_driver_safe('ST', 0)
 
     commands = {'QUERY': query, 'DON': cmd_on, 'DOF': cmd_off}

@@ -134,8 +134,11 @@ def test_classify_sensor_aids_uses_snapshot_control_aid():
     ]
     rows = classify_sensor_aids(accessories, snapshot_values=snapshot)
     sensor_aids = {r['aid'] for r in rows if r['role'] == 'sensor'}
+    # Snapshot marks aid 4 as control; classify_accessories also treats thermostat
+    # aid 2 as a control accessory — neither becomes a room sensor.
     assert 4 not in sensor_aids
-    assert sensor_aids == {2, 3}
+    assert 2 not in sensor_aids
+    assert sensor_aids == {3}
 
 
 def test_classify_accessories_accepts_characteristic_name_strings():
@@ -281,3 +284,100 @@ def test_classify_accessories_from_inventory_label_fixture():
     assert any(r['role'] == 'thermostat' for r in rows)
     sensor_rows = classify_sensor_aids(accessories, control_aid=1)
     assert sensor_rows
+
+
+def _hunter_simpleconnect_fan_light():
+    """Hunter SIMPLEconnect Fan M2: Fan v2 + Lightbulb on aid=1 (from field inventory)."""
+    return [
+        _Acc(
+            1,
+            [
+                _Svc(
+                    1,
+                    ServicesTypes.ACCESSORY_INFORMATION,
+                    [
+                        _Char(3, CharacteristicsTypes.MANUFACTURER, 'Hunter Fan'),
+                        _Char(4, CharacteristicsTypes.MODEL, 'SIMPLEconnect'),
+                        _Char(5, CharacteristicsTypes.NAME, 'SIMPLEconnect Fan M2-334f8b'),
+                    ],
+                ),
+                _Svc(
+                    64,
+                    ServicesTypes.FAN_V2,
+                    [
+                        _Char(66, CharacteristicsTypes.NAME, 'Hunter Fan'),
+                        _Char(67, CharacteristicsTypes.ON, False),
+                        _Char(68, CharacteristicsTypes.ACTIVE, 0),
+                        _Char(69, CharacteristicsTypes.ROTATION_SPEED, 66),
+                        _Char(70, CharacteristicsTypes.ROTATION_DIRECTION, 1),
+                    ],
+                ),
+                _Svc(
+                    48,
+                    ServicesTypes.LIGHTBULB,
+                    [
+                        _Char(50, CharacteristicsTypes.NAME, 'Hunter Light'),
+                        _Char(51, CharacteristicsTypes.ON, False),
+                        _Char(52, CharacteristicsTypes.BRIGHTNESS, 0),
+                    ],
+                ),
+            ],
+        )
+    ]
+
+
+def test_classify_hunter_simpleconnect_fan_light():
+    accessories = _hunter_simpleconnect_fan_light()
+    rows = classify_accessories(accessories)
+    roles = {r['role'] for r in rows}
+    assert roles == {'fan', 'light'}
+    fan = next(r for r in rows if r['role'] == 'fan')
+    light = next(r for r in rows if r['role'] == 'light')
+    assert fan['node_def_id'] == 'HKHubFan'
+    assert light['node_def_id'] == 'HKHubLight'
+    assert fan['char_bindings']['ON']['iid'] == 67
+    assert fan['char_bindings']['ACTIVE']['iid'] == 68
+    assert fan['char_bindings']['ROTATION_SPEED']['iid'] == 69
+    assert fan['char_bindings']['ROTATION_DIRECTION']['iid'] == 70
+    assert light['char_bindings']['ON']['iid'] == 51
+    assert light['char_bindings']['BRIGHTNESS']['iid'] == 52
+    # Must not invent a sensor from the accessory name alone.
+    assert classify_sensor_aids(accessories) == []
+
+
+def test_hap_event_matches_bound_iid_only():
+    from hub_node_funcs import hap_event_matches_node
+
+    class _Node:
+        aid = 1
+        char_bindings = {'ON': {'aid': 1, 'iid': 51}}
+
+    node = _Node()
+    assert hap_event_matches_node(1, 51, node) is True
+    assert hap_event_matches_node(1, 67, node) is False
+
+
+def test_hub_write_bound_characteristic_prefers_iid():
+    from hub_node_funcs import hub_write_bound_characteristic
+
+    writes = []
+
+    class _Ctrl:
+        def hub_write_by_iid(self, device_id, aid, iid, value):
+            writes.append(('iid', device_id, aid, iid, value))
+            return True
+
+        def hub_write(self, device_id, name, value):
+            writes.append(('name', device_id, name, value))
+            return True
+
+    ok = hub_write_bound_characteristic(
+        _Ctrl(),
+        'dev1',
+        {'ON': {'aid': 1, 'iid': 51}},
+        'ON',
+        True,
+        hap_name_fallback='ON',
+    )
+    assert ok is True
+    assert writes == [('iid', 'dev1', 1, 51, True)]

@@ -1,6 +1,6 @@
 """HomeKit Hub Node Server nodes."""
 
-VERSION = "2.0.18"
+VERSION = "2.0.19"
 from .Controller import Controller as Controller  # noqa: E402,F401
 
 # %% professional-only begin
@@ -9,6 +9,7 @@ from .SensorNode import SensorNode  # noqa: E402,F401
 from .EcobeeThermostatNode import EcobeeThermostatNode  # noqa: E402,F401
 from .LightNode import LightNode  # noqa: E402,F401
 from .SwitchNode import SwitchNode  # noqa: E402,F401
+from .FanNode import FanNode  # noqa: E402,F401
 from .ThermostatNode import ThermostatNode  # noqa: E402,F401
 # %% professional-only end
 

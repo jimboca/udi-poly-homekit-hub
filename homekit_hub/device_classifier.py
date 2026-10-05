@@ -35,6 +35,14 @@ for _name in ('SWITCH', 'OUTLET'):
         except Exception:
             pass
 
+_FAN_SERVICE_UUIDS: Set[str] = set()
+for _name in ('FAN', 'FAN_V2'):
+    if hasattr(ServicesTypes, _name):
+        try:
+            _FAN_SERVICE_UUIDS.add(normalize_uuid(getattr(ServicesTypes, _name)))
+        except Exception:
+            pass
+
 _ACCESSORY_INFO_SERVICE_UUID: Optional[str] = None
 if hasattr(ServicesTypes, 'ACCESSORY_INFORMATION'):
     try:
@@ -68,6 +76,7 @@ _CHAR_BINDINGS_THERMOSTAT = (
 
 _CHAR_BINDINGS_LIGHT = ('ON', 'BRIGHTNESS', 'COLOR_TEMPERATURE')
 _CHAR_BINDINGS_SWITCH = ('ON',)
+_CHAR_BINDINGS_FAN = ('ON', 'ACTIVE', 'ROTATION_SPEED', 'ROTATION_DIRECTION')
 _CHAR_BINDINGS_SENSOR = (
     'CONTACT_STATE',
     'MOTION_DETECTED',
@@ -322,6 +331,18 @@ def classify_sensor_aids(
         control_aid=control_aid,
         snapshot_values=snapshot_values,
     )
+    control_aids: Set[int] = set()
+    if ctrl is not None:
+        control_aids.add(int(ctrl))
+    for crow in classify_accessories(accessories):
+        role = str(crow.get('role') or '')
+        if role in ('thermostat', 'light', 'switch', 'fan'):
+            try:
+                control_aids.add(int(crow.get('aid') or 0))
+            except (TypeError, ValueError):
+                pass
+    control_aids.discard(0)
+
     rows: List[Dict[str, Any]] = []
     for acc in accessories:
         try:
@@ -332,24 +353,27 @@ def classify_sensor_aids(
             continue
         bindings = _bind_accessory_chars(aid, acc, _CHAR_BINDINGS_SENSOR)
         acc_name = _accessory_information_name(acc)
-        if ctrl is not None and aid == ctrl:
-            motion_bindings = {
-                k: v for k, v in bindings.items() if k in _MOTION_SENSOR_CHAR_NAMES
-            }
-            if motion_bindings:
-                rows.append(
-                    {
-                        'aid': aid,
-                        'role': 'motion_sensor',
-                        'node_def_id': expected_sensor_nodedef('motion_sensor', motion_bindings),
-                        'service_iid': 0,
-                        'char_bindings': motion_bindings,
-                        'accessory_name': acc_name,
-                        'vendor': None,
-                    }
-                )
+        if aid in control_aids:
+            # Motion child only on thermostat control aid (not fan/light/switch aids).
+            if ctrl is not None and aid == ctrl:
+                motion_bindings = {
+                    k: v for k, v in bindings.items() if k in _MOTION_SENSOR_CHAR_NAMES
+                }
+                if motion_bindings:
+                    rows.append(
+                        {
+                            'aid': aid,
+                            'role': 'motion_sensor',
+                            'node_def_id': expected_sensor_nodedef('motion_sensor', motion_bindings),
+                            'service_iid': 0,
+                            'char_bindings': motion_bindings,
+                            'accessory_name': acc_name,
+                            'vendor': None,
+                        }
+                    )
             continue
-        if bindings or acc_name:
+        # Require real sensor characteristics — name alone created false sensors on fans/lights.
+        if bindings:
             rows.append(
                 {
                     'aid': aid,
@@ -450,6 +474,20 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'vendor': None,
                         }
                     )
+            if su in _FAN_SERVICE_UUIDS:
+                bindings = _bind_service_chars(aid, svc, _CHAR_BINDINGS_FAN)
+                if bindings.get('ON') or bindings.get('ACTIVE'):
+                    rows.append(
+                        {
+                            'aid': aid,
+                            'role': 'fan',
+                            'node_def_id': 'HKHubFan',
+                            'service_iid': svc_iid,
+                            'char_bindings': bindings,
+                            'vendor': None,
+                        }
+                    )
+                continue
     return rows
 
 

@@ -35,24 +35,68 @@ climateMap = ltom(climateList)
 
 
 def hap_event_matches_node(aid: int, iid: int, node: Any) -> bool:
-    """True when a HAP event targets *node*'s primary ``aid`` or a bound ``{aid,iid}``."""
+    """True when a HAP event targets a characteristic bound to *node*.
+
+    When ``char_bindings`` are present, match **only** those ``aid``/``iid`` pairs so
+    multi-service accessories (e.g. fan + light on the same ``aid``) do not cross-apply
+    events. Without bindings, fall back to primary ``aid`` equality.
+    """
     try:
-        node_aid = int(getattr(node, 'aid', aid))
         ev_aid = int(aid)
         ev_iid = int(iid)
     except (TypeError, ValueError):
         return False
-    if ev_aid == node_aid:
-        return True
     bindings = getattr(node, 'char_bindings', None) or {}
-    for binding in bindings.values():
-        if not isinstance(binding, dict):
-            continue
+    if bindings:
+        for binding in bindings.values():
+            if not isinstance(binding, dict):
+                continue
+            try:
+                if int(binding.get('aid', -1)) == ev_aid and int(binding.get('iid', -1)) == ev_iid:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+    try:
+        return ev_aid == int(getattr(node, 'aid', ev_aid))
+    except (TypeError, ValueError):
+        return False
+
+
+
+def hub_write_bound_characteristic(
+    controller: Any,
+    device_id: str,
+    char_bindings: Mapping[str, Any] | None,
+    binding_key: str,
+    value: Any,
+    *,
+    hap_name_fallback: str | None = None,
+) -> bool:
+    """Write a HAP characteristic using bound ``aid``/``iid`` when available.
+
+    Falls back to ``controller.hub_write(device_id, hap_name_fallback, value)`` when
+    no binding is present (or iid write is unavailable). Preferring iid avoids
+    ambiguous name resolution when an accessory exposes multiple characteristics
+    with the same HAP type (e.g. fan **On** + light **On**).
+    """
+    key = str(binding_key or '').strip().upper()
+    bindings = char_bindings if isinstance(char_bindings, Mapping) else {}
+    ref = bindings.get(key) if key else None
+    if isinstance(ref, dict):
         try:
-            if int(binding.get('aid', -1)) == ev_aid and int(binding.get('iid', -1)) == ev_iid:
-                return True
+            aid = int(ref.get('aid', 0) or 0)
+            iid = int(ref.get('iid', 0) or 0)
         except (TypeError, ValueError):
-            continue
+            aid = iid = 0
+        if aid > 0 and iid > 0:
+            by_iid = getattr(controller, 'hub_write_by_iid', None)
+            if callable(by_iid):
+                return bool(by_iid(str(device_id), aid, iid, value))
+    if hap_name_fallback:
+        by_name = getattr(controller, 'hub_write', None)
+        if callable(by_name):
+            return bool(by_name(str(device_id), str(hap_name_fallback), value))
     return False
 
 

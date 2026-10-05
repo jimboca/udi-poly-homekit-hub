@@ -58,6 +58,8 @@ ND-HKHubEcobeeThermostat-NAME = HomeKit Ecobee Thermostat
 ND-HKHubEcobeeThermostat-ICON = Thermostat
 ND-HKHubLight-NAME = HomeKit Light
 ND-HKHubLight-ICON = Light
+ND-HKHubFan-NAME = HomeKit Fan
+ND-HKHubFan-ICON = GenericCtl
 ND-HKHubSwitch-NAME = HomeKit Switch
 ND-HKHubSwitch-ICON = Relay
 ND-HKHubBinarySensor-NAME = HomeKit Sensor
@@ -91,6 +93,18 @@ ST-hkswitch-ST-NAME = Status
 CMD-hkswitch-DON-NAME = On
 CMD-hkswitch-DOF-NAME = Off
 CMD-hkswitch-QUERY-NAME = Query
+
+ST-hkfan-ST-NAME = Status
+ST-hkfan-GV0-NAME = Speed
+ST-hkfan-GV1-NAME = Direction
+CMD-hkfan-DON-NAME = On
+CMD-hkfan-DOF-NAME = Off
+CMD-hkfan-GV0-NAME = Speed
+CMD-hkfan-GV1-NAME = Direction
+CMD-hkfan-QUERY-NAME = Query
+
+EN_FAN_DIR-0 = Clockwise
+EN_FAN_DIR-1 = Counterclockwise
 
 ST-hksensor-ST-NAME = Temperature
 ST-hksensor-GV1-NAME = Occupancy

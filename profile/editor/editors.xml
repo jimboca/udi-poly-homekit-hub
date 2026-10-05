@@ -80,4 +80,7 @@
   <editor id="I_DIMMER">
     <range uom="56" min="0" max="100" step="1" prec="0" />
   </editor>
+  <editor id="I_FAN_DIR">
+    <range uom="25" subset="0,1" nls="EN_FAN_DIR" />
+  </editor>
 </editors>

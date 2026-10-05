@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.19] - 2026-10-05
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Added
+
+- **(Professional)** Generic **HKHubFan** IoX node (Fan / Fan v2): on/off, rotation speed, direction — so fan+light accessories (e.g. Hunter SIMPLEconnect) get separate fan and light nodes.
+
+### Fixed
+
+- **(Professional)** Light/switch commands write HAP characteristics by bound ``aid``/``iid`` (not characteristic name), so On/Off no longer hits the wrong service when an accessory exposes multiple **On** characteristics.
+- **(Professional)** HAP event matching uses bound iids when present, preventing fan/light cross-updates on the same accessory id.
+- **(Professional)** Sensor classification no longer creates a node from accessory name alone (false ``HKHubSensorDry`` on fan/light devices).
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.19** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.18] - 2026-10-05
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

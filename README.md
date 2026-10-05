@@ -26,10 +26,11 @@ On **Professional**, the hub can create IoX child nodes from standard HomeKit pr
 | Thermostat | **HKHubThermostat** (generic HAP) |
 | Ecobee thermostat | **HKHubEcobeeThermostat** (full comfort / `GV3` when hub owns control) |
 | Light | **HKHubLight** |
+| Fan | **HKHubFan** |
 | Switch / outlet | **HKHubSwitch** |
 | Contact, motion, occupancy, … | **HKHubBinarySensor** |
 
-For now, only **generic** light and switch node types are supported (**HKHubLight**, **HKHubSwitch**). Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
+Generic **light**, **fan**, and **switch** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**). Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
 
 Generic nodes are **off by default**. Enable **`generic_nodes_enable`** on the controller and **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed configuration (see **[CONFIG.md — Professional edition](CONFIG.md#professional-edition)**). Reload the **Configuration** page in your browser if those controls do not appear after upgrade. Existing sites that use **udi-poly-ecobee** or other vendor plugins can leave both off and keep using those plugins for control.
 

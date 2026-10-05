@@ -124,12 +124,13 @@ When generic control is enabled (below), the hub can create these child node typ
 | Thermostat (generic HAP) | **HKHubThermostat** |
 | Ecobee thermostat | **HKHubEcobeeThermostat** (comfort / `GV3`, schedule mode, setpoints) |
 | Light | **HKHubLight** |
+| Fan | **HKHubFan** |
 | Switch / outlet | **HKHubSwitch** |
 | Contact, motion, occupancy (standalone accessory) | **HKHubSensor** (per HAP `aid`) |
 | Ecobee room sensors (separate `aid`s) | **HKHubSensor** child per sensor |
 | Built-in motion on thermostat `aid` | **HKHubSensor** · motion child |
 
-For now, only **generic** light and switch node types are supported (**HKHubLight**, **HKHubSwitch**). Capability-specific variants (dimmer vs color, etc.) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)**.
+Generic **light**, **fan**, and **switch** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**). Capability-specific light variants (color, etc.) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)**.
 
 ### Opt-in generic control (Professional)
 

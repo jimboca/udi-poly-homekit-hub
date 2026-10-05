@@ -41,6 +41,9 @@ _HAP_CURRENT_FAN_STATE_UUID_NORM = normalize_hap_uuid('000000AF-0000-1000-8000-0
 _HAP_HEATING_COOLING_TARGET_UUID_NORM = normalize_hap_uuid('00000033-0000-1000-8000-0026BB765291')
 _HAP_CURRENT_HEATING_COOLING_UUID_NORM = normalize_hap_uuid('0000000F-0000-1000-8000-0026BB765291')
 _HAP_ON_UUID_NORM = normalize_hap_uuid('00000025-0000-1000-8000-0026BB765291')
+_HAP_ACTIVE_UUID_NORM = normalize_hap_uuid('000000B0-0000-1000-8000-0026BB765291')
+_HAP_ROTATION_SPEED_UUID_NORM = normalize_hap_uuid('00000029-0000-1000-8000-0026BB765291')
+_HAP_ROTATION_DIRECTION_UUID_NORM = normalize_hap_uuid('00000028-0000-1000-8000-0026BB765291')
 _HAP_BRIGHTNESS_UUID_NORM = normalize_hap_uuid('00000008-0000-1000-8000-0026BB765291')
 _HAP_CONTACT_SENSOR_STATE_UUID_NORM = normalize_hap_uuid('0000006A-0000-1000-8000-0026BB765291')
 
@@ -782,6 +785,90 @@ def hap_name_on() -> str:
 def hap_name_brightness() -> str:
     return 'BRIGHTNESS'
 
+
+
+def hap_name_active() -> str:
+    return 'ACTIVE'
+
+
+def hap_name_rotation_speed() -> str:
+    return 'ROTATION_SPEED'
+
+
+def hap_name_rotation_direction() -> str:
+    return 'ROTATION_DIRECTION'
+
+
+def is_hap_active_characteristic(characteristic: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and nu == _HAP_ACTIVE_UUID_NORM:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return norm == 'ACTIVE'
+
+
+def is_hap_rotation_speed_characteristic(characteristic: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and nu == _HAP_ROTATION_SPEED_UUID_NORM:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return norm == 'ROTATION_SPEED'
+
+
+def is_hap_rotation_direction_characteristic(characteristic: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and nu == _HAP_ROTATION_DIRECTION_UUID_NORM:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return norm == 'ROTATION_DIRECTION'
+
+
+def apply_characteristic_to_fan(
+    node: Any,
+    characteristic: str,
+    value: Any,
+    *,
+    log: Optional[logging.Logger] = None,
+) -> bool:
+    """Map HAP fan **On** / **Active** / **RotationSpeed** / **RotationDirection** to IoX drivers."""
+    lg = log or _LOG
+    if value is None:
+        if (
+            is_hap_on_characteristic(characteristic)
+            or is_hap_active_characteristic(characteristic)
+            or is_hap_rotation_speed_characteristic(characteristic)
+            or is_hap_rotation_direction_characteristic(characteristic)
+        ):
+            return True
+        bucket = classify(characteristic, 0)
+        return bucket != CharBucket.UNKNOWN
+    try:
+        if is_hap_on_characteristic(characteristic) or is_hap_active_characteristic(characteristic):
+            _set_node_driver(node, 'ST', hap_on_to_iox(value))
+            return True
+        if is_hap_rotation_speed_characteristic(characteristic):
+            _set_node_driver(node, 'GV0', hap_brightness_to_iox(value))
+            return True
+        if is_hap_rotation_direction_characteristic(characteristic):
+            try:
+                direction = 1 if int(value) else 0
+            except (TypeError, ValueError):
+                direction = 1 if value else 0
+            _set_node_driver(node, 'GV1', direction)
+            return True
+    except Exception:
+        lg.debug('fan hap_apply failed for %s=%r', characteristic, value, exc_info=True)
+        return True
+    bucket = classify(characteristic, 0)
+    if bucket == CharBucket.UNKNOWN:
+        return False
+    return True
 
 def apply_characteristic_to_light(
     node: Any,

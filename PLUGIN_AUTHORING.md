@@ -19,7 +19,7 @@ Runtime node creation uses the **live** HAP tree via `device_classifier` — the
 | `generic_nodes_enable` | Controller Custom Params | `false` |
 | **Create generic IoX control nodes (Professional)** (`generic_nodes`) | Custom Typed → HomeKit pairing slots | `false` |
 
-When both are true, the hub creates child nodes (`HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubSwitch`, `HKHubSensor`) from HAP classification.
+When both are true, the hub creates child nodes (`HKHubThermostat`, `HKHubEcobeeThermostat`, `HKHubLight`, `HKHubFan`, `HKHubSwitch`, `HKHubSensor`) from HAP classification.
 
 ### Sensor model (per-aid)
 
