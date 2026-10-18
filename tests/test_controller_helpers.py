@@ -797,6 +797,72 @@ def test_motion_sensor_schema_includes_clihum_not_battery():
     assert 'BATLOW' not in keys
 
 
+def test_apply_driver_schema_keeps_live_temperature_over_stale_db():
+    """PG3 db_getNodeDrivers lags setDriver; do not publish the stale 0."""
+    poly = MagicMock()
+    poly.db_getNodeDrivers.return_value = [
+        {'driver': 'ST', 'value': 0},
+        {'driver': 'CLIHUM', 'value': 71},
+        {'driver': 'GV1', 'value': 0},
+        {'driver': 'GV2', 'value': 1},
+        {'driver': 'BATLOW', 'value': 0},
+    ]
+    controller = MagicMock(poly=poly)
+    node = SensorNode(
+        controller,
+        'g75821452abb2e',
+        'g82a053b0a42e0',
+        'Master Bath Air Sensor 01',
+        device_id='d0:9d:bc:03:b2:82',
+        aid=3,
+        char_bindings={
+            'CURRENT_TEMPERATURE': {'aid': 3, 'iid': 37},
+            'RELATIVE_HUMIDITY': {'aid': 3, 'iid': 41},
+        },
+        role='sensor',
+    )
+    for spec in node.drivers:
+        if spec['driver'] == 'ST':
+            spec['value'] = 69.0
+        elif spec['driver'] == 'CLIHUM':
+            spec['value'] = 64
+    node.setDriver = MagicMock()
+    node.apply_driver_schema(report=True)
+    reported = {call.args[0]: call.args[1] for call in node.setDriver.call_args_list}
+    assert reported['ST'] == 69.0
+    assert reported['CLIHUM'] == 64
+
+
+def test_motion_on_hap_event_mirrors_ambient_temperature():
+    """Occupancy-only bindings must not drop thermostat temperature on the motion child."""
+    poly = MagicMock()
+    poly.db_getNodeDrivers.return_value = []
+    controller = MagicMock(poly=poly)
+    node = SensorNode(
+        controller,
+        'g75821452abb2e',
+        'g25ee6a9663830',
+        'T9 Thermostat · motion',
+        device_id='d0:9d:bc:03:b2:82',
+        aid=2,
+        char_bindings={'OCCUPANCY_DETECTED': {'aid': 2, 'iid': 129}},
+        role='motion_sensor',
+    )
+
+    def _set(driver, value, report=True, force=False, uom=None, text=None):
+        del report, force, uom, text
+        for spec in node.drivers:
+            if spec['driver'] == driver:
+                spec['value'] = value
+                return
+
+    node.setDriver = _set
+    node.on_hap_event(2, 37, 21.0, 'TEMPERATURE_CURRENT')
+    assert next(d['value'] for d in node.drivers if d['driver'] == 'ST') == 70.0
+    node.on_hap_event(3, 37, 21.0, 'TEMPERATURE_CURRENT')
+    assert next(d['value'] for d in node.drivers if d['driver'] == 'ST') == 70.0
+
+
 def test_apply_driver_schema_skips_deferred_zeros():
     poly = MagicMock()
     poly.db_getNodeDrivers.return_value = [

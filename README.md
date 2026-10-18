@@ -32,6 +32,8 @@ On **Professional**, the hub can create IoX child nodes from standard HomeKit pr
 
 Generic **light**, **fan**, and **switch** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**). Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
 
+Honeywell T9 remote sensors and the built-in motion child report **Temperature** and **Humidity** from HomeKit. Fahrenheit rounding matches the Ecobee plugin. See **[CONFIG.md — supported generic nodes](CONFIG.md#supported-generic-iox-nodes-included-devices)**.
+
 Generic nodes are **off by default**. Enable **`generic_nodes_enable`** on the controller and **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed configuration (see **[CONFIG.md — Professional edition](CONFIG.md#professional-edition)**). Reload the **Configuration** page in your browser if those controls do not appear after upgrade. Existing sites that use **udi-poly-ecobee** or other vendor plugins can leave both off and keep using those plugins for control.
 
 Professional also exports a full HAP capability snapshot per device (auto on pair/reconnect, or **Export device inventory** on a paired device node). See **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for using that JSON to add vendor-specific node types over time.

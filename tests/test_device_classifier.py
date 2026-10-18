@@ -99,6 +99,8 @@ def test_classify_sensor_aids_emits_room_sensors_and_motion_child():
     assert motion['aid'] == 2
     assert motion['node_def_id'] == 'HKHubMotionSensor'
     assert 'MOTION_DETECTED' in motion['char_bindings']
+    assert 'CURRENT_TEMPERATURE' in motion['char_bindings']
+    assert 'RELATIVE_HUMIDITY' in motion['char_bindings']
 
 
 def test_classify_sensor_aids_dry_room_sensor():
@@ -253,6 +255,8 @@ def test_classify_sensor_aids_honeywell_t10_redlink_sensors():
     assert motion['aid'] == 2
     assert motion['node_def_id'] == 'HKHubMotionSensor'
     assert 'OCCUPANCY_DETECTED' in motion['char_bindings']
+    assert 'CURRENT_TEMPERATURE' in motion['char_bindings']
+    assert 'RELATIVE_HUMIDITY' in motion['char_bindings']
 
 
 def test_classify_accessories_from_inventory_label_fixture():

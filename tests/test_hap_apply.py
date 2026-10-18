@@ -136,17 +136,31 @@ def test_apply_temperature_target_cool_sets_cool_only():
 
 
 def test_iox_temp_to_hap_honeywell_min_step_70f():
-    """Honeywell T10 TEMPERATURE_TARGET minStep 0.5 — 70 °F must wire as 21.5 °C, not 21.2."""
+    """Honeywell 0.5 °C grid — 70 °F wires as 21.0 °C (21.5 displays as 71; 21.2 is off-grid)."""
     node = MagicMock()
     node.use_celsius = False
-    assert iox_temp_to_hap_celsius(node, 70, fahrenheit_wire_bias='low', hap_min_step=0.5) == 21.5
+    assert iox_temp_to_hap_celsius(node, 70, fahrenheit_wire_bias='low', hap_min_step=0.5) == 21.0
     assert iox_temp_to_hap_celsius(node, 68, fahrenheit_wire_bias='low', hap_min_step=0.5) == 20.0
-    assert iox_temp_to_hap_celsius(node, 72, fahrenheit_wire_bias='low', hap_min_step=0.5) == 22.5
+    assert iox_temp_to_hap_celsius(node, 72, fahrenheit_wire_bias='low', hap_min_step=0.5) == 22.0
     assert iox_temp_to_hap_celsius(node, 74, fahrenheit_wire_bias='low', hap_min_step=0.5) == 23.5
 
 
-def test_driver_st_from_hap_celsius_truncated_fahrenheit_display():
-    """Read path matches Honeywell/Ecobee UI ``int(C * 1.8 + 32)`` (not :func:`toF` round)."""
+def test_honeywell_half_degree_setpoints_round_trip():
+    node = MagicMock()
+    node.use_celsius = False
+    for deg_f in range(50, 91):
+        wired = iox_temp_to_hap_celsius(
+            node, deg_f, fahrenheit_wire_bias='low', hap_min_step=0.5
+        )
+        assert abs(wired * 2 - round(wired * 2)) < 1e-9
+        assert driver_st_from_hap_celsius(False, wired) == float(deg_f)
+
+
+def test_driver_st_from_hap_celsius_matches_ecobee_tof():
+    """Read path is Ecobee ``toF`` (``round(C * 1.8) + 32``). 22.5 °C stays 72, not 73."""
+    assert driver_st_from_hap_celsius(False, 21.0) == 70.0
+    assert driver_st_from_hap_celsius(False, 21.5) == 71.0
+    assert driver_st_from_hap_celsius(False, 22.0) == 72.0
     assert driver_st_from_hap_celsius(False, 22.5) == 72.0
     assert driver_st_from_hap_celsius(False, 23.5) == 74.0
     assert driver_st_from_hap_celsius(False, 24.0) == 75.0

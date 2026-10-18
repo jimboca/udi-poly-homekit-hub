@@ -88,6 +88,8 @@ _CHAR_BINDINGS_SENSOR = (
 )
 
 _MOTION_SENSOR_CHAR_NAMES = frozenset({'MOTION_DETECTED', 'OCCUPANCY_DETECTED'})
+# Built-in motion child mirrors the thermostat's ambient temp/humidity (same aid).
+_MOTION_AMBIENT_CHAR_NAMES = frozenset({'CURRENT_TEMPERATURE', 'RELATIVE_HUMIDITY'})
 
 _SENSOR_NODE_DEF_HUMID = 'HKHubSensor'
 _SENSOR_NODE_DEF_DRY = 'HKHubSensorDry'
@@ -356,10 +358,14 @@ def classify_sensor_aids(
         if aid in control_aids:
             # Motion child only on thermostat control aid (not fan/light/switch aids).
             if ctrl is not None and aid == ctrl:
-                motion_bindings = {
+                motion_signals = {
                     k: v for k, v in bindings.items() if k in _MOTION_SENSOR_CHAR_NAMES
                 }
-                if motion_bindings:
+                if motion_signals:
+                    motion_bindings = dict(motion_signals)
+                    for key in _MOTION_AMBIENT_CHAR_NAMES:
+                        if key in bindings:
+                            motion_bindings[key] = bindings[key]
                     rows.append(
                         {
                             'aid': aid,

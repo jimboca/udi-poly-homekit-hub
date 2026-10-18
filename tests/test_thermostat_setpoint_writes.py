@@ -87,7 +87,7 @@ def test_clisph_writes_bound_aid_iid_for_honeywell():
     assert args[0] == 'aa:bb:cc:dd:ee:ff'
     assert args[1] == 2
     assert args[2] == 12
-    assert args[3] == 21.5
+    assert args[3] == 21.0
     node.controller.hub_write.assert_not_called()
     assert node.getDriver('CLISPH') == 70
 
@@ -106,7 +106,7 @@ def test_clisph_writes_bound_aid_iid_for_honeywell_without_minstep_metadata():
     node.controller.hub_write_by_iid.assert_called_once()
     args = node.controller.hub_write_by_iid.call_args[0]
     assert args[2] == 12
-    assert args[3] == 21.5
+    assert args[3] == 21.0
     node.cmd_set_pf({'cmd': 'CLISPH', 'value': 74})
     assert node.controller.hub_write_by_iid.call_args[0][3] == 23.5
 

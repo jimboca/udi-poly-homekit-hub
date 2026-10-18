@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.20] - 2026-10-18
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Professional)** **Honeywell T9 remote-sensor temperature stuck at 0:** a sensor refresh re-read PG3's driver database before the just-applied HomeKit snapshot was stored, then published that stale 0 over the live temperature. Humidity kept updating because later events were not followed by the same refresh. The refresh now keeps the value already on the node.
+- **(Professional)** **Built-in motion child temperature:** thermostats that expose occupancy (T9, not every T9 Plus) bound the motion node to occupancy only, so current temperature and humidity on that accessory were ignored. The motion child now mirrors those ambient readings. A T9 Plus without occupancy already matched by accessory id, which is why one thermostat could look fine and the other stay at 0.
+- **(Professional)** **Fahrenheit display:** current temperature and setpoints use the same rounding as the Ecobee plugin (`round(C × 1.8) + 32`). Truncation was about 1°F low on Honeywell 0.5°C steps (21.0°C showed 69 instead of 70). Ecobee 0.1°C setpoint writes are unchanged (72°F still wires as 22.3°C). Honeywell 0.5°C writes now round-trip (70°F wires as 21.0°C, not 21.5°C, which displays as 71). 22.5°C still reads as 72°F.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.20** — `nodes/__init__.py` **`VERSION`**. Profile version stays **2.0.19** (no nodedef or NLS changes).
+
 ## [2.0.19] - 2026-10-05
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

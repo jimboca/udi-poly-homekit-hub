@@ -346,9 +346,10 @@ def hap_current_fan_state_to_clifrs(v: int) -> int:
 def driver_st_from_hap_celsius(use_celsius: bool, celsius: float) -> float:
     if use_celsius:
         return round(float(celsius) * 2) / 2
-    # Honeywell / Ecobee HomeKit UI uses truncated exact °F (``int(C * 1.8 + 32)``), not
-    # :func:`hub_node_funcs.toF` round-trip — e.g. 22.5 °C must read as 72 °F, not 73 °F.
-    return float(_fahrenheit_trunc_display_f(float(celsius)))
+    # Same display as udi-poly-ecobee ``toF``: ``round(C * 1.8) + 32``.
+    # Truncation (``int(C * 1.8 + 32)``) is 1°F low on Honeywell 0.5°C steps
+    # (21.0°C → 69 instead of 70). ``toF(22.5)`` is still 72, not 73.
+    return float(toF(float(celsius)))
 
 
 def _driver_st_to_hap_c(node: 'HomeKitThermostat', driver_val: float) -> float:
@@ -539,14 +540,14 @@ def _fahrenheit_trunc_display_f(c: float) -> int:
 
 
 def _fahrenheit_hap_c_bins_min_step(target_f: int, min_step: float) -> list[float]:
-    """HAP °C values on *min_step* grid whose truncated °F display equals *target_f*."""
+    """HAP °C values on *min_step* grid whose :func:`toF` display equals *target_f*."""
     t = int(target_f)
     center = (t - 32) / 1.8
     k0 = int(round(center / min_step))
     hits: list[float] = []
     for dk in range(-12, 13):
         c = round((k0 + dk) * min_step, 10)
-        if _fahrenheit_trunc_display_f(c) == t:
+        if toF(c) == t:
             hits.append(c)
     return hits
 
@@ -578,14 +579,16 @@ def iox_temp_to_hap_celsius(
 
     Round to **0.1 °C** so accessories (e.g. Ecobee) do not reject long binary floats (-70410).
 
-    **Fahrenheit:** Ecobee's thermostat UI shows ``int(C * 1.8 + 32)`` (truncated exact °F), not
-    :func:`hub_node_funcs.toF` round-trip. For ``fahrenheit_wire_bias='low'``, pick the **lowest**
-    0.1 °C bin whose truncated display equals the target (e.g. **76 °F → 24.5 °C**, not 24.2 °C
-    which displays **75**). Fall back to the lowest ``toF``-compatible bin when needed. ``high``
-    keeps the highest ``toF`` bin for troubleshooting.
+    **Fahrenheit display** is :func:`hub_node_funcs.toF` (``round(C * 1.8) + 32``), the same
+    formula as udi-poly-ecobee. For ``fahrenheit_wire_bias='low'`` on the 0.1 °C grid, pick the
+    **lowest** bin whose truncated display equals the target (e.g. **72 °F → 22.3 °C**). Those
+    bins also :func:`toF` back to the same degree, and they stay off the top of the band where
+    Ecobee's UI rounds up (75 °F must not wire as 23.9 °C and show 76). ``high`` keeps the
+    highest ``toF`` bin for troubleshooting.
 
-    When *hap_min_step* is set (e.g. Honeywell T10 ``TEMPERATURE_TARGET`` uses **0.5 °C**), only
-    values on that grid are emitted — 0.1 °C Ecobee bins are rejected by HAP (-70410).
+    When *hap_min_step* is set (Honeywell T9/T10 ``TEMPERATURE_TARGET`` uses **0.5 °C**), only
+    values on that grid whose :func:`toF` equals the target are emitted — 0.1 °C Ecobee bins
+    are rejected by HAP (-70410). Example: **70 °F → 21.0 °C** (21.5 °C displays as 71).
     """
     min_step = _normalize_hap_min_step(hap_min_step)
 

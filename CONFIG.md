@@ -128,7 +128,10 @@ When generic control is enabled (below), the hub can create these child node typ
 | Switch / outlet | **HKHubSwitch** |
 | Contact, motion, occupancy (standalone accessory) | **HKHubSensor** (per HAP `aid`) |
 | Ecobee room sensors (separate `aid`s) | **HKHubSensor** child per sensor |
-| Built-in motion on thermostat `aid` | **HKHubSensor** · motion child |
+| Built-in motion on thermostat `aid` | **HKHubMotionSensor** · motion child (mirrors thermostat temperature and humidity) |
+| Remote temperature/humidity sensors (separate `aid`, e.g. Honeywell T9) | **HKHubSensor** child per sensor |
+
+Remote-sensor **Temperature** and the motion child's **Temperature** follow the HomeKit current-temperature reading (humidity follows relative humidity). Fahrenheit uses the same rounding as the Ecobee plugin: `round(C × 1.8) + 32`. A Honeywell 0.5°C step such as 21.0°C is 70°F. 22.5°C is 72°F.
 
 Generic **light**, **fan**, and **switch** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**). Capability-specific light variants (color, etc.) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)**.
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, Set
 from udi_interface import Node
 
 import homekit_hub.hap_apply as hap_apply
+from homekit_hub.char_map import builtin_motion_sensor_mirror_characteristic
 from homekit_hub.device_classifier import expected_sensor_nodedef
 from hub_node_funcs import get_valid_node_name, hap_event_matches_node
 
@@ -82,9 +83,22 @@ class SensorNode(Node):
                 self._driver_seen.add(drv)
 
     def apply_driver_schema(self, *, report: bool = False) -> None:
-        """Re-apply nodedef driver uoms/names; keep PG3 values but not stale uoms."""
+        """Re-apply nodedef driver uoms/names; keep live values, not a stale PG3 copy."""
         schema = self._drivers_for_role(self.role, self.char_bindings)
-        self.drivers = self._driver_schema_from_db(self._poly(), self.address, schema)
+        # db_getNodeDrivers lags setDriver until PG3 echoes status. A refresh that
+        # reloads the DB here would publish the previous 0 over a snapshot that
+        # just set temperature (Honeywell T9 remote sensors).
+        live: Dict[str, Any] = {}
+        for spec in getattr(self, 'drivers', None) or []:
+            if isinstance(spec, dict) and spec.get('driver'):
+                live[str(spec['driver'])] = spec.get('value')
+        merged = self._driver_schema_from_db(self._poly(), self.address, schema)
+        if live:
+            for row in merged:
+                drv = str(row.get('driver') or '')
+                if drv in live:
+                    row['value'] = live[drv]
+        self.drivers = merged
         self._seed_driver_seen_from_values()
         if not report:
             return
@@ -162,6 +176,17 @@ class SensorNode(Node):
         return hap_apply.apply_characteristic_to_sensor(self, label, value)
 
     def on_hap_event(self, aid: int, iid: int, value: Any, label: str) -> None:
+        # Motion bindings are occupancy/motion only unless ambient iids were merged.
+        # Still mirror current temperature and humidity from the thermostat aid
+        # (T9 built-in motion child). iid matching would drop those events.
+        if self.role == 'motion_sensor' and builtin_motion_sensor_mirror_characteristic(label):
+            try:
+                same_aid = int(aid) == int(self.aid)
+            except (TypeError, ValueError):
+                same_aid = False
+            if same_aid:
+                hap_apply.apply_characteristic_to_sensor(self, label, value)
+                return
         if not hap_event_matches_node(aid, iid, self):
             return
         hap_apply.apply_characteristic_to_sensor(self, label, value)
