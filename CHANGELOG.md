@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.21] - 2026-11-03
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Added
+
+- **(Professional)** Generic **HKHubGarageDoor** IoX node for a HomeKit garage door opener (ratgdo32 HomeKit firmware and other HAP garage-door accessories). **Door State** follows current door state (Closed, Open, Stopped, Closing, Opening). **Open** and **Close** write the target door state. **Obstruction** follows obstruction detected. **Lock**, **Unlock**, and **Lock** status are used when the accessory exposes a lock (omitted on dry-contact ratgdo). The light and motion accessories on the same bridge stay **HKHubLight** and **HKHubMotionSensor**.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.21** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt` (garage door nodedef, editor, and NLS).
+
 ## [2.0.20] - 2026-10-18
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

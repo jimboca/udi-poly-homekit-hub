@@ -349,6 +349,77 @@ def test_classify_hunter_simpleconnect_fan_light():
     assert classify_sensor_aids(accessories) == []
 
 
+def _ratgdo_garage_bridge():
+    """ratgdo32 HomeKit firmware: garage door, light, and motion on separate aids."""
+    return [
+        _Acc(
+            2,
+            [
+                _Svc(
+                    1,
+                    ServicesTypes.ACCESSORY_INFORMATION,
+                    [
+                        _Char(3, CharacteristicsTypes.NAME, 'Garage Door 2FF25C'),
+                        _Char(6, CharacteristicsTypes.MODEL, 'ratgdo-ESP32'),
+                    ],
+                ),
+                _Svc(
+                    8,
+                    ServicesTypes.GARAGE_DOOR_OPENER,
+                    [
+                        _Char(9, CharacteristicsTypes.DOOR_STATE_CURRENT, 1),
+                        _Char(10, CharacteristicsTypes.DOOR_STATE_TARGET, 1),
+                        _Char(11, CharacteristicsTypes.OBSTRUCTION_DETECTED, False),
+                        _Char(12, CharacteristicsTypes.LOCK_MECHANISM_CURRENT_STATE, 0),
+                        _Char(13, CharacteristicsTypes.LOCK_MECHANISM_TARGET_STATE, 0),
+                    ],
+                ),
+            ],
+        ),
+        _Acc(
+            4,
+            [
+                _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, [_Char(3, CharacteristicsTypes.NAME, 'Motion')]),
+                _Svc(
+                    4,
+                    ServicesTypes.MOTION_SENSOR,
+                    [_Char(5, CharacteristicsTypes.MOTION_DETECTED, False)],
+                ),
+            ],
+        ),
+        _Acc(
+            8,
+            [
+                _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, [_Char(3, CharacteristicsTypes.NAME, 'Light')]),
+                _Svc(
+                    4,
+                    ServicesTypes.LIGHTBULB,
+                    [_Char(5, CharacteristicsTypes.ON, False)],
+                ),
+            ],
+        ),
+    ]
+
+
+def test_classify_ratgdo_garage_door_light_and_motion():
+    accessories = _ratgdo_garage_bridge()
+    rows = classify_accessories(accessories)
+    roles = {r['role'] for r in rows}
+    assert roles == {'garage_door', 'light'}
+    door = next(r for r in rows if r['role'] == 'garage_door')
+    assert door['node_def_id'] == 'HKHubGarageDoor'
+    assert door['aid'] == 2
+    assert door['char_bindings']['DOOR_STATE_CURRENT']['iid'] == 9
+    assert door['char_bindings']['DOOR_STATE_TARGET']['iid'] == 10
+    assert door['char_bindings']['OBSTRUCTION_DETECTED']['iid'] == 11
+    assert door['char_bindings']['LOCK_MECHANISM_CURRENT_STATE']['iid'] == 12
+    assert door['char_bindings']['LOCK_MECHANISM_TARGET_STATE']['iid'] == 13
+    sensor_rows = classify_sensor_aids(accessories)
+    assert [r['aid'] for r in sensor_rows] == [4]
+    assert sensor_rows[0]['role'] == 'motion_sensor' or sensor_rows[0]['role'] == 'sensor'
+    assert sensor_rows[0]['char_bindings']['MOTION_DETECTED']['iid'] == 5
+
+
 def test_hap_event_matches_bound_iid_only():
     from hub_node_funcs import hap_event_matches_node
 

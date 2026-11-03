@@ -62,6 +62,8 @@ ND-HKHubFan-NAME = HomeKit Fan
 ND-HKHubFan-ICON = GenericCtl
 ND-HKHubSwitch-NAME = HomeKit Switch
 ND-HKHubSwitch-ICON = Relay
+ND-HKHubGarageDoor-NAME = HomeKit Garage Door
+ND-HKHubGarageDoor-ICON = DoorLock
 ND-HKHubBinarySensor-NAME = HomeKit Sensor
 ND-HKHubBinarySensor-ICON = Sensor
 ND-HKHubSensor-NAME = HomeKit Sensor
@@ -105,6 +107,26 @@ CMD-hkfan-QUERY-NAME = Query
 
 EN_FAN_DIR-0 = Clockwise
 EN_FAN_DIR-1 = Counterclockwise
+
+ST-hkgdo-ST-NAME = Door State
+ST-hkgdo-GV1-NAME = Obstruction
+ST-hkgdo-GV2-NAME = Lock
+CMD-hkgdo-DON-NAME = Open
+CMD-hkgdo-DOF-NAME = Close
+CMD-hkgdo-LOCK-NAME = Lock
+CMD-hkgdo-UNLOCK-NAME = Unlock
+CMD-hkgdo-QUERY-NAME = Query
+HKGDOST-0 = Closed
+HKGDOST-1 = Open
+HKGDOST-2 = Stopped
+HKGDOST-3 = Closing
+HKGDOST-4 = Opening
+HKGDOOBS-0 = Clear
+HKGDOOBS-1 = Obstructed
+HKGDOLK-0 = Unlocked
+HKGDOLK-1 = Locked
+HKGDOLK-2 = Jammed
+HKGDOLK-3 = Unknown
 
 ST-hksensor-ST-NAME = Temperature
 ST-hksensor-GV1-NAME = Occupancy

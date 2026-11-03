@@ -83,4 +83,13 @@
   <editor id="I_FAN_DIR">
     <range uom="25" subset="0,1" nls="EN_FAN_DIR" />
   </editor>
+  <editor id="I_GDO_ST">
+    <range uom="25" subset="0-4" nls="HKGDOST" />
+  </editor>
+  <editor id="I_GDO_OBS">
+    <range uom="25" subset="0,1" nls="HKGDOOBS" />
+  </editor>
+  <editor id="I_GDO_LOCK">
+    <range uom="25" subset="0-3" nls="HKGDOLK" />
+  </editor>
 </editors>

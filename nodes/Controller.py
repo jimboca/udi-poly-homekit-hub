@@ -70,6 +70,7 @@ from .LightNode import LightNode
 from .SensorNode import DrySensorNode, MotionSensorNode, SensorNode
 from .SwitchNode import SwitchNode
 from .FanNode import FanNode
+from .GarageDoorNode import GarageDoorNode
 from .ThermostatNode import ThermostatNode
 
 _DEV_EDITION_NOTICE_KEYS = ('dev_edition_override', 'dev_edition_mismatch')
@@ -4307,6 +4308,10 @@ class Controller(Node):
                         )
                     elif node_def == 'HKHubFan':
                         node = FanNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    elif node_def == 'HKHubGarageDoor':
+                        node = GarageDoorNode(
                             self, addr, title, device_id=did, aid=aid, char_bindings=bindings
                         )
                     elif node_def in (

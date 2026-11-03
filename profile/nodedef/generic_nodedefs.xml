@@ -87,6 +87,23 @@
       </accepts>
     </cmds>
   </nodeDef>
+  <nodeDef id="HKHubGarageDoor" nls="hkgdo">
+    <editors />
+    <sts>
+      <st id="ST" editor="I_GDO_ST" />
+      <st id="GV1" editor="I_GDO_OBS" />
+      <st id="GV2" editor="I_GDO_LOCK" />
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="DON" />
+        <cmd id="DOF" />
+        <cmd id="LOCK" />
+        <cmd id="UNLOCK" />
+        <cmd id="QUERY" />
+      </accepts>
+    </cmds>
+  </nodeDef>
   <nodeDef id="HKHubSwitch" nls="hkswitch">
     <editors />
     <sts>

@@ -28,9 +28,10 @@ On **Professional**, the hub can create IoX child nodes from standard HomeKit pr
 | Light | **HKHubLight** |
 | Fan | **HKHubFan** |
 | Switch / outlet | **HKHubSwitch** |
+| Garage door | **HKHubGarageDoor** |
 | Contact, motion, occupancy, … | **HKHubBinarySensor** |
 
-Generic **light**, **fan**, and **switch** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**). Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
+Generic **light**, **fan**, **switch**, and **garage door** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**, **HKHubGarageDoor**). A HomeKit garage door (for example ratgdo32 firmware) reports **Door State**, **Obstruction**, and **Lock** when the accessory has a lock. **Open** and **Close** move the door. Light and motion accessories on the same bridge stay separate nodes. Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
 
 Honeywell T9 remote sensors and the built-in motion child report **Temperature** and **Humidity** from HomeKit. Fahrenheit rounding matches the Ecobee plugin. See **[CONFIG.md — supported generic nodes](CONFIG.md#supported-generic-iox-nodes-included-devices)**.
 

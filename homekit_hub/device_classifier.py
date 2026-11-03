@@ -43,6 +43,13 @@ for _name in ('FAN', 'FAN_V2'):
         except Exception:
             pass
 
+_GARAGE_DOOR_SERVICE_UUIDS: Set[str] = set()
+if hasattr(ServicesTypes, 'GARAGE_DOOR_OPENER'):
+    try:
+        _GARAGE_DOOR_SERVICE_UUIDS.add(normalize_uuid(ServicesTypes.GARAGE_DOOR_OPENER))
+    except Exception:
+        pass
+
 _ACCESSORY_INFO_SERVICE_UUID: Optional[str] = None
 if hasattr(ServicesTypes, 'ACCESSORY_INFORMATION'):
     try:
@@ -77,6 +84,13 @@ _CHAR_BINDINGS_THERMOSTAT = (
 _CHAR_BINDINGS_LIGHT = ('ON', 'BRIGHTNESS', 'COLOR_TEMPERATURE')
 _CHAR_BINDINGS_SWITCH = ('ON',)
 _CHAR_BINDINGS_FAN = ('ON', 'ACTIVE', 'ROTATION_SPEED', 'ROTATION_DIRECTION')
+_CHAR_BINDINGS_GARAGE = (
+    'DOOR_STATE_CURRENT',
+    'DOOR_STATE_TARGET',
+    'OBSTRUCTION_DETECTED',
+    'LOCK_MECHANISM_CURRENT_STATE',
+    'LOCK_MECHANISM_TARGET_STATE',
+)
 _CHAR_BINDINGS_SENSOR = (
     'CONTACT_STATE',
     'MOTION_DETECTED',
@@ -168,6 +182,10 @@ _CHAR_ALIAS_TO_BINDING: Dict[str, str] = {
     'RELATIVE_HUMIDITY_TARGET': 'TARGET_RELATIVE_HUMIDITY',
     'TEMPERATURE_UNITS': 'TEMPERATURE_DISPLAY_UNITS',
     'STATUS_LOW_BATTERY': 'STATUS_LO_BATT',
+    'CURRENT_DOOR_STATE': 'DOOR_STATE_CURRENT',
+    'TARGET_DOOR_STATE': 'DOOR_STATE_TARGET',
+    'LOCK_CURRENT_STATE': 'LOCK_MECHANISM_CURRENT_STATE',
+    'LOCK_TARGET_STATE': 'LOCK_MECHANISM_TARGET_STATE',
 }
 
 
@@ -175,7 +193,11 @@ def _binding_key_for_label(label: str) -> Optional[str]:
     u = (label or '').upper()
     if not u:
         return None
-    if u in _CHAR_BINDINGS_THERMOSTAT or u in _CHAR_BINDINGS_SENSOR:
+    if (
+        u in _CHAR_BINDINGS_THERMOSTAT
+        or u in _CHAR_BINDINGS_SENSOR
+        or u in _CHAR_BINDINGS_GARAGE
+    ):
         return u
     return _CHAR_ALIAS_TO_BINDING.get(u)
 
@@ -338,7 +360,7 @@ def classify_sensor_aids(
         control_aids.add(int(ctrl))
     for crow in classify_accessories(accessories):
         role = str(crow.get('role') or '')
-        if role in ('thermostat', 'light', 'switch', 'fan'):
+        if role in ('thermostat', 'light', 'switch', 'fan', 'garage_door'):
             try:
                 control_aids.add(int(crow.get('aid') or 0))
             except (TypeError, ValueError):
@@ -450,6 +472,20 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'service_iid': svc_iid,
                             'char_bindings': bindings,
                             'vendor': 'ecobee' if ecobee else None,
+                        }
+                    )
+                continue
+            if su in _GARAGE_DOOR_SERVICE_UUIDS:
+                bindings = _bind_service_chars(aid, svc, _CHAR_BINDINGS_GARAGE)
+                if bindings.get('DOOR_STATE_CURRENT') or bindings.get('DOOR_STATE_TARGET'):
+                    rows.append(
+                        {
+                            'aid': aid,
+                            'role': 'garage_door',
+                            'node_def_id': 'HKHubGarageDoor',
+                            'service_iid': svc_iid,
+                            'char_bindings': bindings,
+                            'vendor': None,
                         }
                     )
                 continue

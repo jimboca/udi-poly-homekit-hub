@@ -46,6 +46,30 @@ _HAP_ROTATION_SPEED_UUID_NORM = normalize_hap_uuid('00000029-0000-1000-8000-0026
 _HAP_ROTATION_DIRECTION_UUID_NORM = normalize_hap_uuid('00000028-0000-1000-8000-0026BB765291')
 _HAP_BRIGHTNESS_UUID_NORM = normalize_hap_uuid('00000008-0000-1000-8000-0026BB765291')
 _HAP_CONTACT_SENSOR_STATE_UUID_NORM = normalize_hap_uuid('0000006A-0000-1000-8000-0026BB765291')
+_HAP_DOOR_STATE_CURRENT_UUID_NORM = normalize_hap_uuid('0000000E-0000-1000-8000-0026BB765291')
+_HAP_DOOR_STATE_TARGET_UUID_NORM = normalize_hap_uuid('00000032-0000-1000-8000-0026BB765291')
+_HAP_OBSTRUCTION_DETECTED_UUID_NORM = normalize_hap_uuid('00000024-0000-1000-8000-0026BB765291')
+_HAP_LOCK_CURRENT_UUID_NORM = normalize_hap_uuid('0000001D-0000-1000-8000-0026BB765291')
+_HAP_LOCK_TARGET_UUID_NORM = normalize_hap_uuid('0000001E-0000-1000-8000-0026BB765291')
+
+# IoX Door State indices: Closed, Open, Stopped, Closing, Opening.
+# HAP Current Door State is Open=0, Closed=1, Opening=2, Closing=3, Stopped=4.
+IOX_DOOR_CLOSED = 0
+IOX_DOOR_OPEN = 1
+IOX_DOOR_STOPPED = 2
+IOX_DOOR_CLOSING = 3
+IOX_DOOR_OPENING = 4
+_HAP_CURRENT_DOOR_TO_IOX = {
+    0: IOX_DOOR_OPEN,
+    1: IOX_DOOR_CLOSED,
+    2: IOX_DOOR_OPENING,
+    3: IOX_DOOR_CLOSING,
+    4: IOX_DOOR_STOPPED,
+}
+HAP_TARGET_DOOR_OPEN = 0
+HAP_TARGET_DOOR_CLOSED = 1
+HAP_LOCK_TARGET_UNSECURED = 0
+HAP_LOCK_TARGET_SECURED = 1
 
 
 def is_ecobee_current_mode_characteristic(characteristic: str) -> bool:
@@ -800,6 +824,137 @@ def hap_name_rotation_speed() -> str:
 
 def hap_name_rotation_direction() -> str:
     return 'ROTATION_DIRECTION'
+
+
+def hap_name_door_state_target() -> str:
+    return 'DOOR_STATE_TARGET'
+
+
+def hap_name_lock_target() -> str:
+    return 'LOCK_MECHANISM_TARGET_STATE'
+
+
+def hap_current_door_state_to_iox(value: Any) -> Optional[int]:
+    """HAP Current Door State → IoX Door State index. Unknown values return None."""
+    try:
+        return _HAP_CURRENT_DOOR_TO_IOX.get(int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def hap_lock_current_state_to_iox(value: Any) -> Optional[int]:
+    """HAP Lock Current State (0 unsecured, 1 secured, 2 jammed, 3 unknown) → IoX Lock index."""
+    try:
+        state = int(value)
+    except (TypeError, ValueError):
+        return None
+    if state < 0 or state > 3:
+        return None
+    return state
+
+
+def _hap_char_is(characteristic: str, uuid_norm: Optional[str], *names: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and uuid_norm and nu == uuid_norm:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return norm in names
+
+
+def is_hap_current_door_state_characteristic(characteristic: str) -> bool:
+    return _hap_char_is(
+        characteristic,
+        _HAP_DOOR_STATE_CURRENT_UUID_NORM,
+        'DOOR_STATE_CURRENT',
+        'CURRENT_DOOR_STATE',
+    )
+
+
+def is_hap_target_door_state_characteristic(characteristic: str) -> bool:
+    return _hap_char_is(
+        characteristic,
+        _HAP_DOOR_STATE_TARGET_UUID_NORM,
+        'DOOR_STATE_TARGET',
+        'TARGET_DOOR_STATE',
+    )
+
+
+def is_hap_obstruction_characteristic(characteristic: str) -> bool:
+    return _hap_char_is(
+        characteristic,
+        _HAP_OBSTRUCTION_DETECTED_UUID_NORM,
+        'OBSTRUCTION_DETECTED',
+    )
+
+
+def is_hap_lock_current_characteristic(characteristic: str) -> bool:
+    return _hap_char_is(
+        characteristic,
+        _HAP_LOCK_CURRENT_UUID_NORM,
+        'LOCK_MECHANISM_CURRENT_STATE',
+        'LOCK_CURRENT_STATE',
+    )
+
+
+def is_hap_lock_target_characteristic(characteristic: str) -> bool:
+    return _hap_char_is(
+        characteristic,
+        _HAP_LOCK_TARGET_UUID_NORM,
+        'LOCK_MECHANISM_TARGET_STATE',
+        'LOCK_TARGET_STATE',
+    )
+
+
+def _is_garage_door_characteristic(characteristic: str) -> bool:
+    return (
+        is_hap_current_door_state_characteristic(characteristic)
+        or is_hap_target_door_state_characteristic(characteristic)
+        or is_hap_obstruction_characteristic(characteristic)
+        or is_hap_lock_current_characteristic(characteristic)
+        or is_hap_lock_target_characteristic(characteristic)
+    )
+
+
+def apply_characteristic_to_garage_door(
+    node: Any,
+    characteristic: str,
+    value: Any,
+    *,
+    log: Optional[logging.Logger] = None,
+) -> bool:
+    """Map HAP garage-door state to IoX Door State, Obstruction, and Lock."""
+    lg = log or _LOG
+    if not _is_garage_door_characteristic(characteristic):
+        bucket = classify(characteristic, 0)
+        return bucket != CharBucket.UNKNOWN
+    if value is None:
+        return True
+    try:
+        if is_hap_current_door_state_characteristic(characteristic):
+            mapped = hap_current_door_state_to_iox(value)
+            if mapped is None:
+                return True
+            _set_node_driver(node, 'ST', mapped)
+            return True
+        if is_hap_target_door_state_characteristic(characteristic):
+            return True
+        if is_hap_obstruction_characteristic(characteristic):
+            _set_node_driver(node, 'GV1', hap_on_to_iox(value))
+            return True
+        if is_hap_lock_current_characteristic(characteristic):
+            mapped = hap_lock_current_state_to_iox(value)
+            if mapped is None:
+                return True
+            _set_node_driver(node, 'GV2', mapped)
+            return True
+        if is_hap_lock_target_characteristic(characteristic):
+            return True
+    except Exception:
+        lg.debug('garage door hap_apply failed for %s=%r', characteristic, value, exc_info=True)
+        return True
+    return True
 
 
 def is_hap_active_characteristic(characteristic: str) -> bool:

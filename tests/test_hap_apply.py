@@ -8,6 +8,7 @@ from homekit_hub.hap_apply import (
     ECOBEE_HK_COMFORT_TEMP,
     driver_st_from_hap_celsius,
     apply_characteristic_to_binary_sensor,
+    apply_characteristic_to_garage_door,
     apply_characteristic_to_light,
     apply_characteristic_to_sensor,
     apply_characteristic_to_switch,
@@ -21,6 +22,7 @@ from homekit_hub.hap_apply import (
     infer_ecobee_clismd,
     hap_brightness_to_iox,
     hap_contact_state_to_iox,
+    hap_current_door_state_to_iox,
     hap_current_fan_state_to_clifrs,
     hap_current_heating_cooling_to_clihcs,
     hap_on_to_iox,
@@ -376,6 +378,35 @@ def test_apply_light_ignores_unknown_characteristic():
     node = MagicMock()
     assert apply_characteristic_to_light(node, 'DEADBEEF-0000-1000-8000-0026BB765291', 1) is False
     node.set_driver_safe.assert_not_called()
+
+
+def test_hap_current_door_state_to_iox():
+    assert hap_current_door_state_to_iox(0) == 1  # HAP Open
+    assert hap_current_door_state_to_iox(1) == 0  # HAP Closed
+    assert hap_current_door_state_to_iox(2) == 4  # HAP Opening
+    assert hap_current_door_state_to_iox(3) == 3  # HAP Closing
+    assert hap_current_door_state_to_iox(4) == 2  # HAP Stopped
+    assert hap_current_door_state_to_iox(9) is None
+
+
+def test_apply_garage_door_current_closed_and_obstruction():
+    node = MagicMock()
+    assert apply_characteristic_to_garage_door(node, 'DOOR_STATE_CURRENT', 1) is True
+    assert apply_characteristic_to_garage_door(node, 'OBSTRUCTION_DETECTED', True) is True
+    assert apply_characteristic_to_garage_door(node, 'LOCK_MECHANISM_CURRENT_STATE', 1) is True
+    # Target door state is a command echo, not Door State.
+    assert apply_characteristic_to_garage_door(node, 'DOOR_STATE_TARGET', 0) is True
+    node.set_driver_safe.assert_any_call('ST', 0, report=True)
+    node.set_driver_safe.assert_any_call('GV1', 1, report=True)
+    node.set_driver_safe.assert_any_call('GV2', 1, report=True)
+    assert node.set_driver_safe.call_count == 3
+
+
+def test_apply_garage_door_current_by_uuid():
+    node = MagicMock()
+    u = '0000000E-0000-1000-8000-0026BB765291'
+    assert apply_characteristic_to_garage_door(node, u, 2) is True
+    node.set_driver_safe.assert_called_once_with('ST', 4, report=True)
 
 
 def test_apply_switch_on_maps_st():
