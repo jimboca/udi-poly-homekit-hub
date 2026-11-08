@@ -216,7 +216,7 @@ Symptoms: **DISCOVER** lists the device under **Already paired elsewhere**, or p
 5. Run **DISCOVER** again; confirm the target is **unpaired**.
 6. Enter the pairing code **currently shown on the accessory** (re-open pairing mode if needed) on the slot row and **Save**.
 
-**UNPAIR** / **DELETE** on a slot row clears **this plugin's** pairing data only. If the accessory still advertises `paired=True`, repeat the steps above on the device side.
+**Unpair device** / **DELETE** on a pairing node removes this plugin's slot: child nodes, the pairing node, and the Custom Typed row. If the accessory still advertises `paired=True`, repeat the steps above on the device side.
 
 Other notes:
 
@@ -336,10 +336,10 @@ Each pairing slot row is exposed as its own node:
 
 | Command | Purpose |
 |---------|---------|
-| **UNPAIR** | Clears that row's `hap_pin` and reloads hub sessions. |
-| **DELETE** | Removes the row, clears saved slot data, deletes the node. |
+| **Unpair device** | Deletes IoX nodes under that pairing first (room sensors before a thermostat, then other children), then deletes the pairing node and removes the Custom Typed slot and saved pairing data. |
+| **DELETE** | Same removal as **Unpair device**. |
 
-`UNPAIR` / `DELETE` do **not** guarantee the physical accessory cleared its HomeKit bond.
+Neither command guarantees the physical accessory cleared its HomeKit bond. The hub asks the accessory to drop the pairing when the slot is removed; if that fails, reset pairing on the device.
 
 ### HomeKit setup URI (`X-HM://`)
 

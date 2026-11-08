@@ -23,6 +23,7 @@ from nodes.Controller import (
     _LEGACY_HAP_DISCOVER_MARKER,
     _UI_SEED_CUSTOM_PARAMS,
 )
+from nodes.PairedDeviceNode import PairedDeviceNode
 from nodes.SensorNode import SensorNode
 
 
@@ -1265,4 +1266,74 @@ def test_on_full_restart_done_clears_discover_bridge_restart_notice():
     assert "discover_bridge_restart" not in c.Notices
     assert "Bridge restart complete." in c.Notices["hap_discover"]
     assert "is restarting" not in c.Notices["hap_discover"]
+
+
+def test_unpair_deletes_children_then_pairing_node_then_slot_config():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData(
+        {
+            TYPED_PAIRING_SLOTS_KEY: [
+                {
+                    "node_key": "a",
+                    "slot": 1,
+                    "hap_pin": "123-45-678",
+                    "accessory_id": "aa:bb:cc:dd:ee:ff",
+                }
+            ]
+        }
+    )
+    c.Data = FakeData(
+        {"homekit_pairings": {"1": {"AccessoryPairingID": "aa:bb:cc:dd:ee:ff"}}}
+    )
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {"address": "hkp_a", "primaryNode": "controller"},
+        {"address": "gdoor", "primaryNode": "hkp_a"},
+        {"address": "light1", "primaryNode": "hkp_a"},
+        {"address": "sub", "primaryNode": "light1"},
+        {"address": "tstat", "primaryNode": "tstat"},
+        {"address": "sens1", "primaryNode": "tstat"},
+    ]
+    c._generic_nodes = {
+        "tstat": MagicMock(
+            device_id="aa:bb:cc:dd:ee:ff", id="HKHubThermostat", address="tstat"
+        ),
+        "sens1": MagicMock(
+            device_id="aa:bb:cc:dd:ee:ff",
+            id="HKHubSensor",
+            address="sens1",
+            primary="tstat",
+            role="sensor",
+        ),
+        "light1": MagicMock(
+            device_id="aa:bb:cc:dd:ee:ff",
+            id="HKHubLight",
+            address="light1",
+            primary="hkp_a",
+        ),
+    }
+    order: list[str] = []
+
+    def _drop(addr: str, confirm_db: bool = True) -> None:
+        del confirm_db
+        order.append(addr)
+        c._generic_nodes.pop(addr, None)
+
+    c._delete_generic_node_by_address = _drop
+    c._remove_iox_node = _drop
+    dev = PairedDeviceNode.__new__(PairedDeviceNode)
+    dev.controller = c
+    dev.node_key = "a"
+    dev.address = "hkp_a"
+    c._paired_nodes = {"a": dev}
+
+    c._delete_node_key_config_and_node("a", source="hkp_a")
+
+    assert order == ["sens1", "tstat", "gdoor", "sub", "light1", "hkp_a"]
+    assert c._paired_nodes == {}
+    saved_typed = c.TypedData.loads[-1][0]
+    assert saved_typed[TYPED_PAIRING_SLOTS_KEY] == []
+    saved_data = c.Data.loads[-1][0]
+    assert saved_data["homekit_pairings"] == {}
+    c._maybe_restart_on_config_change.assert_called_once()
 

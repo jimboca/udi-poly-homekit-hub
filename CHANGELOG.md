@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-08
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Changed
+
+- **(Standard + Professional)** **Unpair device** removes that pairing completely. IoX nodes under it are deleted first (room sensors before the thermostat, then lights and other children), then the pairing node, then the Custom Typed slot and saved pairing data. Each delete waits for PG3's acknowledgement, then pauses half a second so a bridge full of children does not crowd out pairing health checks. Removal runs off the command thread.
+- **(Standard + Professional)** Version **2.1.0** — `nodes/__init__.py` **`VERSION`**. Profile version stays **2.0.23** (no nodedef or NLS changes).
+
 ## [2.0.23] - 2026-11-08
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

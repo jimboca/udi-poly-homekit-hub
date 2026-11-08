@@ -47,7 +47,7 @@ Professional also exports a full HAP capability snapshot per device (auto on pai
 
 **[CONFIG.md](CONFIG.md)** — setup in order: **[Pairing accessories](CONFIG.md#pairing-accessories)** (all editions), then **[Professional edition](CONFIG.md#professional-edition)** or **[Ecobee + udi-poly-ecobee](CONFIG.md#ecobee--udi-poly-ecobee)**.
 
-That guide covers **DISCOVER**, entering the HomeKit pairing code (use the code shown **when you enter it**), verifying the hub is ready, and linking to the Ecobee plugin or hub-only generic nodes on Professional.
+That guide covers **DISCOVER**, entering the HomeKit pairing code (use the code shown **when you enter it**), verifying the hub is ready, and linking to the Ecobee plugin or hub-only generic nodes on Professional. **Unpair device** on a pairing node deletes the nodes under it, then the pairing node, and removes that slot from configuration.
 
 **[DEBUGGING.md](DEBUGGING.md)** — when pairing or **Discover** does not work as expected.
 

@@ -1237,6 +1237,71 @@ class Controller(Node):
         with self._node_op_lock_held():
             self._del_node_and_wait(addr)
 
+    def _iox_nodes_from_db(self) -> list[dict]:
+        if not hasattr(self.poly, 'getNodesFromDb'):
+            return []
+        try:
+            rows = self.poly.getNodesFromDb() or []
+        except Exception:
+            LOGGER.debug('PG3 node list failed', exc_info=True)
+            return []
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _descendant_addresses(self, root: str) -> list[str]:
+        """IoX addresses under *root*, deepest first. *root* itself is not included."""
+        root = str(root or '').strip()
+        if not root:
+            return []
+        children: dict[str, list[str]] = {}
+        for meta in self._iox_nodes_from_db():
+            addr = str(meta.get('address') or '').strip()
+            parent = str(meta.get('primaryNode') or '').strip()
+            if not addr or not parent or addr == parent or addr == root:
+                continue
+            children.setdefault(parent, []).append(addr)
+        for kids in children.values():
+            kids.sort()
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def walk(parent: str) -> None:
+            for child in children.get(parent, []):
+                if child in seen:
+                    continue
+                seen.add(child)
+                walk(child)
+                ordered.append(child)
+
+        walk(root)
+        return ordered
+
+    # Long enough for PG3 to finish one removenode before the next. Faster than
+    # this and a bridge full of children crowds out pairing health checks.
+    _UNPAIR_NODE_DELETE_GAP_SEC = 0.5
+
+    def _delete_nodes_under_address(self, root: str, *, confirm_db: bool = True) -> None:
+        """removenode for every node under *root*, children before their parent."""
+        for addr in self._descendant_addresses(root):
+            deleter = getattr(self, '_delete_generic_node_by_address', None)
+            if callable(deleter):
+                deleter(addr, confirm_db=confirm_db)
+            else:
+                self._remove_iox_node(addr)
+                if not confirm_db:
+                    time.sleep(self._UNPAIR_NODE_DELETE_GAP_SEC)
+
+    def _delete_nodes_belonging_to_pairing(self, node_key: str, device_id: str) -> None:
+        """Drop IoX nodes for one pairing before the pairing node itself is removed."""
+        remover = getattr(self, '_remove_nodes_under_pairing', None)
+        if callable(remover):
+            remover(node_key, device_id)
+            return
+        key = str(node_key or '').strip().lower()
+        if key:
+            self._delete_nodes_under_address(f'hkp_{key}', confirm_db=False)
+
     def add_node(self, node: Any, *, wait: bool = True) -> Any:
         """Add one IoX node and wait for it before the next (udi-poly-ecobee).
 
@@ -2873,79 +2938,57 @@ class Controller(Node):
         self._log_zeroconf_diag(context="ZEROCONF_DIAG", diag=diag)
         self._publish_zeroconf_diag_notice(context="ZEROCONF_DIAG", diag=diag)
 
-    def _clear_slot_pin_and_reload(self, slot: int, *, source: str) -> bool:
-        if slot < 1:
-            LOGGER.warning("UNPAIR[%s]: slot must be >= 1 (got %s)", source, slot)
-            return False
-        try:
-            raw_rows = self.TypedData.get(TYPED_PAIRING_SLOTS_KEY)
-        except Exception:
-            raw_rows = None
-        if not isinstance(raw_rows, list):
-            LOGGER.warning("UNPAIR[%s]: no Custom Typed pairing rows loaded", source)
-            return False
-        assigned = assign_pairing_slot_rows(raw_rows, LOGGER)
-        cleared = False
-        matched = False
-        for sn, row in assigned:
-            if sn != slot:
-                continue
-            matched = True
-            if not isinstance(row, dict):
-                break
-            if (row.get("hap_pin") or "").strip():
-                row["hap_pin"] = ""
-                cleared = True
-            break
-        if not matched:
-            LOGGER.warning(
-                "UNPAIR[%s]: no pairing row resolved to slot %s (check Custom Typed slots)",
-                source,
-                slot,
-            )
-            return False
-        if not cleared:
-            LOGGER.warning(
-                "UNPAIR[%s]: slot %s already has an empty pairing code in Custom Typed",
-                source,
-                slot,
-            )
-            return False
-        try:
-            td = self._typed_data_dict()
-            td[TYPED_PAIRING_SLOTS_KEY] = raw_rows
-            self.TypedData.load(td, save=True)
-        except Exception as e:
-            LOGGER.exception("UNPAIR[%s]: failed to save Custom Typed data", source)
-            self.report_error(
-                ERR_TYPED_SAVE,
-                "homekit_err_config",
-                "Failed to save Custom Typed data after UNPAIR",
-                exc=e,
-                log_message=f"UNPAIR typed save ({source})",
-            )
-            return False
-        LOGGER.info(
-            "UNPAIR[%s]: cleared hap_pin for slot %s; reloading hub sessions",
-            source,
-            slot,
-        )
-        self._maybe_restart_on_config_change()
-        return True
+    def _schedule_delete_node_key_config_and_node(self, node_key: str, *, source: str) -> None:
+        """Run removal off the PG3 command thread.
 
-    def _clear_node_key_pin_and_reload(self, node_key: str, *, source: str) -> bool:
+        ``DELNODEDONE`` is delivered on that same thread. Waiting for it inside
+        the command handler never sees the ack, so every child times out at 30s.
+        """
         key = str(node_key or "").strip().lower()
-        slot = self._typed_row_node_key_map().get(key)
-        if slot is None:
-            LOGGER.warning("UNPAIR[%s]: no row found for node_key %s", source, key)
-            return False
-        return self._clear_slot_pin_and_reload(slot, source=source)
+        inflight = getattr(self, "_unpair_inflight", None)
+        if inflight is None:
+            inflight = set()
+            self._unpair_inflight = inflight
+        if key and key in inflight:
+            LOGGER.info("UNPAIR[%s]: removal already running for %s", source, key)
+            return
+        if key:
+            inflight.add(key)
+
+        def _run() -> None:
+            try:
+                self._delete_node_key_config_and_node(key, source=source)
+            except Exception:
+                LOGGER.exception("UNPAIR[%s]: removal failed for %s", source, key)
+            finally:
+                if key:
+                    inflight.discard(key)
+
+        Thread(target=_run, name=f"unpair-{key or 'slot'}", daemon=True).start()
 
     def _delete_node_key_config_and_node(self, node_key: str, *, source: str) -> bool:
         key = str(node_key or "").strip().lower()
         if not key:
             LOGGER.warning("DELETE[%s]: missing node_key", source)
             return False
+
+        slot_for_device = self._typed_row_node_key_map().get(key)
+        device_id = ""
+        if slot_for_device is not None:
+            device_id = str(self._paired_slots_from_data().get(int(slot_for_device)) or "")
+        LOGGER.info(
+            "UNPAIR[%s]: deleting nodes under hkp_%s (device %s) before the pairing node",
+            source,
+            key,
+            device_id or "?",
+        )
+        self._delete_nodes_belonging_to_pairing(key, device_id)
+        node = self._paired_nodes.pop(key, None)
+        pairing_addr = str(getattr(node, "address", "") or f"hkp_{key}")
+        try:
+            self._remove_iox_node(pairing_addr)
+        except Exception:
+            LOGGER.exception("DELETE[%s]: failed to remove node for key %s", source, key)
 
         removed_typed_row = False
         removed_slot: Optional[int] = None
@@ -3005,16 +3048,6 @@ class Controller(Node):
                 log_message=f"DELETE customdata save ({source})",
             )
             return False
-
-        node = self._paired_nodes.pop(key, None)
-        if node is not None:
-            try:
-                if hasattr(self.poly, "delNode"):
-                    self.poly.delNode(node.address)
-                elif hasattr(self.poly, "removeNode"):
-                    self.poly.removeNode(node.address)
-            except Exception:
-                LOGGER.exception("DELETE[%s]: failed to remove node for key %s", source, key)
 
         if not removed_typed_row and not removed_pairing:
             LOGGER.warning(
@@ -3555,7 +3588,7 @@ class Controller(Node):
         classification = classify_accessories(accessories)
         return ('', classification, pairing)
 
-    def _delete_generic_node_by_address(self, addr: str) -> None:
+    def _delete_generic_node_by_address(self, addr: str, *, confirm_db: bool = True) -> None:
         addr = str(addr or '').strip()
         if not addr:
             return
@@ -3575,7 +3608,10 @@ class Controller(Node):
         try:
             if hasattr(self.poly, 'delNode'):
                 self._remove_iox_node(addr)
-                self._wait_for_pg3_node_gone(addr)
+                if confirm_db:
+                    self._wait_for_pg3_node_gone(addr)
+                else:
+                    time.sleep(self._UNPAIR_NODE_DELETE_GAP_SEC)
             elif node is not None and hasattr(self.poly, 'removeNode'):
                 self.poly.removeNode(node.address)
         except Exception:
@@ -3856,6 +3892,46 @@ class Controller(Node):
             if str(meta.get('primaryNode') or '').strip() == primary_addr:
                 children.append(addr)
         return sorted(children)
+
+    def _remove_nodes_under_pairing(self, node_key: str, device_id: str) -> None:
+        """Children of this pairing, then any thermostat (and its sensors) for the device.
+
+        Thermostats are their own parent, so they are not under ``hkp_<key>``.
+        The pairing node itself is removed by the caller after this returns.
+        """
+        key = str(node_key or '').strip().lower()
+        did = str(device_id or '').strip().lower()
+        pairing_addr = f'hkp_{key}' if key else ''
+        if did:
+            for addr, node in list(self._generic_nodes.items()):
+                if str(getattr(node, 'device_id', '') or '').strip().lower() != did:
+                    continue
+                if str(getattr(node, 'id', '') or '') not in self._THERMOSTAT_NODE_DEF_IDS:
+                    continue
+                if addr == pairing_addr:
+                    continue
+                for child in self._thermostat_sensor_child_addresses(addr, did):
+                    if child == pairing_addr:
+                        continue
+                    LOGGER.info(
+                        'Unpair: deleting sensor %s under thermostat %s',
+                        child,
+                        addr,
+                    )
+                    self._delete_generic_node_by_address(child, confirm_db=False)
+                LOGGER.info('Unpair: deleting thermostat %s for %s', addr, did)
+                self._delete_generic_node_by_address(addr, confirm_db=False)
+        if pairing_addr:
+            self._delete_nodes_under_address(pairing_addr, confirm_db=False)
+        if not did:
+            return
+        for addr, node in list(self._generic_nodes.items()):
+            if addr == pairing_addr:
+                continue
+            if str(getattr(node, 'device_id', '') or '').strip().lower() != did:
+                continue
+            LOGGER.info('Unpair: deleting leftover node %s for %s', addr, did)
+            self._delete_generic_node_by_address(addr, confirm_db=False)
 
     def _thermostat_sensor_child_addresses(
         self, thermostat_addr: str, device_id: str = ''
@@ -4904,7 +4980,15 @@ class Controller(Node):
         except (TypeError, ValueError):
             LOGGER.warning("UNPAIR[controller]: missing or invalid slot selection")
             return
-        self._clear_slot_pin_and_reload(slot, source="controller")
+        node_key = None
+        for key, sn in self._typed_row_node_key_map().items():
+            if sn == slot:
+                node_key = key
+                break
+        if not node_key:
+            LOGGER.warning("UNPAIR[controller]: no pairing row for slot %s", slot)
+            return
+        self._schedule_delete_node_key_config_and_node(node_key, source="controller")
 
     # Must match profile/nodedefs.xml; runCmd only sees commands listed here.
     id = "HKHubController"

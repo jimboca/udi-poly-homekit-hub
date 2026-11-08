@@ -157,11 +157,15 @@ class PairedDeviceNode(Node):
 
     def cmd_unpair(self, command=None):
         del command
-        self.controller._clear_node_key_pin_and_reload(self.node_key, source=self.address)
+        self.controller._schedule_delete_node_key_config_and_node(
+            self.node_key, source=self.address
+        )
 
     def cmd_delete(self, command=None):
         del command
-        self.controller._delete_node_key_config_and_node(self.node_key, source=self.address)
+        self.controller._schedule_delete_node_key_config_and_node(
+            self.node_key, source=self.address
+        )
 
     def cmd_export_inventory(self, command=None):
         del command
