@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.23] - 2026-11-08
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
 ### Added
 
 - **(Professional)** **HomeKit Color Light** for a light that advertises hue, saturation, or color temperature. Status is on/off, plus **Brightness**, **Hue**, **Saturation**, and **Color Temperature**.
