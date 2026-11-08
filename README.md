@@ -6,7 +6,9 @@
 
 **No iPhone, iPad, Mac, Apple TV, or HomePod is required.** You do not use the Apple Home app to pair accessories for this integration.
 
-The hub is commonly used with **[udi-poly-ecobee](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee)**: pair Ecobee thermostats here first; the Ecobee Node Server then reads and controls them over local **MQTT** (preferred) or **WebSocket**. You can also use the hub **without** the Ecobee plugin on **Professional** — see [Editions](#editions) below.
+The hub is commonly used with **[udi-poly-ecobee](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee)**: pair Ecobee thermostats here first; the Ecobee Node Server then reads and controls them over local **MQTT** (preferred) or **WebSocket**. The hub answers that client's hello from the accessories it already has cached, then sends an updated device list when a live HomeKit read finishes. You can also use the hub **without** the Ecobee plugin on **Professional** — see [Editions](#editions) below.
+
+**DISCOVER** also asks Plugins to browse HomeKit advertisements. That is how the hub finds an **IoX HomeKit Bridge** running on this same eISY. Turn the bridge's **Advertise** on, run **DISCOVER**, then enter the bridge setup code. See [CONFIG.md](CONFIG.md).
 
 ## Editions
 
@@ -26,12 +28,14 @@ On **Professional**, the hub can create IoX child nodes from standard HomeKit pr
 | Thermostat | **HKHubThermostat** (generic HAP) |
 | Ecobee thermostat | **HKHubEcobeeThermostat** (full comfort / `GV3` when hub owns control) |
 | Light | **HKHubLight** |
+| Color light | **HKHubColorLight** |
 | Fan | **HKHubFan** |
 | Switch / outlet | **HKHubSwitch** |
+| Valve | **HKHubValve** |
 | Garage door | **HKHubGarageDoor** |
 | Contact, motion, occupancy, … | **HKHubBinarySensor** |
 
-Generic **light**, **fan**, **switch**, and **garage door** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**, **HKHubGarageDoor**). A HomeKit garage door (for example ratgdo32 firmware) reports **Door State**, **Obstruction**, and **Lock** when the accessory has a lock. **Open** and **Close** move the door. Light and motion accessories on the same bridge stay separate nodes. Capability-specific variants (e.g. on/off-only vs dimmer vs color temperature vs full color lights, or dimmable outlets) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for the planned incremental approach from device inventory.
+Generic **light**, **color light**, **fan**, **switch**, **valve**, and **garage door** node types are supported. They sit under the pairing node, which IoX keeps as its own parent so those children can be added. A motion-only accessory is a **HomeKit Motion Sensor**. A valve reports **Closed** or **Open**. **Open** and **Close** write the HomeKit valve. A HomeKit garage door (for example ratgdo32 firmware) reports **Door State**, **Obstruction**, and **Lock** when the accessory has a lock. **Open** and **Close** move the door. A color light reports **Brightness**, **Hue**, **Saturation**, and **Color Temperature**. When a device's HomeKit type changes, the existing IoX node is replaced with the new type at the same address. See **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** for further node types.
 
 Honeywell T9 remote sensors and the built-in motion child report **Temperature** and **Humidity** from HomeKit. Fahrenheit rounding matches the Ecobee plugin. See **[CONFIG.md — supported generic nodes](CONFIG.md#supported-generic-iox-nodes-included-devices)**.
 

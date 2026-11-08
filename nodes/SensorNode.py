@@ -9,7 +9,7 @@ from udi_interface import Node
 
 import homekit_hub.hap_apply as hap_apply
 from homekit_hub.char_map import builtin_motion_sensor_mirror_characteristic
-from homekit_hub.device_classifier import expected_sensor_nodedef
+from homekit_hub.device_classifier import expected_sensor_nodedef, sensor_kind
 from hub_node_funcs import get_valid_node_name, hap_event_matches_node
 
 if TYPE_CHECKING:
@@ -62,10 +62,10 @@ class SensorNode(Node):
 
     @staticmethod
     def _deferred_drivers_for(role: str, char_bindings: Dict[str, Any] | None) -> frozenset[str]:
-        r = str(role or 'sensor').strip().lower()
-        if r == 'motion_sensor':
+        kind = sensor_kind(role, char_bindings)
+        if kind == 'motion':
             return _DEFERRED_MOTION_DRIVERS
-        if 'RELATIVE_HUMIDITY' in (char_bindings or {}):
+        if kind == 'humid':
             return _DEFERRED_HUMID_SENSOR_DRIVERS
         return _DEFERRED_DRY_SENSOR_DRIVERS
 
@@ -139,16 +139,16 @@ class SensorNode(Node):
     @staticmethod
     def _drivers_for_role(role: str, char_bindings: Dict[str, Any] | None = None) -> list:
         """IoX driver list — aligned with udi-poly-ecobee EcobeeSensorF/HF where applicable."""
-        r = str(role or 'sensor').strip().lower()
         bindings = char_bindings if isinstance(char_bindings, dict) else {}
         drivers = [
             {'driver': 'ST', 'value': 0, 'uom': 17, 'name': 'Temperature'},
             {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Occupancy'},
             {'driver': 'GV2', 'value': 0, 'uom': 2, 'name': 'Responding'},
         ]
-        if r == 'motion_sensor':
+        kind = sensor_kind(role, bindings)
+        if kind == 'motion':
             drivers.append({'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'})
-        elif 'RELATIVE_HUMIDITY' in bindings:
+        elif kind == 'humid':
             drivers.extend(
                 [
                     {'driver': 'CLIHUM', 'value': 0, 'uom': 22, 'name': 'Humidity'},

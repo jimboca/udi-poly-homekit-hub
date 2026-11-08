@@ -282,6 +282,8 @@ Defaults: `mqtt_host` = `localhost`, `mqtt_port` = `1884`, `mqtt_hub_slug` = `de
 
 Notices **MQTT transport lost** or **MQTT transport disabled** explain broker-side issues.
 
+**Connected, but Ecobee logs `hello ack not received`:** the hub is on the broker and is not answering hello. After this build the hub log should show `MQTT inbound hello` and `hello ack sent` within a second of Ecobee's hello. The ack uses the cached pairing list. A thermostat that is not accepting HomeKit connections no longer holds that ack. Restart the hub so this process is the one listening.
+
 ---
 
 ## Paired device child nodes

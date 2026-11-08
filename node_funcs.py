@@ -70,8 +70,23 @@ def sensor_node_title(
     return title
 
 
-def generic_node_title(display_name: str, role: str, *, sibling_count: int) -> str:
-    """IoX title for a generic control child; single-role devices keep the clean display name."""
+def generic_node_title(
+    display_name: str,
+    role: str,
+    *,
+    sibling_count: int,
+    accessory_name: str | None = None,
+) -> str:
+    """IoX title for a generic control child.
+
+    A bridged accessory keeps its HomeKit name. A single-role pairing (one
+    thermostat) keeps the pairing display name when no accessory name is known.
+    """
+    acc = str(accessory_name or '').strip()
+    if acc:
+        if len(acc) > 80:
+            return acc[:77] + '...'
+        return acc
     base = str(display_name or '').strip() or 'HK Device'
     if int(sibling_count) <= 1:
         if len(base) > 80:

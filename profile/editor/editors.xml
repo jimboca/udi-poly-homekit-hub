@@ -65,6 +65,9 @@
   <editor id="CT_HK">
     <range uom="25" subset="0-15" nls="HKCLIMATE" />
   </editor>
+  <editor id="I_VALVE">
+    <range uom="25" subset="0,1" nls="HKVLV"/>
+  </editor>
   <editor id="I_ONOFF">
     <range uom="25" min="0" max="1" prec="0" nls="EN_ONOFF"/>
   </editor>
@@ -79,6 +82,15 @@
   </editor>
   <editor id="I_DIMMER">
     <range uom="56" min="0" max="100" step="1" prec="0" />
+  </editor>
+  <editor id="I_HUE">
+    <range uom="56" min="0" max="360" step="1" prec="0" />
+  </editor>
+  <editor id="I_SAT">
+    <range uom="51" min="0" max="100" step="1" prec="0" />
+  </editor>
+  <editor id="I_KELVIN">
+    <range uom="26" min="2500" max="9000" step="1" prec="0" />
   </editor>
   <editor id="I_FAN_DIR">
     <range uom="25" subset="0,1" nls="EN_FAN_DIR" />

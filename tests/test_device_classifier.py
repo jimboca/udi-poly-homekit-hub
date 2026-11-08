@@ -103,6 +103,26 @@ def test_classify_sensor_aids_emits_room_sensors_and_motion_child():
     assert 'RELATIVE_HUMIDITY' in motion['char_bindings']
 
 
+def test_classify_sensor_aids_motion_only_uses_motion_nodedef():
+    motion = _Acc(
+        33,
+        [
+            _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, [_Char(1, CharacteristicsTypes.NAME, 'Doorbell human')]),
+            _Svc(
+                8,
+                ServicesTypes.MOTION_SENSOR,
+                [_Char(9, CharacteristicsTypes.MOTION_DETECTED)],
+            ),
+        ],
+    )
+    rows = classify_sensor_aids([motion])
+    sensor = next(r for r in rows if r['role'] == 'sensor')
+    assert sensor['aid'] == 33
+    assert sensor['node_def_id'] == 'HKHubMotionSensor'
+    assert 'MOTION_DETECTED' in sensor['char_bindings']
+    assert 'CURRENT_TEMPERATURE' not in sensor['char_bindings']
+
+
 def test_classify_sensor_aids_dry_room_sensor():
     dry = _Acc(
         5,
@@ -349,6 +369,37 @@ def test_classify_hunter_simpleconnect_fan_light():
     assert classify_sensor_aids(accessories) == []
 
 
+def test_classify_color_light_uses_color_nodedef_and_name():
+    accessories = [
+        _Acc(
+            24,
+            [
+                _Svc(
+                    1,
+                    ServicesTypes.ACCESSORY_INFORMATION,
+                    [_Char(2, CharacteristicsTypes.NAME, 'Master TV Backlight')],
+                ),
+                _Svc(
+                    8,
+                    ServicesTypes.LIGHTBULB,
+                    [
+                        _Char(9, CharacteristicsTypes.ON, True),
+                        _Char(10, CharacteristicsTypes.BRIGHTNESS, 40),
+                        _Char(11, CharacteristicsTypes.HUE, 180),
+                        _Char(12, CharacteristicsTypes.SATURATION, 50),
+                    ],
+                ),
+            ],
+        )
+    ]
+    rows = classify_accessories(accessories)
+    assert len(rows) == 1
+    assert rows[0]['node_def_id'] == 'HKHubColorLight'
+    assert rows[0]['accessory_name'] == 'Master TV Backlight'
+    assert rows[0]['role'] == 'light'
+    assert classify_sensor_aids(accessories) == []
+
+
 def _ratgdo_garage_bridge():
     """ratgdo32 HomeKit firmware: garage door, light, and motion on separate aids."""
     return [
@@ -418,6 +469,34 @@ def test_classify_ratgdo_garage_door_light_and_motion():
     assert [r['aid'] for r in sensor_rows] == [4]
     assert sensor_rows[0]['role'] == 'motion_sensor' or sensor_rows[0]['role'] == 'sensor'
     assert sensor_rows[0]['char_bindings']['MOTION_DETECTED']['iid'] == 5
+
+
+def test_classify_valve_uses_switch_node_and_active():
+    accessories = [
+        _Acc(
+            6,
+            [
+                _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, [_Char(3, CharacteristicsTypes.NAME, 'Main Shutoff')]),
+                _Svc(
+                    8,
+                    ServicesTypes.VALVE,
+                    [
+                        _Char(9, CharacteristicsTypes.ACTIVE, 0),
+                        _Char(10, CharacteristicsTypes.IN_USE, 0),
+                        _Char(11, CharacteristicsTypes.VALVE_TYPE, 0),
+                    ],
+                ),
+            ],
+        )
+    ]
+    rows = classify_accessories(accessories)
+    assert len(rows) == 1
+    assert rows[0]['role'] == 'valve'
+    assert rows[0]['node_def_id'] == 'HKHubValve'
+    assert rows[0]['accessory_name'] == 'Main Shutoff'
+    assert rows[0]['char_bindings']['ACTIVE']['iid'] == 9
+    assert 'IN_USE' not in rows[0]['char_bindings']
+    assert classify_sensor_aids(accessories) == []
 
 
 def test_hap_event_matches_bound_iid_only():

@@ -37,7 +37,11 @@ class FanNode(Node):
         self.aid = int(aid)
         self.char_bindings = dict(char_bindings or {})
         nm = get_valid_node_name(name) or 'HK Fan'
-        super().__init__(controller.poly, controller.address, address, nm)
+        primary = controller.address
+        pairing_primary = getattr(controller, '_pairing_primary_address', None)
+        if callable(pairing_primary):
+            primary = pairing_primary(self.device_id)
+        super().__init__(controller.poly, primary, address, nm)
         self.name = nm
 
     def set_driver_safe(self, driver: str, val: Any, report: bool = True) -> None:

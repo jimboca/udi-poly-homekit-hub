@@ -1834,9 +1834,17 @@ async def _accessory_information_metadata_with_reads(
 
 
 async def _device_list_entry_resolved(
-    device_id: str, pairing, log: Optional[logging.Logger] = None
+    device_id: str,
+    pairing,
+    log: Optional[logging.Logger] = None,
+    *,
+    live_reads: bool = True,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """One ``list_devices`` / hello ``devices[]`` row plus optional client ``warnings`` entries."""
+    """One ``list_devices`` / hello ``devices[]`` row plus optional client ``warnings`` entries.
+
+    ``live_reads=False`` uses the cached accessory model only. Hello ack uses that path so a
+    stuck HAP connection cannot withhold the ack.
+    """
     canon = str(device_id or "").strip().lower()
     entry: dict[str, Any] = {"device_id": canon}
     client_notices: list[dict[str, Any]] = []
@@ -1889,13 +1897,16 @@ async def _device_list_entry_resolved(
                 )
             break
 
-        meta = await _accessory_information_metadata_with_reads(
-            pairing,
-            acc,
-            log,
-            client_notices=client_notices,
-            notice_device_id=device_id,
-        )
+        if live_reads:
+            meta = await _accessory_information_metadata_with_reads(
+                pairing,
+                acc,
+                log,
+                client_notices=client_notices,
+                notice_device_id=device_id,
+            )
+        else:
+            meta = _accessory_information_metadata(acc)
 
         # Many bridges (e.g. Ecobee) omit or deny **Category** on HAP GET even when
         # **Manufacturer** / **Model** succeed. Infer thermostat (9) from services here so
@@ -1910,7 +1921,7 @@ async def _device_list_entry_resolved(
                 if cl:
                     meta["category_label"] = cl
 
-        if meta.get("category") is not None:
+        if meta.get("category") is not None or not live_reads:
             break
 
         if attempt == 0 and getattr(pairing, "accessories", None):
@@ -2056,6 +2067,7 @@ class HomeKitHubBridge:
         self._mqtt_task: Optional[asyncio.Task[None]] = None
         self._mqtt_pub_client: Any = None
         self._mqtt_handles: dict[str, MqttClientSession] = {}
+        self._live_device_list_task: Optional[asyncio.Task[None]] = None
 
     def _emit_mqtt_transport_status(self, code: int) -> None:
         """Notify controller of MQTT transport state (deduped; safe from asyncio thread)."""
@@ -2814,6 +2826,52 @@ class HomeKitHubBridge:
             )
         return rows
 
+    def _direct_ip_discovery(self, accessory_id: str):
+        """IP discovery from the last Plugins mDNS snapshot, for same-host accessories."""
+        from homekit_hub.pg3_hap import ip_discovery_from_row
+
+        if not self._hk:
+            return None
+        ip_ctrl = self._hk.transports.get(TransportType.IP)
+        if not ip_ctrl:
+            return None
+        try:
+            data = self._get_custom_data() or {}
+        except Exception:
+            self.log.debug("direct IP discovery: custom data unavailable", exc_info=True)
+            return None
+        raw = data.get(DATA_KEY_LAST_HAP_DISCOVER)
+        if not isinstance(raw, list):
+            return None
+        want = (accessory_id or "").strip().lower()
+        if not want:
+            return None
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("id") or "").strip().lower() != want:
+                continue
+            if row.get("paired"):
+                return None
+            try:
+                return ip_discovery_from_row(ip_ctrl, row)
+            except Exception:
+                self.log.exception("direct IP discovery failed for %s", want)
+                return None
+        return None
+
+    @staticmethod
+    def _direct_discovery_usable(discovery, accessory_name: str) -> bool:
+        if discovery is None or getattr(discovery, "paired", False):
+            return False
+        desc = getattr(discovery, "description", None)
+        if desc is None:
+            return False
+        aname = (accessory_name or "").strip().lower()
+        if aname and aname not in (desc.name or "").lower():
+            return False
+        return True
+
     async def _wait_for_pairing_discovery(
         self,
         accessory_id: str,
@@ -2830,13 +2888,24 @@ class HomeKitHubBridge:
         aname = (accessory_name or "").strip()
 
         if aid:
+            direct = self._direct_ip_discovery(aid)
+            find_timeout = min(timeout, 3.0) if direct is not None else timeout
             try:
-                discovery = await self._hk.async_find(aid, timeout=timeout)
+                discovery = await self._hk.async_find(aid, timeout=find_timeout)
             except AccessoryNotFoundError:
+                if direct is not None and self._direct_discovery_usable(direct, aname):
+                    desc = direct.description
+                    self.log.info(
+                        "Accessory id %s not in unicast zeroconf; pairing to Plugins mDNS %s:%s",
+                        aid,
+                        desc.address,
+                        desc.port,
+                    )
+                    return direct
                 self.log.error(
                     "Accessory id %s not found on the network within %.0fs (mDNS / HAP)",
                     aid,
-                    timeout,
+                    find_timeout,
                 )
                 return None
             except Exception:
@@ -3055,13 +3124,45 @@ class HomeKitHubBridge:
                     )
                     self._emit_mqtt_transport_status(MQTT_TRANSPORT_STATUS_CONNECTED)
                     attempt = 0
-                    async for message in client.messages:
-                        if not self._running:
-                            break
-                        if not mqtt_transport_enabled(self._get_params()):
-                            break
-                        topic_s = str(message.topic)
-                        await self._handle_mqtt_inbound(topic_s, message.payload)
+                    # Read the socket on this task. Handling runs on a worker so a slow
+                    # HAP call cannot sit inside ``async for`` and hide a broker disconnect.
+                    inbound: asyncio.Queue[Optional[tuple[str, bytes]]] = asyncio.Queue()
+
+                    async def _drain_mqtt_inbound() -> None:
+                        while True:
+                            item = await inbound.get()
+                            if item is None:
+                                return
+                            topic_s, payload = item
+                            try:
+                                await self._handle_mqtt_inbound(topic_s, payload)
+                            except Exception:
+                                self.log.exception(
+                                    "MQTT inbound worker failed topic=%s", topic_s
+                                )
+
+                    worker = asyncio.create_task(
+                        _drain_mqtt_inbound(), name="homekit-hub-mqtt-inbound"
+                    )
+                    try:
+                        async for message in client.messages:
+                            if not self._running:
+                                break
+                            if not mqtt_transport_enabled(self._get_params()):
+                                break
+                            raw = message.payload
+                            if isinstance(raw, str):
+                                raw_b = raw.encode("utf-8")
+                            else:
+                                raw_b = bytes(raw)
+                            inbound.put_nowait((str(message.topic), raw_b))
+                    finally:
+                        if not worker.done():
+                            worker.cancel()
+                        try:
+                            await worker
+                        except asyncio.CancelledError:
+                            pass
             except asyncio.CancelledError:
                 self._mqtt_pub_client = None
                 raise
@@ -3137,6 +3238,7 @@ class HomeKitHubBridge:
             )
             return
         if msg.get("action") == "hello":
+            self.log.info("MQTT inbound hello topic=%s client_slug=%s", topic, slug)
             raw_client = msg.get("client")
             if raw_client is not None and str(raw_client).strip() != "":
                 got = sanitize_client_slug(str(raw_client))
@@ -3229,7 +3331,11 @@ class HomeKitHubBridge:
                 except Exception:
                     pass
                 return False
-        devices_payload, list_warnings = await self._build_list_devices_payload()
+        # Cached model only. A live HAP read here used to run on the MQTT read loop, so a
+        # pairing that never answered withheld the ack and every later hello.
+        devices_payload, list_warnings = await self._build_list_devices_payload(
+            live_reads=False
+        )
         device_ids = [
             x
             for x in (
@@ -3248,6 +3354,14 @@ class HomeKitHubBridge:
             "warnings": list_warnings,
         }
         await self._send_ws(ws, ack_body)
+        transport = "mqtt" if isinstance(ws, MqttClientSession) else "ws"
+        self.log.info(
+            "hello ack sent transport=%s devices=%d warnings=%d",
+            transport,
+            len(devices_payload),
+            len(list_warnings),
+        )
+        self._schedule_live_device_list_push()
         return True
 
     async def _handle_ws_message(self, ws: Any, raw: str) -> None:
@@ -3357,11 +3471,16 @@ class HomeKitHubBridge:
 
     async def _build_list_devices_payload(
         self,
+        *,
+        live_reads: bool = True,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Paired hub rows for ``list_devices`` / hello, with optional Accessory Information metadata.
 
         Returns ``(devices, warnings)`` where ``warnings`` is a list of structured client notices
         (same array attached to hello ``ack`` and each ``list_devices``; use ``[]`` when healthy).
+
+        ``live_reads=False`` does not open a HAP connection. Hello ack uses that so the client
+        is admitted before accessory I/O. A later ``list_devices`` carries the live metadata.
         """
         device_ids = await self._active_pairing_device_ids_stable()
         out: list[dict[str, Any]] = []
@@ -3385,7 +3504,7 @@ class HomeKitHubBridge:
                 )
                 continue
             pairing = self._pairing_for_device_id(nd)
-            if pairing and not pairing.accessories:
+            if live_reads and pairing and not pairing.accessories:
                 try:
                     await pairing.list_accessories_and_characteristics()
                 except Exception:
@@ -3405,7 +3524,9 @@ class HomeKitHubBridge:
                             device_id=nd,
                         )
                     )
-            row, row_warnings = await _device_list_entry_resolved(nd, pairing, self.log)
+            row, row_warnings = await _device_list_entry_resolved(
+                nd, pairing, self.log, live_reads=live_reads
+            )
             row["device_id"] = nd
             fin = str(row.get("device_id") or "").strip().lower()
             if not fin:
@@ -4310,6 +4431,27 @@ class HomeKitHubBridge:
             self._enqueue_ws_line(ws, line)
         for sess in list(self._mqtt_handles.values()):
             await self._mqtt_publish_line(sess.slug, "rpc", line)
+
+    def _schedule_live_device_list_push(self) -> None:
+        """Push a live ``list_devices`` after a cache-only hello ack. One refresh at a time."""
+        task = self._live_device_list_task
+        if task is not None and not task.done():
+            return
+
+        async def _run() -> None:
+            await self._broadcast_device_list_update(reason="hello")
+
+        started = asyncio.create_task(_run(), name="homekit-hub-hello-devices")
+        self._live_device_list_task = started
+
+        def _done(finished: asyncio.Task[None]) -> None:
+            if finished.cancelled():
+                return
+            exc = finished.exception()
+            if exc is not None:
+                self.log.warning("hello device refresh failed: %s", exc)
+
+        started.add_done_callback(_done)
 
     async def _broadcast_device_list_update(self, *, reason: str) -> None:
         """Push latest paired device list to all connected clients."""

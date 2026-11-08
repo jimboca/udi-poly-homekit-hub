@@ -508,9 +508,11 @@ def test_delete_thermostat_for_recreation_deletes_children_first():
     c._sensor_by_key = {('aa:bb', 3): child}
     c._existing_sensor_addnode_retried = {'gsensor1'}
     calls: list[str] = []
+    c._del_queue = []
 
     def del_node(addr):
         calls.append(addr)
+        c._del_queue.append(addr)
 
     c.poly.delNode = del_node
     c.poly.getNodesFromDb.side_effect = [
@@ -639,6 +641,177 @@ def test_ensure_sensor_node_addnode_when_pg3_ghost_row_only():
     c.add_node.assert_called_once()
 
 
+def test_remove_orphan_generic_nodes_drops_old_role_address():
+    c = _bare_controller()
+    c.address = 'controller'
+    c._paired_nodes = {}
+    c._del_queue = []
+    valve = MagicMock(name='Bersaglio Main Flo Shutoff', address='g79d09bd1ed154')
+    valve.name = 'Bersaglio Main Flo Shutoff'
+    c._generic_nodes = {'g79d09bd1ed154': valve}
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'g03f7349b40146',
+            'name': 'Bersaglio Main Flo Shutoff',
+            'primaryNode': 'controller',
+            'nodeDefId': 'HKHubSwitch',
+        },
+        {
+            'address': 'g79d09bd1ed154',
+            'name': 'Bersaglio Main Flo Shutoff',
+            'primaryNode': 'hkp_a',
+            'nodeDefId': 'HKHubValve',
+        },
+        {
+            'address': 'hkp_a',
+            'name': 'IoX Bridge',
+            'primaryNode': 'hkp_a',
+            'nodeDefId': 'HKHubPairedDevice',
+        },
+    ]
+    removed = []
+
+    def _delete(addr):
+        removed.append(addr)
+
+    c._delete_generic_node_by_address = _delete
+    c._remove_orphan_generic_nodes()
+    c._remove_orphan_generic_nodes()
+    assert removed == ['g03f7349b40146']
+
+
+def test_sync_generic_nodes_does_not_delete_sensors():
+    c = _bare_controller()
+    did = '72:68:00:5e:6b:de'
+    c.is_professional = lambda: True
+    c._device_generic_nodes_enabled = lambda _did: True
+    c._remove_legacy_generic_nodes_for_device = MagicMock()
+    c._pairing_display_name = lambda _did: 'Bridge'
+    c._generic_node_address = lambda _did, row: 'glight'
+    c._generic_parent_needs_move = lambda *_a, **_k: False
+    c._rename_generic_node = MagicMock()
+    c._pg3_primary_mismatch = lambda _node: False
+    c._schedule_refresh_generic_node = MagicMock()
+    c._reconcile_paired_node_title_for_device = MagicMock()
+    c._delete_generic_node_by_address = MagicMock()
+    sensor = MagicMock()
+    sensor.device_id = did
+    sensor.role = 'sensor'
+    light = MagicMock()
+    light.device_id = did
+    light.role = 'light'
+    light.id = 'HKHubLight'
+    light.primary = 'hkp_a'
+    c._generic_nodes = {'gsensor': sensor, 'glight': light}
+    c.poly = MagicMock()
+    c.poly.getNode.return_value = light
+    c._sync_generic_nodes(
+        did,
+        [{
+            'aid': 23,
+            'role': 'light',
+            'node_def_id': 'HKHubLight',
+            'char_bindings': {},
+            'accessory_name': 'Lamp',
+        }],
+    )
+    deleted = [call.args[0] for call in c._delete_generic_node_by_address.call_args_list]
+    assert 'gsensor' not in deleted
+
+
+def test_ensure_sensor_keeps_healthy_pg3_row():
+    c = _bare_controller()
+    did = '72:68:00:5e:6b:de'
+
+    class _Sensor:
+        def __init__(self, _controller, primary, address, name, **kwargs):
+            self.primary = primary
+            self.address = address
+            self.name = name
+            self.id = kwargs.get('node_def_id')
+            self.role = kwargs.get('role')
+
+    c._pairing_display_name = lambda _did: 'Bridge'
+    c._sensor_parent_address = lambda _did: 'hkp_a'
+    c._sensor_node_class = lambda _nd: _Sensor
+    c._pg3_node_live = lambda _addr: False
+    c._pg3_node_meta = lambda _addr: {
+        'address': 'gsensor',
+        'primaryNode': 'hkp_a',
+        'nodeDefId': 'HKHubMotionSensor',
+    }
+    c._sensor_drivers_absent = lambda _addr: False
+    c._sensor_nodedef_stale = lambda _node: False
+    c._purge_stale_pg3_node = MagicMock()
+    c.add_node = MagicMock()
+    c.poly = MagicMock()
+    c.poly.getNode.return_value = None
+    c.poly.nodes_internal = {}
+    node = c._ensure_sensor_node(
+        did,
+        33,
+        char_bindings={'MOTION_DETECTED': 1},
+        role='sensor',
+        accessory_name='Doorbell',
+        register_only=False,
+    )
+    assert node is not None
+    assert c.poly.nodes_internal[node.address] is node
+    c._purge_stale_pg3_node.assert_not_called()
+    c.add_node.assert_not_called()
+
+
+def test_remove_legacy_skips_addresses_already_gone():
+    c = _bare_controller()
+    c._generic_nodes = {}
+    c._generic_node_address = lambda _did, _row: 'gcurrent'
+    c.poly = MagicMock()
+    c.poly.getNode.return_value = None
+    c._pg3_node_meta = lambda _addr: None
+    c._delete_generic_node_by_address = MagicMock()
+    row = [{'aid': 1, 'role': 'light'}]
+    c._remove_legacy_generic_nodes_for_device('aa:bb:cc:dd:ee:ff', row)
+    c._remove_legacy_generic_nodes_for_device('aa:bb:cc:dd:ee:ff', row)
+    c._delete_generic_node_by_address.assert_not_called()
+
+
+def test_drop_pairing_node_when_not_primary():
+    c = _bare_controller()
+    c._paired_nodes = {'a': MagicMock()}
+    c._del_queue = []
+    c._pairing_node_should_be_primary = lambda: True
+    c.poly = MagicMock()
+    c.poly.delNode.side_effect = lambda addr: c._del_queue.append(addr)
+    c.poly.getNodesFromDb.side_effect = [
+        [{'address': 'hkp_a', 'primaryNode': 'controller', 'isPrimary': 0}],
+        [],
+    ]
+    assert c._drop_pairing_node_for_primary('hkp_a', 'a') is True
+    c.poly.delNode.assert_called_once_with('hkp_a')
+    assert 'a' not in c._paired_nodes
+
+
+def test_drop_pairing_node_skips_when_already_primary():
+    c = _bare_controller()
+    c._pairing_node_should_be_primary = lambda: True
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {'address': 'hkp_a', 'primaryNode': 'hkp_a', 'isPrimary': 1},
+    ]
+    assert c._drop_pairing_node_for_primary('hkp_a', 'a') is False
+    c.poly.delNode.assert_not_called()
+
+
+def test_motion_only_sensor_drivers_match_motion_nodedef():
+    drivers = {row['driver'] for row in SensorNode._drivers_for_role(
+        'sensor',
+        {'MOTION_DETECTED': {'aid': 33, 'iid': 9}},
+    )}
+    assert drivers == {'ST', 'GV1', 'GV2', 'CLIHUM'}
+    assert 'BATLVL' not in drivers
+
+
 def test_pg3_primary_mismatch_when_controller_parent():
     c = _bare_controller()
     c.poly = MagicMock()
@@ -702,6 +875,20 @@ def test_add_node_purges_when_pg3_primary_wrong():
     )
     c.poly.addNode.assert_called_once_with(node)
     c.wait_for_node_done.assert_called_once()
+
+
+def test_wait_for_node_done_ignores_stale_address():
+    c = _bare_controller()
+    c.n_queue = ['controller']
+
+    def _release() -> None:
+        c.node_queue({'address': 'g1a499ced623a9'})
+
+    from threading import Timer
+
+    Timer(0.05, _release).start()
+    assert c.wait_for_node_done('g1a499ced623a9', timeout_sec=2) is True
+    assert c.n_queue == ['controller']
 
 
 def test_node_queue_unblocks_wait_for_node_done():

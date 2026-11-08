@@ -44,7 +44,15 @@ class PairedDeviceNode(Node):
         self.paired = bool(paired)
         address = f"hkp_{self.node_key}"
         title = self._requested_title()
-        super().__init__(controller.poly, controller.address, address, title)
+        # IoX only accepts children of a primary node (reason 5105 otherwise).
+        # When generic devices nest here, this node is its own parent.
+        primary = controller.address
+        should = getattr(controller, "_pairing_node_should_be_primary", None)
+        if callable(should) and should():
+            primary = address
+        super().__init__(controller.poly, primary, address, title)
+        if primary == address:
+            self.isPrimary = True
         self.setDriver("ST", 1 if self.paired else 0, report=False, force=True, uom=25)
         self.setDriver("GV0", self.slot, report=False, force=True, uom=56)
         # GV1: 0=Healthy, 1=Degraded (paired transport), 2=Not paired (no active pairing)

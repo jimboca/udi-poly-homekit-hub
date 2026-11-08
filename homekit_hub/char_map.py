@@ -260,6 +260,26 @@ _HAP_NORM_CURRENT_TEMPERATURE = normalize_hap_uuid('00000011-0000-1000-8000-0026
 _HAP_NORM_CURRENT_RELATIVE_HUMIDITY = normalize_hap_uuid('00000010-0000-1000-8000-0026BB765291')
 
 
+def snapshot_rows_have_sensor_signal(rows: Any) -> bool:
+    """True when a snapshot aid looks like a sensor, not a light or switch.
+
+    Used so a bridged light is not given an HKHubSensorDry node just because
+    it shares a pairing with other accessories.
+    """
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        characteristic = str(row.get('characteristic') or '')
+        if is_builtin_room_sensor_signal(characteristic):
+            return True
+        if builtin_motion_sensor_ambient_mirror(characteristic):
+            return True
+        blob = characteristic.upper()
+        if 'CONTACT' in blob or 'BATTERY' in blob or 'LO_BATT' in blob:
+            return True
+    return False
+
+
 def is_builtin_room_sensor_signal(characteristic: str) -> bool:
     """
     Return True for motion / occupancy characteristics that should drive a sensor node even when

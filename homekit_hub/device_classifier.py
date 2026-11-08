@@ -28,6 +28,13 @@ if hasattr(ServicesTypes, 'LIGHTBULB'):
         pass
 
 _SWITCH_SERVICE_UUIDS: Set[str] = set()
+_VALVE_SERVICE_UUIDS: Set[str] = set()
+for _name in ('VALVE',):
+    if hasattr(ServicesTypes, _name):
+        try:
+            _VALVE_SERVICE_UUIDS.add(normalize_uuid(getattr(ServicesTypes, _name)))
+        except Exception:
+            pass
 for _name in ('SWITCH', 'OUTLET'):
     if hasattr(ServicesTypes, _name):
         try:
@@ -81,8 +88,10 @@ _CHAR_BINDINGS_THERMOSTAT = (
     'VENDOR_ECOBEE_CLEAR_HOLD',
 )
 
-_CHAR_BINDINGS_LIGHT = ('ON', 'BRIGHTNESS', 'COLOR_TEMPERATURE')
+_CHAR_BINDINGS_LIGHT = ('ON', 'BRIGHTNESS', 'HUE', 'SATURATION', 'COLOR_TEMPERATURE')
+_CONTROL_ROLES = frozenset({'thermostat', 'light', 'switch', 'valve', 'fan', 'garage_door'})
 _CHAR_BINDINGS_SWITCH = ('ON',)
+_CHAR_BINDINGS_VALVE = ('ACTIVE',)
 _CHAR_BINDINGS_FAN = ('ON', 'ACTIVE', 'ROTATION_SPEED', 'ROTATION_DIRECTION')
 _CHAR_BINDINGS_GARAGE = (
     'DOOR_STATE_CURRENT',
@@ -110,13 +119,28 @@ _SENSOR_NODE_DEF_DRY = 'HKHubSensorDry'
 _SENSOR_NODE_DEF_MOTION = 'HKHubMotionSensor'
 
 
-def expected_sensor_nodedef(role: str, char_bindings: Any) -> str:
-    """Pick IoX nodedef from HAP role and per-aid characteristic bindings."""
+def sensor_kind(role: str, char_bindings: Any) -> str:
+    """``motion``, ``humid``, or ``dry`` — the driver set the IoX nodedef actually has."""
     r = str(role or 'sensor').strip().lower()
     if r == 'motion_sensor':
-        return _SENSOR_NODE_DEF_MOTION
+        return 'motion'
     bindings = char_bindings if isinstance(char_bindings, dict) else {}
     if 'RELATIVE_HUMIDITY' in bindings:
+        return 'humid'
+    keys = {str(k) for k in bindings}
+    if keys & _MOTION_SENSOR_CHAR_NAMES and not (
+        keys & {'CURRENT_TEMPERATURE', 'RELATIVE_HUMIDITY', 'CONTACT_STATE'}
+    ):
+        return 'motion'
+    return 'dry'
+
+
+def expected_sensor_nodedef(role: str, char_bindings: Any) -> str:
+    """Pick IoX nodedef from HAP role and per-aid characteristic bindings."""
+    kind = sensor_kind(role, char_bindings)
+    if kind == 'motion':
+        return _SENSOR_NODE_DEF_MOTION
+    if kind == 'humid':
         return _SENSOR_NODE_DEF_HUMID
     return _SENSOR_NODE_DEF_DRY
 
@@ -360,7 +384,7 @@ def classify_sensor_aids(
         control_aids.add(int(ctrl))
     for crow in classify_accessories(accessories):
         role = str(crow.get('role') or '')
-        if role in ('thermostat', 'light', 'switch', 'fan', 'garage_door'):
+        if role in _CONTROL_ROLES:
             try:
                 control_aids.add(int(crow.get('aid') or 0))
             except (TypeError, ValueError):
@@ -455,6 +479,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
     pairing_ecobee = _pairing_has_ecobee_fingerprint(accessories)
     for acc in accessories:
         aid = int(getattr(acc, 'aid', 0) or 0)
+        acc_name = _accessory_information_name(acc)
         ecobee = pairing_ecobee or _accessory_has_ecobee_fingerprint(acc)
         for svc in getattr(acc, 'services', None) or []:
             su = _service_uuid(svc)
@@ -472,6 +497,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'service_iid': svc_iid,
                             'char_bindings': bindings,
                             'vendor': 'ecobee' if ecobee else None,
+                            'accessory_name': acc_name,
                         }
                     )
                 continue
@@ -486,20 +512,42 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'service_iid': svc_iid,
                             'char_bindings': bindings,
                             'vendor': None,
+                            'accessory_name': acc_name,
                         }
                     )
                 continue
             if su in _LIGHT_SERVICE_UUIDS:
                 bindings = _bind_service_chars(aid, svc, _CHAR_BINDINGS_LIGHT)
                 if bindings.get('ON'):
+                    color = bool(
+                        bindings.get('HUE')
+                        or bindings.get('SATURATION')
+                        or bindings.get('COLOR_TEMPERATURE')
+                    )
                     rows.append(
                         {
                             'aid': aid,
                             'role': 'light',
-                            'node_def_id': 'HKHubLight',
+                            'node_def_id': 'HKHubColorLight' if color else 'HKHubLight',
                             'service_iid': svc_iid,
                             'char_bindings': bindings,
                             'vendor': None,
+                            'accessory_name': acc_name,
+                        }
+                    )
+                continue
+            if su in _VALVE_SERVICE_UUIDS:
+                bindings = _bind_service_chars(aid, svc, _CHAR_BINDINGS_VALVE)
+                if bindings.get('ACTIVE'):
+                    rows.append(
+                        {
+                            'aid': aid,
+                            'role': 'valve',
+                            'node_def_id': 'HKHubValve',
+                            'service_iid': svc_iid,
+                            'char_bindings': bindings,
+                            'vendor': None,
+                            'accessory_name': acc_name,
                         }
                     )
                 continue
@@ -514,6 +562,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'service_iid': svc_iid,
                             'char_bindings': bindings,
                             'vendor': None,
+                            'accessory_name': acc_name,
                         }
                     )
             if su in _FAN_SERVICE_UUIDS:
@@ -527,6 +576,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'service_iid': svc_iid,
                             'char_bindings': bindings,
                             'vendor': None,
+                            'accessory_name': acc_name,
                         }
                     )
                 continue

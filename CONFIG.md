@@ -124,8 +124,10 @@ When generic control is enabled (below), the hub can create these child node typ
 | Thermostat (generic HAP) | **HKHubThermostat** |
 | Ecobee thermostat | **HKHubEcobeeThermostat** (comfort / `GV3`, schedule mode, setpoints) |
 | Light | **HKHubLight** |
+| Color light (hue, saturation, or color temperature) | **HKHubColorLight** |
 | Fan | **HKHubFan** |
 | Switch / outlet | **HKHubSwitch** |
+| Valve | **HKHubValve** |
 | Garage door | **HKHubGarageDoor** (**Door State**, **Obstruction**, **Lock**) |
 | Contact, motion, occupancy (standalone accessory) | **HKHubSensor** (per HAP `aid`) |
 | Ecobee room sensors (separate `aid`s) | **HKHubSensor** child per sensor |
@@ -134,7 +136,7 @@ When generic control is enabled (below), the hub can create these child node typ
 
 Remote-sensor **Temperature** and the motion child's **Temperature** follow the HomeKit current-temperature reading (humidity follows relative humidity). Fahrenheit uses the same rounding as the Ecobee plugin: `round(C × 1.8) + 32`. A Honeywell 0.5°C step such as 21.0°C is 70°F. 22.5°C is 72°F.
 
-Generic **light**, **fan**, **switch**, and **garage door** node types are supported (**HKHubLight**, **HKHubFan**, **HKHubSwitch**, **HKHubGarageDoor**). Capability-specific light variants (color, etc.) are not separate node types yet; see **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)**.
+Generic **light**, **color light**, **fan**, **switch**, and **garage door** node types are supported. A light that advertises hue, saturation, or color temperature uses **HomeKit Color Light** (**Brightness**, **Hue**, **Saturation**, **Color Temperature**). Other lights stay **HKHubLight**. Each accessory is named from its HomeKit name. If a paired device's type changes, the hub replaces that IoX node's type and keeps the same address.
 
 **Door State** on a garage door is Closed, Open, Stopped, Closing, or Opening. **Open** and **Close** write the HomeKit target door state. **Obstruction** is Clear or Obstructed. **Lock** is Unlocked, Locked, Jammed, or Unknown. **Lock** and **Unlock** are available when the accessory exposes a lock; a dry-contact ratgdo leaves **Lock** at Unknown. The light and motion accessories published by ratgdo32 firmware remain a light node and a motion sensor. Re-pair after a HomeKit reset on the ratgdo page before expecting this node; a saved pairing whose keys no longer match the board will not create it.
 
@@ -152,7 +154,7 @@ Both must be **true** for that device. Defaults stay **off** so existing sites t
 | Use **udi-poly-ecobee** (or similar) | Leave both **off** — hub transports HomeKit; the other plugin drives IoX. Inventory export still works on Professional. |
 | **Hub-only** control (no Ecobee plugin) | Enable both on that pairing — Ecobee pairings get **HKHubEcobeeThermostat**; other thermostats get **HKHubThermostat** until a vendor-specific nodeDef is added. |
 
-After changing either flag, save configuration; the hub re-syncs generic children for affected pairings.
+After changing either flag, save configuration; the hub re-syncs generic children for affected pairings. Those nodes are children of the pairing node (for example `hkp_a`), not the controller. IoX only allows children on a node that is its own parent, so the pairing node is recreated as a top-level device before the lights, switches, and sensors are placed under it. A thermostat stays its own parent so its room sensors can sit under it. A motion-only accessory, such as a doorbell person or vehicle detection, is a **HomeKit Motion Sensor**. A temperature sensor with no humidity stays a **HomeKit Dry Contact Sensor**.
 
 ---
 
@@ -175,6 +177,8 @@ This hub flow has been tested primarily with **Ecobee thermostats**. Other HomeK
 2. Leave MQTT at defaults unless you run multiple hubs on one broker — see <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md#mqtt_hub_slug" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md — mqtt_hub_slug</a>.
 3. Install **udi-poly-ecobee** and follow its [CONFIG.md — Ecobee quick start](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
 
+The hub answers Ecobee's hello from the pairings it already has cached. A thermostat that is not accepting a HomeKit connection does not delay that answer. Ecobee's `hello ack not received`, while this controller's **MQTT transport** stays **Connected**, means this hub process has not answered yet. Restart the hub and confirm its log shows `hello ack sent`. See [DEBUGGING.md](DEBUGGING.md).
+
 On **Professional**, leave **generic_nodes_enable** and **Create generic IoX control nodes (Professional)** **off** on Ecobee rows unless you intentionally want duplicate thermostat nodes in IoX.
 
 ---
@@ -192,6 +196,14 @@ Symptoms: **DISCOVER** completes but Notices say **no accessories found**; typed
 3. Run **ZEROCONF_DIAG**; check `zeroconf_interface_ips` when extra networks are configured.
 4. If still empty, try advanced zeroconf params — see <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md#zeroconf_unicast" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a> (`zeroconf_interfaces=all` or `zeroconf_unicast=auto`), save, wait for bridge restart, then **DISCOVER** again.
 5. Enter **hap_pin** only **after** a successful **DISCOVER** prefilled id/name (or type **accessory_id** / **accessory_name** manually on a manual row).
+
+### Local IoX HomeKit Bridge is missing from DISCOVER
+
+The hub's own scan uses unicast queries. Those are answered by other HomeKit devices on the LAN. A bridge advertised by **udi-plugin-homekit-bridge** on this same eISY is not in that scan. **DISCOVER** also asks Plugins to browse `_hap._tcp`, which does see that bridge.
+
+1. On the bridge, turn **Advertise** On (or **Discover**) so it is waiting to pair.
+2. On the hub, run **DISCOVER**. The notice should list **IoX Bridge** under **Unpaired**, with an address on this eISY.
+3. Reload the Configuration page. Enter the bridge setup code from **Show HomeKit Setup** on that new pairing row and **Save**.
 
 ### Accessory shows "already paired"
 

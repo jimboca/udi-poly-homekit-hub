@@ -6,7 +6,7 @@ import html
 import json
 import time
 from pathlib import Path
-from threading import Thread, Timer
+from threading import Event, Lock, Thread, Timer
 from typing import Any, Dict, List, Optional, Set
 
 import markdown2
@@ -43,6 +43,7 @@ from nodes import VERSION
 from .PairedDeviceNode import PairedDeviceNode
 
 from homekit_hub.paths import ensure_persistent_dir
+from homekit_hub.pg3_hap import merge_discover_rows, rows_from_bonjour_payload
 from homekit_hub.config_debug import export_config_debug
 
 # %% professional-only begin
@@ -57,6 +58,7 @@ from homekit_hub.char_map import (
     accessory_display_name_from_snapshot_rows,
     builtin_motion_sensor_mirror_characteristic,
     is_builtin_room_sensor_signal,
+    snapshot_rows_have_sensor_signal,
 )
 from homekit_hub.device_classifier import (
     classify_sensor_aids,
@@ -66,9 +68,9 @@ from homekit_hub.device_classifier import (
 from node_funcs import generic_node_address, generic_node_title, legacy_generic_node_address, sensor_node_title
 from .BinarySensorNode import BinarySensorNode
 from .EcobeeThermostatNode import EcobeeThermostatNode
-from .LightNode import LightNode
+from .LightNode import ColorLightNode, LightNode
 from .SensorNode import DrySensorNode, MotionSensorNode, SensorNode
-from .SwitchNode import SwitchNode
+from .SwitchNode import SwitchNode, ValveNode
 from .FanNode import FanNode
 from .GarageDoorNode import GarageDoorNode
 from .ThermostatNode import ThermostatNode
@@ -232,6 +234,10 @@ class Controller(Node):
         self.handler_typed_data_st = None
         self.handler_config_done_st = None
         self.n_queue: list[str] = []
+        self._del_queue: list[str] = []
+        self._node_op_lock = Lock()
+        self._resync_lock = Lock()
+        self._resync_again = False
         self._config_snap: dict[str, Any] | None = None
         self._known_paired_ids: Set[str] = set()
         self._pair_success_notice_polls_remaining = 0
@@ -267,6 +273,12 @@ class Controller(Node):
         poly.subscribe(poly.STOP, self.handler_stop)
         poly.subscribe(poly.POLL, self.handler_poll)
         poly.subscribe(poly.DISCOVER, self.handler_discover)
+        poly.subscribe(poly.BONJOUR, self.handler_bonjour)
+        self._pg3_hap_lock = Lock()
+        self._pg3_hap_event = Event()
+        self._pg3_hap_gen = 0
+        self._pg3_hap_waiting = False
+        self._pg3_hap_rows: list[dict[str, Any]] = []
         poly.subscribe(poly.CUSTOMPARAMS, self.handler_params)
         poly.subscribe(poly.CUSTOMDATA, self.handler_data)
         poly.subscribe(poly.CUSTOMTYPEDPARAMS, self.handler_typed_params)
@@ -274,6 +286,7 @@ class Controller(Node):
         poly.subscribe(poly.CONFIGDONE, self.handler_config_done)
         poly.subscribe(poly.LOGLEVEL, self.handler_log_level)
         poly.subscribe(poly.ADDNODEDONE, self.handler_add_node_done)
+        poly.subscribe(poly.DELNODEDONE, self.handler_del_node_done)
         poly.ready()
         poly.addNode(self, conn_status="ST")
 
@@ -1155,13 +1168,104 @@ class Controller(Node):
         if addr is not None:
             self.node_queue({'address': addr})
 
+    def handler_del_node_done(self, node: Any) -> None:
+        if isinstance(node, dict):
+            addr = node.get('address')
+        else:
+            addr = getattr(node, 'address', None)
+        if addr is not None:
+            self._del_queue.append(str(addr))
+
     def node_queue(self, data: Dict[str, Any]) -> None:
         self.n_queue.append(data['address'])
 
-    def wait_for_node_done(self) -> None:
-        while len(self.n_queue) == 0:
+    def _wait_for_queued_address(
+        self,
+        queue: list[str],
+        address: str | None = None,
+        timeout_sec: float = 30.0,
+    ) -> bool:
+        """Block until *address* is queued, or until any address when *address* is empty.
+
+        Startup config echoes ADDNODEDONE for nodes that already exist. Waiting
+        on "any" item lets the next addnode go out before IoX finishes the one
+        just sent, which trips the Admin Console high-volume error.
+        """
+        want = str(address or '').strip()
+        deadline = time.time() + max(0.1, float(timeout_sec))
+        while time.time() < deadline:
+            if want:
+                for i, queued in enumerate(queue):
+                    if queued == want:
+                        queue.pop(i)
+                        return True
+            elif queue:
+                queue.pop(0)
+                return True
             time.sleep(0.1)
-        self.n_queue.pop()
+        LOGGER.warning(
+            'Timed out after %ss waiting for node %s',
+            timeout_sec,
+            want or '<any>',
+        )
+        return False
+
+    def wait_for_node_done(self, address: str | None = None, timeout_sec: float = 30.0) -> bool:
+        """Wait for ADDNODEDONE. Pass *address* so a stale ack cannot skip the wait."""
+        return self._wait_for_queued_address(self.n_queue, address, timeout_sec)
+
+    def _node_op_lock_held(self):
+        lock = getattr(self, '_node_op_lock', None)
+        if lock is None:
+            lock = Lock()
+            self._node_op_lock = lock
+        return lock
+
+    def _del_node_and_wait(self, addr: str) -> None:
+        """removenode, then wait for that address. Caller holds ``_node_op_lock``."""
+        addr = str(addr or '').strip()
+        if not addr or not hasattr(self.poly, 'delNode'):
+            return
+        if not hasattr(self, '_del_queue'):
+            self._del_queue = []
+        self._del_queue = [a for a in self._del_queue if a != addr]
+        self.poly.delNode(addr)
+        self._wait_for_queued_address(self._del_queue, addr)
+
+    def _remove_iox_node(self, addr: str) -> None:
+        """One removenode at a time, same pacing as ``add_node``."""
+        with self._node_op_lock_held():
+            self._del_node_and_wait(addr)
+
+    def add_node(self, node: Any, *, wait: bool = True) -> Any:
+        """Add one IoX node and wait for it before the next (udi-poly-ecobee).
+
+        Holds a lock so startup handlers cannot publish a burst of addnode
+        calls. Waits for this address, not whatever ADDNODEDONE is already queued.
+        """
+        addr = str(getattr(node, 'address', '') or '').strip()
+
+        def _publish() -> Any:
+            mismatch = getattr(self, '_pg3_primary_mismatch', None)
+            purge = getattr(self, '_purge_stale_pg3_node', None)
+            if (
+                addr
+                and callable(mismatch)
+                and callable(purge)
+                and mismatch(node)
+            ):
+                purge(addr, reason='primary migration')
+            self.n_queue = [a for a in self.n_queue if a != addr]
+            anode = self.poly.addNode(node)
+            LOGGER.debug('addNode -> %s (%s)', addr, getattr(node, 'id', '?'))
+            if wait:
+                self.wait_for_node_done(addr)
+            if anode is None:
+                LOGGER.error('Failed to add node %s', addr or '?')
+            return anode
+
+        with self._node_op_lock_held():
+            return _publish()
 
     # %% professional-only begin
     def _wait_for_pg3_node_gone(self, addr: str, *, timeout_sec: float = 5.0) -> bool:
@@ -1478,16 +1582,22 @@ class Controller(Node):
 
         for node_key in sorted(desired_keys):
             slot, display_name, is_paired = desired[node_key]
-            node = self._paired_nodes.get(node_key)
+            addr = f"hkp_{node_key}"
+            promoted = self._drop_pairing_node_for_primary(addr, node_key)
+            if promoted:
+                node = None
+            else:
+                node = self._paired_nodes.get(node_key)
             if node is None:
                 try:
                     addr = f"hkp_{node_key}"
-                    node = self.poly.getNode(addr)
+                    # After a remove, getNode can still return the old child node.
+                    node = None if promoted else self.poly.getNode(addr)
                     if node is None:
                         node = PairedDeviceNode(
                             self, node_key, slot, display_name, is_paired
                         )
-                        self.poly.addNode(node)
+                        self.add_node(node)
                     elif hasattr(node, "update_identity"):
                         node.update_identity(slot, display_name, is_paired)
                     self._paired_nodes[node_key] = node
@@ -1499,6 +1609,55 @@ class Controller(Node):
                     continue
             else:
                 node.update_identity(slot, display_name, is_paired)
+
+    def _drop_pairing_node_for_primary(self, addr: str, node_key: str) -> bool:
+        """Delete a pairing node that IoX still has under the controller.
+
+        IoX returns 5105 (primary is not a primary) for every child until
+        ``hkp_<key>`` is its own parent. PG3 will not change ``primaryNode``
+        on an existing row, so the node has to be removed and added again.
+        """
+        should = getattr(self, '_pairing_node_should_be_primary', None)
+        if not callable(should) or not should():
+            return False
+        if not hasattr(self.poly, 'getNodesFromDb'):
+            return False
+        try:
+            rows = self.poly.getNodesFromDb([addr])
+        except Exception:
+            LOGGER.debug('pairing primary lookup failed for %s', addr, exc_info=True)
+            return False
+        if not (isinstance(rows, list) and rows and isinstance(rows[0], dict)):
+            return False
+        row = rows[0]
+        primary = str(row.get('primaryNode') or '').strip()
+        is_primary = row.get('isPrimary') in (1, '1', True)
+        if primary == addr and is_primary:
+            return False
+        LOGGER.info(
+            'Pairing node %s is not a primary (parent=%s isPrimary=%s); recreating so devices can nest under it',
+            addr,
+            primary or '?',
+            row.get('isPrimary'),
+        )
+        self._paired_nodes.pop(node_key, None)
+        try:
+            self._remove_iox_node(addr)
+        except Exception:
+            LOGGER.exception('Failed to remove pairing node %s', addr)
+            return False
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            try:
+                left = self.poly.getNodesFromDb([addr])
+            except Exception:
+                break
+            if not (isinstance(left, list) and left):
+                break
+            time.sleep(0.05)
+        else:
+            LOGGER.warning('Pairing node %s was still in PG3 after remove', addr)
+        return True
 
     def _current_paired_ids_from_data(self) -> Set[str]:
         try:
@@ -2010,6 +2169,49 @@ class Controller(Node):
         self._set_discover_bridge_restart_notice(applied)
         self._maybe_restart_on_config_change()
 
+    def _begin_pg3_hap_browse(self) -> int:
+        """Ask Plugins to browse ``_hap._tcp``. The reply arrives on ``BONJOUR`` in about 10s."""
+        with self._pg3_hap_lock:
+            self._pg3_hap_gen += 1
+            generation = self._pg3_hap_gen
+            self._pg3_hap_rows = []
+            self._pg3_hap_waiting = True
+            self._pg3_hap_event.clear()
+        try:
+            self.poly.bonjour("hap", None, "tcp")
+        except Exception:
+            LOGGER.exception("HomeKit DISCOVER: Plugins mDNS browse failed to start")
+            with self._pg3_hap_lock:
+                self._pg3_hap_waiting = False
+                self._pg3_hap_event.set()
+        return generation
+
+    def handler_bonjour(self, payload) -> None:
+        rows = rows_from_bonjour_payload(payload)
+        with self._pg3_hap_lock:
+            if not self._pg3_hap_waiting:
+                LOGGER.debug(
+                    "HomeKit DISCOVER: Plugins mDNS reply ignored (%d accessory row(s))",
+                    len(rows),
+                )
+                return
+            self._pg3_hap_rows.extend(rows)
+            self._pg3_hap_event.set()
+        LOGGER.info(
+            "HomeKit DISCOVER: Plugins mDNS reply, %d accessory row(s)",
+            len(rows),
+        )
+
+    def _take_pg3_hap_rows(self, generation: int, deadline: float) -> list[dict[str, Any]]:
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            self._pg3_hap_event.wait(remaining)
+        with self._pg3_hap_lock:
+            self._pg3_hap_waiting = False
+            if generation != self._pg3_hap_gen:
+                return []
+            return list(self._pg3_hap_rows)
+
     def handler_discover(self, _data=None):
         """Network scan: results are saved and shown in a Polyglot Notice (no log file needed).
 
@@ -2036,11 +2238,14 @@ class Controller(Node):
             )
             primary_label = f"Primary scan ({int(primary_timeout)}s)"
             self._log_zeroconf_diag(context="DISCOVER", diag=discover_diag_pre)
+            pg3_browse_gen = self._begin_pg3_hap_browse()
+            pg3_browse_deadline = time.monotonic() + 13.0
             discover_notice_token = self._start_discover_progress_notice(
                 int(primary_timeout),
                 phase="HomeKit DISCOVER — primary scan",
                 detail=(
-                    "Listening for mDNS <code>_hap._tcp</code> on the current network bind."
+                    "Listening for mDNS <code>_hap._tcp</code> on the current network bind, "
+                    "and asking Plugins to browse this eISY (about 10 seconds)."
                 ),
             )
             fut = asyncio.run_coroutine_threadsafe(
@@ -2050,6 +2255,7 @@ class Controller(Node):
             try:
                 rows = fut.result(timeout=30)
             except Exception as e:
+                self._take_pg3_hap_rows(pg3_browse_gen, time.monotonic())
                 self.report_error(
                     ERR_DISCOVER_SCAN,
                     "homekit_err_discover",
@@ -2058,8 +2264,14 @@ class Controller(Node):
                     log_message="HomeKit discover: scan failed",
                 )
                 return
+            pg3_rows = self._take_pg3_hap_rows(pg3_browse_gen, pg3_browse_deadline)
+            rows = merge_discover_rows(rows, pg3_rows)
             n = len(rows) if rows else 0
-            LOGGER.info("HomeKit DISCOVER: scan finished, %d accessory(ies) in result", n)
+            LOGGER.info(
+                "HomeKit DISCOVER: scan finished, %d accessory(ies) in result (%d from Plugins mDNS)",
+                n,
+                len(pg3_rows),
+            )
 
             if n > 0:
                 self._log_zeroconf_diag(context="DISCOVER", accessories_found=n)
@@ -2846,6 +3058,13 @@ class Controller(Node):
             except Exception:
                 pass
 
+    def _pairing_node_should_be_primary(self) -> bool:
+        """True when generic devices must nest under the pairing node.
+
+        IoX rejects ``primaryNode`` unless that node is itself a primary.
+        """
+        return bool(self._generic_nodes_master_enabled())
+
     def _generic_nodes_master_enabled(self) -> bool:
         try:
             raw = self.Params.get('generic_nodes_enable')
@@ -3203,8 +3422,19 @@ class Controller(Node):
         did = str(device_id or '').strip().lower()
 
         def _sync() -> None:
-            self._sync_generic_nodes(did, list(classification or []))
-            self._sync_sensor_nodes(did, pairing, list(classification or []))
+            # Same lock as _resync_all_generic_nodes. A pairing echo starts both,
+            # and the two of them were deleting and re-adding every sensor at once.
+            lock = getattr(self, '_resync_lock', None)
+            if lock is None:
+                lock = Lock()
+                self._resync_lock = lock
+            with lock:
+                self._sync_generic_nodes(did, list(classification or []))
+                self._sync_sensor_nodes(did, pairing, list(classification or []))
+                # Startup sync comes through this callback, not only the resync body.
+                # The leftover from a role change (old address, still parented to the
+                # controller) is removed here.
+                self._remove_orphan_generic_nodes()
 
         Timer(0.0, _sync).start()
 
@@ -3237,7 +3467,12 @@ class Controller(Node):
                 if is_builtin_room_sensor_signal(lbl):
                     return
         sensor = self._sensor_by_key.get((did, ev_aid))
-        if sensor is None and ctrl is not None and ev_aid != ctrl:
+        if (
+            sensor is None
+            and ctrl is not None
+            and ev_aid != ctrl
+            and self._control_node_for_aid(did, ev_aid) is None
+        ):
             sensor = self._ensure_sensor_node(
                 did,
                 ev_aid,
@@ -3273,6 +3508,25 @@ class Controller(Node):
             return
         if not (self.bridge and self.mainloop):
             return
+        lock = getattr(self, '_resync_lock', None)
+        if lock is None:
+            lock = Lock()
+            self._resync_lock = lock
+        if not hasattr(self, '_resync_again'):
+            self._resync_again = False
+        if not lock.acquire(blocking=False):
+            self._resync_again = True
+            LOGGER.info('Generic node resync already running; will run once more when it finishes')
+            return
+        try:
+            self._resync_generic_nodes_body()
+            while self._resync_again:
+                self._resync_again = False
+                self._resync_generic_nodes_body()
+        finally:
+            lock.release()
+
+    def _resync_generic_nodes_body(self) -> None:
         for did in self._current_paired_ids_from_data():
             fut = asyncio.run_coroutine_threadsafe(
                 self._classify_device_async(did),
@@ -3285,6 +3539,7 @@ class Controller(Node):
                 continue
             self._sync_generic_nodes(did, classification)
             self._sync_sensor_nodes(did, pairing, classification)
+        self._remove_orphan_generic_nodes()
         self._mark_thermostat_profile_rev()
         if self.is_professional() and self.ready:
             for i, did in enumerate(sorted(self._current_paired_ids_from_data())):
@@ -3319,7 +3574,7 @@ class Controller(Node):
                 self._sensor_by_key.pop((did, aid), None)
         try:
             if hasattr(self.poly, 'delNode'):
-                self.poly.delNode(addr)
+                self._remove_iox_node(addr)
                 self._wait_for_pg3_node_gone(addr)
             elif node is not None and hasattr(self.poly, 'removeNode'):
                 self.poly.removeNode(node.address)
@@ -3350,7 +3605,18 @@ class Controller(Node):
                 continue
             if addr.startswith('hkg_'):
                 legacy_addrs.add(addr)
+        absent = getattr(self, '_legacy_generic_absent', None)
+        if absent is None:
+            absent = set()
+            self._legacy_generic_absent = absent
         for addr in sorted(legacy_addrs):
+            if addr in absent:
+                continue
+            # These long addresses are already gone. Publishing removenode for
+            # each of them on every pair is what flooded the Admin Console.
+            if self.poly.getNode(addr) is None and self._pg3_node_meta(addr) is None:
+                absent.add(addr)
+                continue
             LOGGER.info('Removing legacy generic IoX node %s for %s', addr, did)
             self._delete_generic_node_by_address(addr)
 
@@ -3369,6 +3635,22 @@ class Controller(Node):
             self._delete_generic_node_by_address(addr)
 
     _THERMOSTAT_NODE_DEF_IDS = frozenset({'HKHubThermostat', 'HKHubEcobeeThermostat'})
+    _GENERIC_NODE_DEF_IDS = frozenset(
+        {
+            'HKHubColorLight',
+            'HKHubLight',
+            'HKHubSwitch',
+            'HKHubValve',
+            'HKHubFan',
+            'HKHubGarageDoor',
+            'HKHubBinarySensor',
+            'HKHubSensor',
+            'HKHubSensorDry',
+            'HKHubMotionSensor',
+            'HKHubThermostat',
+            'HKHubEcobeeThermostat',
+        }
+    )
 
     def _thermostat_must_self_parent(self, node: Any, addr: str) -> bool:
         node_def = str(getattr(node, 'id', '') or '')
@@ -3459,6 +3741,65 @@ class Controller(Node):
             LOGGER.debug('PG3 node meta lookup failed for %s', addr, exc_info=True)
         return None
 
+    def _remove_orphan_generic_nodes(self) -> None:
+        """Drop IoX nodes left behind when a device moved or changed type.
+
+        The address includes the role, so a switch that becomes a valve is a
+        new address. The old node stays on the controller unless it is removed
+        here. Same for any generic node that is not one we just synced.
+        """
+        if not self._generic_nodes:
+            return
+        keep = {str(addr) for addr in self._generic_nodes.keys()}
+        keep.add(str(self.address or ''))
+        for node in self._paired_nodes.values():
+            addr = str(getattr(node, 'address', '') or '').strip()
+            if addr:
+                keep.add(addr)
+        kept_names = {
+            str(getattr(node, 'name', '') or '').strip()
+            for node in self._generic_nodes.values()
+            if str(getattr(node, 'name', '') or '').strip()
+        }
+        try:
+            rows = self.poly.getNodesFromDb() or []
+        except Exception:
+            LOGGER.debug('orphan generic node scan failed', exc_info=True)
+            return
+        if not isinstance(rows, list):
+            return
+        LOGGER.info(
+            'Orphan scan: %s PG3 nodes, %s current generic nodes',
+            len(rows),
+            len(self._generic_nodes),
+        )
+        for meta in rows:
+            if not isinstance(meta, dict):
+                continue
+            addr = str(meta.get('address') or '').strip()
+            if not addr or addr in keep or addr.startswith('hkp_'):
+                continue
+            if str(meta.get('nodeDefId') or '') not in self._GENERIC_NODE_DEF_IDS:
+                continue
+            parent = str(meta.get('primaryNode') or '').strip()
+            name = str(meta.get('name') or '').strip()
+            if parent != str(self.address or '') and name not in kept_names:
+                continue
+            sent = getattr(self, '_orphan_remove_sent', None)
+            if sent is None:
+                sent = set()
+                self._orphan_remove_sent = sent
+            if addr in sent:
+                continue
+            sent.add(addr)
+            LOGGER.info(
+                'Removing leftover IoX node %s %s parent=%s; a current node already represents it',
+                addr,
+                meta.get('nodeDefId'),
+                parent or '?',
+            )
+            self._delete_generic_node_by_address(addr)
+
     def _pg3_primary_mismatch(self, node: Any) -> bool:
         addr = str(getattr(node, 'address', '') or '').strip()
         if not addr:
@@ -3491,23 +3832,9 @@ class Controller(Node):
         )
         self._generic_nodes.pop(addr, None)
         try:
-            if hasattr(self.poly, 'delNode'):
-                self.poly.delNode(addr)
+            self._del_node_and_wait(addr)
         except Exception:
             LOGGER.exception('Failed to purge stale PG3 node %s', addr)
-
-    def add_node(self, node: Any, *, wait: bool = True) -> Any:
-        """Publish addnode to PG3/IoX, optionally waiting for the ack (udi-poly-ecobee pattern)."""
-        addr = str(getattr(node, 'address', '') or '').strip()
-        if addr and self._pg3_primary_mismatch(node):
-            self._purge_stale_pg3_node(addr, reason='primary migration')
-        anode = self.poly.addNode(node)
-        LOGGER.debug('addNode -> %s (%s)', addr, getattr(node, 'id', '?'))
-        if wait:
-            self.wait_for_node_done()
-        if anode is None:
-            LOGGER.error('Failed to add node %s', addr or '?')
-        return anode
 
     def _pg3_child_addresses(self, primary_addr: str) -> list[str]:
         """IoX nodes whose primaryNode is primary_addr (excludes the primary itself)."""
@@ -3645,6 +3972,26 @@ class Controller(Node):
                 return str(getattr(node, 'address', '') or '') or None
         return None
 
+    def _pairing_primary_address(self, device_id: str) -> str:
+        """IoX parent for devices from one pairing. ``hkp_<key>``, not the controller."""
+        nk = self._node_key_for_device_id(device_id)
+        if nk:
+            return f'hkp_{nk}'
+        return str(self.address)
+
+    def _generic_parent_needs_move(self, node: Any, device_id: str, node_def: str) -> bool:
+        """True when a non-thermostat node is still parented to the controller."""
+        if node_def in self._THERMOSTAT_NODE_DEF_IDS:
+            return False
+        expected = self._pairing_primary_address(device_id)
+        current = str(getattr(node, 'primary', '') or '').strip()
+        if current != expected:
+            return True
+        meta = self._pg3_node_meta(str(getattr(node, 'address', '') or ''))
+        if meta is None:
+            return False
+        return str(meta.get('primaryNode') or '').strip() != expected
+
     def _sensor_parent_address(self, device_id: str) -> str:
         parent = self._thermostat_generic_address(device_id)
         if parent:
@@ -3699,6 +4046,8 @@ class Controller(Node):
             if not nm:
                 continue
             bindings = sensor_char_bindings_for_accessory(aid, acc)
+            if not bindings:
+                continue
             self._ensure_sensor_node(
                 did,
                 aid,
@@ -3843,6 +4192,37 @@ class Controller(Node):
                 addr=addr,
             )
         if self._pg3_node_meta(addr) is not None:
+            meta = self._pg3_node_meta(addr) or {}
+            parent_ok = (
+                str(meta.get('primaryNode') or '').strip()
+                == str(getattr(node, 'primary', '') or '').strip()
+            )
+            if (
+                parent_ok
+                and not self._sensor_drivers_absent(addr)
+                and not self._sensor_nodedef_stale(node)
+            ):
+                # The row is already on IoX. Another pair used to delete and
+                # add it again, which is the Admin Console high-volume error.
+                try:
+                    self.poly.nodes_internal[addr] = node
+                except Exception:
+                    LOGGER.debug('could not attach sensor %s locally', addr, exc_info=True)
+                else:
+                    LOGGER.info(
+                        'Keeping existing sensor IoX node %s (%s) for %s aid=%s',
+                        addr,
+                        role,
+                        did,
+                        aid,
+                    )
+                    self._generic_nodes[addr] = node
+                    if role == 'motion_sensor':
+                        self._motion_sensor_by_device[did] = node
+                    else:
+                        self._sensor_by_key[key] = node
+                    self._existing_sensor_addnode_retried.add(addr)
+                    return node
             LOGGER.info(
                 'Purging orphan PG3 sensor row %s before addnode (%s aid=%s)',
                 addr,
@@ -3879,6 +4259,24 @@ class Controller(Node):
                 return True
         return bool(actual_nd and actual_nd != expected_nd)
 
+    def _sensor_drivers_absent(self, addr: str) -> bool:
+        """True when PG3 has the node row and no driver rows.
+
+        IoX 5105 rejects the add after PG3 inserts the node and before it
+        writes drivers, so the UI shows the nodedef with an empty status list.
+        """
+        addr = str(addr or '').strip()
+        if not addr or self._pg3_node_meta(addr) is None:
+            return False
+        try:
+            db_rows = self.poly.db_getNodeDrivers(addr) or []
+        except Exception:
+            return False
+        for drv in db_rows:
+            if isinstance(drv, dict) and drv.get('driver'):
+                return False
+        return True
+
     def _sensor_driver_schema_stale(self, node: Any) -> bool:
         """True when PG3 driver uoms/names differ from the current schema."""
         role = str(getattr(node, 'role', '') or 'sensor')
@@ -3898,7 +4296,8 @@ class Controller(Node):
                 continue
             db_by_key[str(drv['driver'])] = drv
         if not db_by_key:
-            return False
+            # addnode was rejected before drivers were stored (IoX 5105).
+            return bool(expected)
         for key, spec in expected.items():
             drv = db_by_key.get(key)
             if drv is None:
@@ -3964,7 +4363,9 @@ class Controller(Node):
         addr = str(addr or getattr(node, 'address', '') or '').strip()
         if not addr:
             return
-        if self._sensor_nodedef_stale(node):
+        if addr in self._existing_sensor_addnode_retried:
+            return
+        if self._sensor_nodedef_stale(node) or self._sensor_drivers_absent(addr):
             self._recreate_stale_sensor_node(node, addr)
             return
         if not self._sensor_driver_schema_stale(node):
@@ -4022,7 +4423,12 @@ class Controller(Node):
             register_only=False,
         )
 
-    def _sync_sensor_nodes_from_snapshot(self, device_id: str, control_aid: Optional[int]) -> None:
+    def _sync_sensor_nodes_from_snapshot(
+        self,
+        device_id: str,
+        control_aid: Optional[int],
+        control_aids: Optional[set] = None,
+    ) -> None:
         did = str(device_id or '').strip().lower()
         rows = self.hub_snapshot_values(did)
         if not rows:
@@ -4036,6 +4442,7 @@ class Controller(Node):
         elif control_aid is not None:
             self._thermostat_control_aid[did] = int(control_aid)
         by_aid = hap_apply.group_snapshot_rows_by_aid(rows)
+        blocked = {int(a) for a in (control_aids or set()) if int(a) > 0}
         for aid, aid_rows in by_aid.items():
             if control_aid is not None and int(aid) == int(control_aid):
                 motion_rows = [
@@ -4066,6 +4473,10 @@ class Controller(Node):
                                 motion.name = nm
                             except Exception:
                                 LOGGER.debug('motion sensor rename failed for %s', did, exc_info=True)
+                continue
+            if int(aid) in blocked:
+                continue
+            if not snapshot_rows_have_sensor_signal(aid_rows):
                 continue
             acc_name = accessory_display_name_from_snapshot_rows(aid_rows)
             sensor = self._ensure_sensor_node(
@@ -4155,7 +4566,26 @@ class Controller(Node):
                         node.name = nm
                     except Exception:
                         LOGGER.debug('sensor title reconcile failed for %s aid=%s', did, aid, exc_info=True)
-        self._sync_sensor_nodes_from_snapshot(did, ctrl)
+        control_aids = set()
+        for row in classification or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get('role') or '') not in (
+                'thermostat',
+                'light',
+                'switch',
+                'valve',
+                'fan',
+                'garage_door',
+            ):
+                continue
+            try:
+                aid = int(row.get('aid') or 0)
+            except (TypeError, ValueError):
+                continue
+            if aid > 0:
+                control_aids.add(aid)
+        self._sync_sensor_nodes_from_snapshot(did, ctrl, control_aids)
         if ctrl is not None:
             self._ensure_builtin_motion_sensor(
                 did,
@@ -4181,6 +4611,83 @@ class Controller(Node):
                 self._sensor_by_key.pop(key, None)
         self._motion_sensor_by_device.pop(did, None)
         self._thermostat_control_aid.pop(did, None)
+
+    def _control_node_for_aid(self, device_id: str, aid: int) -> Optional[Any]:
+        """Return the light/switch/fan/garage/thermostat node for this accessory, if any."""
+        did = str(device_id or '').strip().lower()
+        try:
+            want = int(aid)
+        except (TypeError, ValueError):
+            return None
+        for node in self._generic_nodes.values():
+            if str(getattr(node, 'device_id', '') or '').lower() != did:
+                continue
+            try:
+                node_aid = int(getattr(node, 'aid', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if node_aid != want:
+                continue
+            node_def = str(getattr(node, 'id', '') or '')
+            if node_def in (
+                'HKHubLight',
+                'HKHubColorLight',
+                'HKHubSwitch',
+                'HKHubValve',
+                'HKHubFan',
+                'HKHubGarageDoor',
+                'HKHubThermostat',
+                'HKHubEcobeeThermostat',
+            ):
+                return node
+        return None
+
+    def _rename_generic_node(self, node: Any, title: str) -> None:
+        """Push the accessory name to IoX.
+
+        addnode does not change the name of a node that already exists, so a
+        nodedef swap can leave the old title (for example ``IoX Bridge 5E6BDE Light``)
+        even when the Python node was constructed with the accessory name.
+        """
+        title = str(title or '').strip()
+        if not title:
+            return
+        addr = str(getattr(node, 'address', '') or '').strip()
+        meta = self._pg3_node_meta(addr) if addr else None
+        iox_name = str((meta or {}).get('name') or '')
+        local_name = str(getattr(node, 'name', '') or '')
+        if iox_name == title and local_name == title:
+            return
+        poly = getattr(self, 'poly', None)
+        if poly is not None and hasattr(poly, 'renameNode') and addr:
+            try:
+                poly.renameNode(addr, title)
+            except Exception:
+                LOGGER.debug('renameNode failed for %s', addr, exc_info=True)
+        try:
+            node.rename(title)
+        except Exception:
+            LOGGER.debug('generic title rename failed for %s', addr or '?', exc_info=True)
+        node.name = title
+
+    def _drop_generic_node_for_nodedef_change(
+        self,
+        addr: str,
+        device_id: str,
+        actual: str,
+        wanted: str,
+    ) -> None:
+        """Delete an IoX node so it can be added again at the same address with a new nodedef.
+
+        IoX does not change nodeDefId on an existing node. Delete then addnode keeps
+        the address programs already use.
+        """
+        LOGGER.info('Replacing IoX node %s nodedef %s -> %s', addr, actual, wanted)
+        reason = f'nodedef {actual} -> {wanted}'
+        if actual in self._THERMOSTAT_NODE_DEF_IDS or wanted in self._THERMOSTAT_NODE_DEF_IDS:
+            self._delete_thermostat_for_recreation(addr, device_id, reason=reason)
+        else:
+            self._delete_generic_node_by_address(addr)
 
     def _sync_generic_nodes(self, device_id: str, classification: list) -> None:
         if not self.is_professional():
@@ -4214,6 +4721,12 @@ class Controller(Node):
             if node is None or getattr(node, 'device_id', '').lower() != did:
                 continue
             if addr not in desired_addrs:
+                # Sensors live in _generic_nodes too, but this set is only the
+                # control roles. Deleting them here made every pair rebuild
+                # every motion and room sensor.
+                role = str(getattr(node, 'role', '') or '')
+                if role in ('sensor', 'motion_sensor', 'binary_sensor'):
+                    continue
                 self._delete_generic_node_by_address(addr)
 
         for row in classification:
@@ -4223,14 +4736,29 @@ class Controller(Node):
             node_def = str(row.get('node_def_id') or '')
             aid = int(row.get('aid') or 0)
             bindings = row.get('char_bindings') if isinstance(row.get('char_bindings'), dict) else {}
+            acc_name = row.get('accessory_name')
+            if isinstance(acc_name, str):
+                acc_name = acc_name.strip() or None
+            else:
+                acc_name = None
             title = generic_node_title(
                 display,
                 str(row.get('role') or 'device'),
                 sibling_count=sibling_count,
+                accessory_name=acc_name,
             )
             existing = self._generic_nodes.get(addr)
             if existing is not None:
-                if self._thermostat_must_self_parent(existing, addr):
+                if self._generic_parent_needs_move(existing, did, node_def):
+                    LOGGER.info(
+                        'Generic node %s parent is %s; moving under %s',
+                        addr,
+                        getattr(existing, 'primary', '?'),
+                        self._pairing_primary_address(did),
+                    )
+                    self._delete_generic_node_by_address(addr)
+                    existing = None
+                elif self._thermostat_must_self_parent(existing, addr):
                     LOGGER.info(
                         'Thermostat %s parent is %s; recreating as self-parented for sensor children',
                         addr,
@@ -4242,15 +4770,9 @@ class Controller(Node):
                     existing = None
                 else:
                     actual_def = str(getattr(existing, 'id', '') or '')
-                    if (
-                        node_def in self._THERMOSTAT_NODE_DEF_IDS
-                        and actual_def in self._THERMOSTAT_NODE_DEF_IDS
-                        and actual_def != node_def
-                    ):
-                        self._delete_thermostat_for_recreation(
-                            addr,
-                            did,
-                            reason=f'nodedef {actual_def} -> {node_def}',
+                    if actual_def and node_def and actual_def != node_def:
+                        self._drop_generic_node_for_nodedef_change(
+                            addr, did, actual_def, node_def
                         )
                         existing = None
                     elif (
@@ -4263,12 +4785,22 @@ class Controller(Node):
                         existing = None
                 if existing is not None:
                     existing.char_bindings = dict(bindings)
+                    self._rename_generic_node(existing, title)
                     if self._pg3_primary_mismatch(existing):
                         self.add_node(existing)
                     self._schedule_refresh_generic_node(existing)
                     continue
             try:
                 node = self.poly.getNode(addr)
+                if node is not None and self._generic_parent_needs_move(node, did, node_def):
+                    LOGGER.info(
+                        'Generic node %s parent is %s; moving under %s',
+                        addr,
+                        getattr(node, 'primary', '?'),
+                        self._pairing_primary_address(did),
+                    )
+                    self._delete_generic_node_by_address(addr)
+                    node = None
                 if node is not None and self._thermostat_must_self_parent(node, addr):
                     LOGGER.info(
                         'Thermostat %s parent is %s; recreating as self-parented for sensor children',
@@ -4279,6 +4811,13 @@ class Controller(Node):
                         addr, did, reason='self-parent fix'
                     )
                     node = None
+                if node is not None:
+                    actual_def = str(getattr(node, 'id', '') or '')
+                    if actual_def and node_def and actual_def != node_def:
+                        self._drop_generic_node_for_nodedef_change(
+                            addr, did, actual_def, node_def
+                        )
+                        node = None
                 if node is not None and node_def in self._THERMOSTAT_NODE_DEF_IDS:
                     if self._thermostat_profile_stale(node, addr):
                         self._delete_thermostat_for_recreation(
@@ -4298,12 +4837,20 @@ class Controller(Node):
                         node = ThermostatNode(
                             self, addr, title, device_id=did, aid=aid, char_bindings=bindings
                         )
+                    elif node_def == 'HKHubColorLight':
+                        node = ColorLightNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
                     elif node_def == 'HKHubLight':
                         node = LightNode(
                             self, addr, title, device_id=did, aid=aid, char_bindings=bindings
                         )
                     elif node_def == 'HKHubSwitch':
                         node = SwitchNode(
+                            self, addr, title, device_id=did, aid=aid, char_bindings=bindings
+                        )
+                    elif node_def == 'HKHubValve':
+                        node = ValveNode(
                             self, addr, title, device_id=did, aid=aid, char_bindings=bindings
                         )
                     elif node_def == 'HKHubFan':
@@ -4323,7 +4870,7 @@ class Controller(Node):
                         node_cls = self._sensor_node_class(node_def)
                         node = node_cls(
                             self,
-                            self.address,
+                            self._sensor_parent_address(did),
                             addr,
                             title,
                             device_id=did,
@@ -4342,6 +4889,7 @@ class Controller(Node):
                     if hasattr(node, 'char_bindings'):
                         node.char_bindings = dict(bindings)
                 self._generic_nodes[addr] = node
+                self._rename_generic_node(node, title)
                 self._schedule_refresh_generic_node(node)
             except Exception:
                 LOGGER.exception('Failed to create generic node %s for %s', node_def, did)

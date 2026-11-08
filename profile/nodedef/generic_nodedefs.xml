@@ -55,6 +55,27 @@
       </accepts>
     </cmds>
   </nodeDef>
+  <nodeDef id="HKHubColorLight" nls="hkclight">
+    <editors />
+    <sts>
+      <st id="ST" editor="I_ONOFF" />
+      <st id="GV0" editor="I_DIMMER" />
+      <st id="GV1" editor="I_HUE" />
+      <st id="GV2" editor="I_SAT" />
+      <st id="GV3" editor="I_KELVIN" />
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="DON" />
+        <cmd id="DOF" />
+        <cmd id="GV0"><p id="" editor="I_DIMMER" init="GV0" /></cmd>
+        <cmd id="GV1"><p id="" editor="I_HUE" init="GV1" /></cmd>
+        <cmd id="GV2"><p id="" editor="I_SAT" init="GV2" /></cmd>
+        <cmd id="GV3"><p id="" editor="I_KELVIN" init="GV3" /></cmd>
+        <cmd id="QUERY" />
+      </accepts>
+    </cmds>
+  </nodeDef>
   <nodeDef id="HKHubLight" nls="hklight">
     <editors />
     <sts>
@@ -100,6 +121,19 @@
         <cmd id="DOF" />
         <cmd id="LOCK" />
         <cmd id="UNLOCK" />
+        <cmd id="QUERY" />
+      </accepts>
+    </cmds>
+  </nodeDef>
+  <nodeDef id="HKHubValve" nls="hkvalve">
+    <editors />
+    <sts>
+      <st id="ST" editor="I_VALVE" />
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="DON" />
+        <cmd id="DOF" />
         <cmd id="QUERY" />
       </accepts>
     </cmds>

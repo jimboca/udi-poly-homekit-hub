@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **(Professional)** **HomeKit Color Light** for a light that advertises hue, saturation, or color temperature. Status is on/off, plus **Brightness**, **Hue**, **Saturation**, and **Color Temperature**.
+- **(Professional)** Each accessory on a bridge uses that accessory's HomeKit name. A bridge full of lights is no longer titled with the pairing name plus "Light".
+- **(Professional)** A HomeKit valve, such as the Moen Flo shutoff, is **HomeKit Valve**. **Open** and **Close** follow the valve Active state. Status is **Closed** or **Open**.
+- **(Professional)** Lights, switches, valves, fans, and garage doors are children of the pairing node (`hkp_a`), not the controller. Existing nodes parented to the controller are deleted and added again under that pairing node. Thermostats stay their own parent so room sensors can nest under them.
+
+### Fixed
+
+- **(Standard + Professional)** A HomeKit client hello is acked from the cached accessory list. The ack used to wait on a live accessory read inside the MQTT receive loop. A pairing that did not answer (Ecobee log: `hello ack not received`) left the hub subscribed and silent, so thermostat values were never pushed. A `list_devices` update follows when the live read finishes. The MQTT socket is read on its own task, so that read cannot hide a broker disconnect.
+- **(Professional)** Changing a device's type left the old IoX node in place. The Moen shutoff stayed a **HomeKit Switch** under the controller after the **HomeKit Valve** was added under the pairing node. A restart builds nodes from the HomeKit classify callback, and that path was not removing the old address. Leftover generic nodes are now removed after classify.
+- **(Professional)** Pairing another device rebuilt every existing node. The control sync deleted the sensor nodes, then added them again, and a second thread did the same work at the same time. Old long addresses were removed again even though they were already gone. Pairing now adds the new device and leaves the nodes that are already in place.
+- **(Standard + Professional)** Restarting the hub sent every node add and remove at once, which made Admin Console report that it could not process messages from the logged-in user because of high volume. Node adds and removes now go out one at a time and wait for that node to finish, the same way Ecobee does.
+- **(Professional)** Generic devices were not all moved under the pairing node. IoX rejected the new parent (`5105`, the pairing node was still a child of the controller), so those nodes were removed and not added again, and sensor nodes such as **HomeKit Dry Contact Sensor** were left with no status values. The pairing node is now its own parent before devices are nested under it. A motion-only accessory (for example a doorbell detection) uses **HomeKit Motion Sensor** instead of **HomeKit Dry Contact Sensor**.
+- **(Standard + Professional)** **DISCOVER** now includes HomeKit accessories that Plugins mDNS can see on this same eISY, including an **IoX HomeKit Bridge** with **Advertise** On. The hub's unicast scan hears other devices on the LAN and misses that local advertisement. Pairing uses the address from the Plugins browse.
+- **(Professional)** Lights, switches, fans, and garage doors on a bridge are no longer also created as dry-contact sensors. When a device's type changes, the existing IoX node is deleted and added again at the same address with the new node type. Replacing the node also renames it. IoX keeps the previous name when `addnode` updates an existing address.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.23** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt` (color light and valve nodedef, editor, and NLS).
+
 ## [2.0.21] - 2026-11-03
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

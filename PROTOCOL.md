@@ -544,7 +544,7 @@ It parses **`client_slug`** from the topic and dispatches the JSON payload throu
 
 ### `hello` and `hello.client` vs topic slug
 
-Recommended first message on `in` is still **`action: hello`** so the hub returns **`ack.capabilities`** and **`devices`** as on WebSocket.
+Recommended first message on `in` is still **`action: hello`** so the hub returns **`ack.capabilities`** and **`devices`** as on WebSocket. That **`devices`** array is built from the hub's cached accessory model so a live HAP read cannot delay the ack. The hub then pushes **`list_devices`** when a live metadata read finishes.
 
 If **`hello`** includes a **`client`** string, the hub requires that its **sanitized** form (broker-safe slug rules) **matches** the topic **`client_slug`**. If **`client`** is omitted, the topic slug alone identifies the session. **`ws_token`** is **not** checked for MQTT **`hello`** even when the WebSocket Custom Param **`ws_token`** is set.
 

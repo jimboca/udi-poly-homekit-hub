@@ -45,6 +45,9 @@ _HAP_ACTIVE_UUID_NORM = normalize_hap_uuid('000000B0-0000-1000-8000-0026BB765291
 _HAP_ROTATION_SPEED_UUID_NORM = normalize_hap_uuid('00000029-0000-1000-8000-0026BB765291')
 _HAP_ROTATION_DIRECTION_UUID_NORM = normalize_hap_uuid('00000028-0000-1000-8000-0026BB765291')
 _HAP_BRIGHTNESS_UUID_NORM = normalize_hap_uuid('00000008-0000-1000-8000-0026BB765291')
+_HAP_HUE_UUID_NORM = normalize_hap_uuid('00000013-0000-1000-8000-0026BB765291')
+_HAP_SATURATION_UUID_NORM = normalize_hap_uuid('0000002F-0000-1000-8000-0026BB765291')
+_HAP_COLOR_TEMP_UUID_NORM = normalize_hap_uuid('000000CE-0000-1000-8000-0026BB765291')
 _HAP_CONTACT_SENSOR_STATE_UUID_NORM = normalize_hap_uuid('0000006A-0000-1000-8000-0026BB765291')
 _HAP_DOOR_STATE_CURRENT_UUID_NORM = normalize_hap_uuid('0000000E-0000-1000-8000-0026BB765291')
 _HAP_DOOR_STATE_TARGET_UUID_NORM = normalize_hap_uuid('00000032-0000-1000-8000-0026BB765291')
@@ -788,6 +791,77 @@ def hap_brightness_to_iox(value: Any) -> int:
         return 0
 
 
+def hap_hue_to_iox(value: Any) -> int:
+    """HAP **Hue** (0–360 degrees) → IoX hue driver."""
+    try:
+        hue = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(360, hue))
+
+
+def hap_saturation_to_iox(value: Any) -> int:
+    """HAP **Saturation** (0–100 percent) → IoX saturation driver."""
+    try:
+        sat = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(100, sat))
+
+
+def hap_color_temp_mired_to_kelvin(value: Any) -> int:
+    """HAP **ColorTemperature** (mired) → Kelvin for the IoX driver."""
+    try:
+        mired = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if mired <= 0:
+        return 0
+    return int(round(1_000_000 / mired))
+
+
+def iox_kelvin_to_hap_mired(value: Any) -> int:
+    """IoX Kelvin driver → HAP **ColorTemperature** mired, clamped to 140–500."""
+    try:
+        kelvin = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if kelvin <= 0:
+        return 0
+    mired = int(round(1_000_000 / kelvin))
+    return max(140, min(500, mired))
+
+
+def is_hap_hue_characteristic(characteristic: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and nu == _HAP_HUE_UUID_NORM:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return norm == 'HUE' or norm.endswith('_HUE')
+
+
+def is_hap_saturation_characteristic(characteristic: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and nu == _HAP_SATURATION_UUID_NORM:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return 'SATURATION' in norm and 'TARGET' not in norm
+
+
+def is_hap_color_temperature_characteristic(characteristic: str) -> bool:
+    if not characteristic:
+        return False
+    nu = normalize_hap_uuid(characteristic)
+    if nu and nu == _HAP_COLOR_TEMP_UUID_NORM:
+        return True
+    norm = normalize_characteristic_label(characteristic)
+    return 'COLOR_TEMPERATURE' in norm
+
+
 def hap_contact_state_to_iox(value: Any) -> int:
     """HAP **ContactSensorState** (0 = detected, 1 = not) → IoX on/off (1 = detected)."""
     try:
@@ -795,6 +869,13 @@ def hap_contact_state_to_iox(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
     return 1 if v == 0 else 0
+
+
+def _node_has_driver(node: Any, driver: str) -> bool:
+    for row in getattr(node, 'drivers', None) or []:
+        if isinstance(row, dict) and str(row.get('driver') or '') == driver:
+            return True
+    return False
 
 
 def _set_node_driver(node: Any, driver: str, val: Any, *, report: bool = True) -> None:
@@ -811,6 +892,18 @@ def hap_name_on() -> str:
 
 def hap_name_brightness() -> str:
     return 'BRIGHTNESS'
+
+
+def hap_name_hue() -> str:
+    return 'HUE'
+
+
+def hap_name_saturation() -> str:
+    return 'SATURATION'
+
+
+def hap_name_color_temperature() -> str:
+    return 'COLOR_TEMPERATURE'
 
 
 
@@ -1038,7 +1131,13 @@ def apply_characteristic_to_light(
     """Map HAP **On** / **Brightness** to HKHubLight IoX drivers."""
     lg = log or _LOG
     if value is None:
-        if is_hap_on_characteristic(characteristic) or is_hap_brightness_characteristic(characteristic):
+        if (
+            is_hap_on_characteristic(characteristic)
+            or is_hap_brightness_characteristic(characteristic)
+            or is_hap_hue_characteristic(characteristic)
+            or is_hap_saturation_characteristic(characteristic)
+            or is_hap_color_temperature_characteristic(characteristic)
+        ):
             return True
         bucket = classify(characteristic, 0)
         return bucket != CharBucket.UNKNOWN
@@ -1048,6 +1147,15 @@ def apply_characteristic_to_light(
             return True
         if is_hap_brightness_characteristic(characteristic):
             _set_node_driver(node, 'GV0', hap_brightness_to_iox(value))
+            return True
+        if is_hap_hue_characteristic(characteristic) and _node_has_driver(node, 'GV1'):
+            _set_node_driver(node, 'GV1', hap_hue_to_iox(value))
+            return True
+        if is_hap_saturation_characteristic(characteristic) and _node_has_driver(node, 'GV2'):
+            _set_node_driver(node, 'GV2', hap_saturation_to_iox(value))
+            return True
+        if is_hap_color_temperature_characteristic(characteristic) and _node_has_driver(node, 'GV3'):
+            _set_node_driver(node, 'GV3', hap_color_temp_mired_to_kelvin(value))
             return True
     except Exception:
         lg.debug('light hap_apply failed for %s=%r', characteristic, value, exc_info=True)
@@ -1065,9 +1173,9 @@ def apply_characteristic_to_switch(
     *,
     log: Optional[logging.Logger] = None,
 ) -> bool:
-    """Map HAP **On** to HKHubSwitch IoX ``ST``."""
+    """Map HAP **On** or Valve **Active** to HKHubSwitch IoX ``ST``."""
     lg = log or _LOG
-    if not is_hap_on_characteristic(characteristic):
+    if not (is_hap_on_characteristic(characteristic) or is_hap_active_characteristic(characteristic)):
         bucket = classify(characteristic, 0)
         return bucket == CharBucket.INFORMATIONAL
     if value is None:

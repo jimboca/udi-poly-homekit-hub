@@ -53,6 +53,18 @@ def test_generic_node_title_single_role_uses_display_name():
     assert generic_node_title('JimBo Dev', 'thermostat', sibling_count=1) == 'JimBo Dev'
 
 
+def test_generic_node_title_uses_accessory_name():
+    assert (
+        generic_node_title(
+            'IoX Bridge 5E6BDE',
+            'light',
+            sibling_count=7,
+            accessory_name='Master TV Backlight',
+        )
+        == 'Master TV Backlight'
+    )
+
+
 def test_generic_node_title_multi_role_adds_role_suffix():
     assert (
         generic_node_title('JimBo Dev', 'thermostat', sibling_count=2)
