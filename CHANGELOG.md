@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-14
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Professional)** Installing no longer replaces an existing thermostat IoX name with **T9 Thermostat** or **T9 Plus Thermostat**. A name set in the Home app still updates that title when **Change node names** is on. Turning **Change node names** off also leaves generic node titles alone.
+- **(Standard + Professional)** Version **2.1.1** — `nodes/__init__.py` **`VERSION`**. Profile version stays **2.0.23** (no nodedef or NLS changes).
+
 ## [2.1.0] - 2026-11-08
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

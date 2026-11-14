@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from node_funcs import (
     IOX_MAX_NODE_ADDRESS_LEN,
+    choose_accessory_display_name,
     generic_node_address,
     generic_node_title,
     id_to_address,
+    keep_existing_thermostat_iox_title,
     legacy_generic_node_address,
     paired_slot_node_title,
     sensor_node_title,
@@ -85,3 +87,63 @@ def test_sensor_node_address_stable_per_aid():
 def test_sensor_node_title_room_and_motion():
     assert sensor_node_title('Ecobee', 'Master Bedroom', 'sensor') == 'Master Bedroom'
     assert sensor_node_title('Ecobee', 'Downstairs', 'motion_sensor') == 'Downstairs · motion'
+
+
+def test_choose_accessory_display_name_prefers_configured_when_different():
+    assert choose_accessory_display_name('T9 Thermostat', 'Upstairs') == ('Upstairs', True)
+    assert choose_accessory_display_name('T9 Thermostat', 'T9 Thermostat') == (
+        'T9 Thermostat',
+        False,
+    )
+    assert choose_accessory_display_name('T9 Plus Thermostat', None) == (
+        'T9 Plus Thermostat',
+        False,
+    )
+
+
+def test_manufacturer_name_does_not_replace_existing_thermostat_title():
+    assert (
+        keep_existing_thermostat_iox_title(
+            'T9 Thermostat',
+            role='thermostat',
+            accessory_name_configured=False,
+            existing_name='Upstairs',
+        )
+        == 'Upstairs'
+    )
+    assert (
+        keep_existing_thermostat_iox_title(
+            'T9 Thermostat · motion',
+            role='motion_sensor',
+            accessory_name_configured=False,
+            existing_name='Hall motion',
+        )
+        == 'Hall motion'
+    )
+    assert (
+        keep_existing_thermostat_iox_title(
+            'Upstairs',
+            role='thermostat',
+            accessory_name_configured=True,
+            existing_name='Old Name',
+        )
+        == 'Upstairs'
+    )
+    assert (
+        keep_existing_thermostat_iox_title(
+            'T9 Thermostat',
+            role='thermostat',
+            accessory_name_configured=False,
+            existing_name='',
+        )
+        == 'T9 Thermostat'
+    )
+    assert (
+        keep_existing_thermostat_iox_title(
+            'Master TV Backlight',
+            role='light',
+            accessory_name_configured=False,
+            existing_name='Old Lamp',
+        )
+        == 'Master TV Backlight'
+    )

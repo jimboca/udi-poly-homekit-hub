@@ -55,7 +55,7 @@ from dev_settings import (
 )
 import homekit_hub.hap_apply as hap_apply
 from homekit_hub.char_map import (
-    accessory_display_name_from_snapshot_rows,
+    accessory_name_choice_from_snapshot_rows,
     builtin_motion_sensor_mirror_characteristic,
     is_builtin_room_sensor_signal,
     snapshot_rows_have_sensor_signal,
@@ -65,7 +65,13 @@ from homekit_hub.device_classifier import (
     expected_sensor_nodedef,
     sensor_char_bindings_for_accessory,
 )
-from node_funcs import generic_node_address, generic_node_title, legacy_generic_node_address, sensor_node_title
+from node_funcs import (
+    generic_node_address,
+    generic_node_title,
+    keep_existing_thermostat_iox_title,
+    legacy_generic_node_address,
+    sensor_node_title,
+)
 from .BinarySensorNode import BinarySensorNode
 from .EcobeeThermostatNode import EcobeeThermostatNode
 from .LightNode import ColorLightNode, LightNode
@@ -4528,7 +4534,7 @@ class Controller(Node):
                     and is_builtin_room_sensor_signal(str(r.get('characteristic') or ''))
                 ]
                 if motion_rows:
-                    hint = accessory_display_name_from_snapshot_rows(aid_rows)
+                    hint, hint_configured = accessory_name_choice_from_snapshot_rows(aid_rows)
                     motion = self._ensure_builtin_motion_sensor(did, accessory_name_hint=hint)
                     if motion is not None:
                         hap_apply.apply_snapshot_rows_to_sensor_node(
@@ -4538,23 +4544,22 @@ class Controller(Node):
                             mirror_ambient=True,
                             log=LOGGER,
                         )
-                        nm = sensor_node_title(
-                            self._pairing_display_name(did),
-                            hint,
-                            'motion_sensor',
+                        self._apply_thermostat_family_title(
+                            motion,
+                            sensor_node_title(
+                                self._pairing_display_name(did),
+                                hint,
+                                'motion_sensor',
+                            ),
+                            role='motion_sensor',
+                            accessory_name_configured=hint_configured,
                         )
-                        if nm != getattr(motion, 'name', None):
-                            try:
-                                motion.rename(nm)
-                                motion.name = nm
-                            except Exception:
-                                LOGGER.debug('motion sensor rename failed for %s', did, exc_info=True)
                 continue
             if int(aid) in blocked:
                 continue
             if not snapshot_rows_have_sensor_signal(aid_rows):
                 continue
-            acc_name = accessory_display_name_from_snapshot_rows(aid_rows)
+            acc_name, acc_configured = accessory_name_choice_from_snapshot_rows(aid_rows)
             sensor = self._ensure_sensor_node(
                 did,
                 int(aid),
@@ -4566,18 +4571,12 @@ class Controller(Node):
             if sensor is None:
                 continue
             if acc_name:
-                nm = sensor_node_title(self._pairing_display_name(did), acc_name, 'sensor')
-                if nm != getattr(sensor, 'name', None):
-                    try:
-                        sensor.rename(nm)
-                        sensor.name = nm
-                    except Exception:
-                        LOGGER.debug(
-                            'sensor rename failed for %s aid=%s',
-                            did,
-                            aid,
-                            exc_info=True,
-                        )
+                self._apply_thermostat_family_title(
+                    sensor,
+                    sensor_node_title(self._pairing_display_name(did), acc_name, 'sensor'),
+                    role='sensor',
+                    accessory_name_configured=acc_configured,
+                )
             hap_apply.apply_snapshot_rows_to_sensor_node(
                 sensor,
                 aid_rows,
@@ -4635,13 +4634,12 @@ class Controller(Node):
                 register_only=False,
             )
             if node is not None and acc_name:
-                nm = sensor_node_title(self._pairing_display_name(did), acc_name, role)
-                if nm != getattr(node, 'name', None):
-                    try:
-                        node.rename(nm)
-                        node.name = nm
-                    except Exception:
-                        LOGGER.debug('sensor title reconcile failed for %s aid=%s', did, aid, exc_info=True)
+                self._apply_thermostat_family_title(
+                    node,
+                    sensor_node_title(self._pairing_display_name(did), acc_name, role),
+                    role=role,
+                    accessory_name_configured=bool(row.get('accessory_name_configured')),
+                )
         control_aids = set()
         for row in classification or []:
             if not isinstance(row, dict):
@@ -4718,15 +4716,36 @@ class Controller(Node):
                 return node
         return None
 
+    def _existing_generic_iox_name(self, addr: str, node: Any = None) -> str:
+        """IoX title already stored for ``addr``, preferring the PG3 node row."""
+        meta = self._pg3_node_meta(addr) if addr else None
+        meta_name = str((meta or {}).get('name') or '').strip()
+        if meta_name:
+            return meta_name
+        poly = getattr(self, 'poly', None)
+        if poly is not None and addr and hasattr(poly, 'getNodeNameFromDb'):
+            try:
+                db_name = str(poly.getNodeNameFromDb(addr) or '').strip()
+            except Exception:
+                db_name = ''
+            if db_name:
+                return db_name
+        if node is not None:
+            return str(getattr(node, 'name', '') or '').strip()
+        return ''
+
     def _rename_generic_node(self, node: Any, title: str) -> None:
         """Push the accessory name to IoX.
 
         addnode does not change the name of a node that already exists, so a
         nodedef swap can leave the old title (for example ``IoX Bridge 5E6BDE Light``)
         even when the Python node was constructed with the accessory name.
+        ``change_node_names`` false keeps the IoX title, matching paired devices.
         """
         title = str(title or '').strip()
         if not title:
+            return
+        if not getattr(self, 'change_node_names', True):
             return
         addr = str(getattr(node, 'address', '') or '').strip()
         meta = self._pg3_node_meta(addr) if addr else None
@@ -4745,6 +4764,25 @@ class Controller(Node):
         except Exception:
             LOGGER.debug('generic title rename failed for %s', addr or '?', exc_info=True)
         node.name = title
+
+    def _apply_thermostat_family_title(
+        self,
+        node: Any,
+        proposed: str,
+        *,
+        role: str,
+        accessory_name_configured: bool,
+    ) -> None:
+        if node is None:
+            return
+        addr = str(getattr(node, 'address', '') or '')
+        title = keep_existing_thermostat_iox_title(
+            proposed,
+            role=role,
+            accessory_name_configured=accessory_name_configured,
+            existing_name=self._existing_generic_iox_name(addr, node),
+        )
+        self._rename_generic_node(node, title)
 
     def _drop_generic_node_for_nodedef_change(
         self,
@@ -4817,13 +4855,26 @@ class Controller(Node):
                 acc_name = acc_name.strip() or None
             else:
                 acc_name = None
+            role = str(row.get('role') or 'device')
             title = generic_node_title(
                 display,
-                str(row.get('role') or 'device'),
+                role,
                 sibling_count=sibling_count,
                 accessory_name=acc_name,
             )
             existing = self._generic_nodes.get(addr)
+            named = existing
+            if named is None and hasattr(getattr(self, 'poly', None), 'getNode'):
+                try:
+                    named = self.poly.getNode(addr)
+                except Exception:
+                    named = None
+            title = keep_existing_thermostat_iox_title(
+                title,
+                role=role,
+                accessory_name_configured=bool(row.get('accessory_name_configured')),
+                existing_name=self._existing_generic_iox_name(addr, named),
+            )
             if existing is not None:
                 if self._generic_parent_needs_move(existing, did, node_def):
                     LOGGER.info(

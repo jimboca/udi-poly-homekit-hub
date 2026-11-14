@@ -266,7 +266,7 @@ These three flat params are shown in **Custom Configuration Parameters**. Advanc
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `generic_nodes_enable` | `false` | **Professional:** master switch for generic IoX child nodes. Also requires **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed. See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md). |
-| `change_node_names` | `true` | When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
+| `change_node_names` | `true` | When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows, and it also renames generic nodes to their HomeKit names. When `false`, the plugin keeps the IoX database name if it differs. A thermostat model name (such as **T9 Thermostat**) is not written over a name already in IoX. Same idea as **udi-poly-kasa**. |
 | `hk_heat_cool_min_delta` | `3` | **Professional:** minimum heat/cool gap in °F when writing thermostat thresholds (default `3`). |
 
 **Multi-hub / Ecobee slug match:** when several HomeKit hubs share one MQTT broker, set **`mqtt_hub_slug`** manually per <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md#mqtt_hub_slug" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a> (default `default`; not shown in the UI unless you add it).

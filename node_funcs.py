@@ -70,6 +70,52 @@ def sensor_node_title(
     return title
 
 
+_THERMOSTAT_TITLE_ROLES = frozenset(
+    {'thermostat', 'sensor', 'motion_sensor', 'binary_sensor'}
+)
+
+
+def choose_accessory_display_name(
+    manufacturer_name: str | None,
+    configured_name: str | None,
+) -> tuple[str | None, bool]:
+    """Prefer Home's Configured Name only when it differs from manufacturer Name.
+
+    The manufacturer Name on a Honeywell T9 is the model (``T9 Thermostat``).
+    Configured Name is the name the user assigned in the Home app.
+    """
+    manufacturer = str(manufacturer_name or '').strip() or None
+    configured = str(configured_name or '').strip() or None
+    if configured and configured != manufacturer:
+        return configured, True
+    return manufacturer, False
+
+
+def keep_existing_thermostat_iox_title(
+    proposed: str,
+    *,
+    role: str,
+    accessory_name_configured: bool,
+    existing_name: str | None,
+) -> str:
+    """Keep an IoX thermostat title when HomeKit only has the manufacturer Name.
+
+    A Configured Name still replaces the title. Lights and other controls are
+    unchanged. A node with no IoX name yet keeps ``proposed``.
+    """
+    proposed_title = str(proposed or '').strip()
+    existing = str(existing_name or '').strip()
+    role_name = str(role or '').strip().lower()
+    if (
+        role_name in _THERMOSTAT_TITLE_ROLES
+        and not accessory_name_configured
+        and existing
+        and existing != proposed_title
+    ):
+        return existing
+    return proposed_title
+
+
 def generic_node_title(
     display_name: str,
     role: str,

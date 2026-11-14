@@ -9,6 +9,7 @@ from aiohomekit.model.services.service_types import ServicesTypes
 from aiohomekit.uuid import normalize_uuid
 
 from homekit_hub.char_map import normalize_hap_uuid, thermostat_control_aid_from_snapshot_values
+from node_funcs import choose_accessory_display_name
 
 _ECOBEE_CURRENT_MODE_UUID = normalize_hap_uuid('B7DDB9A3-54BB-4572-91D2-F1F5B0510F8C')
 
@@ -68,6 +69,13 @@ _NAME_CHAR_UUID: Optional[str] = None
 if hasattr(CharacteristicsTypes, 'NAME'):
     try:
         _NAME_CHAR_UUID = normalize_uuid(CharacteristicsTypes.NAME)
+    except Exception:
+        pass
+
+_CONFIGURED_NAME_CHAR_UUID = normalize_uuid('000000E3-0000-1000-8000-0026BB765291')
+if hasattr(CharacteristicsTypes, 'CONFIGURED_NAME'):
+    try:
+        _CONFIGURED_NAME_CHAR_UUID = normalize_uuid(CharacteristicsTypes.CONFIGURED_NAME)
     except Exception:
         pass
 
@@ -302,22 +310,39 @@ def _bind_accessory_chars(aid: int, acc: Any, names: tuple[str, ...]) -> Dict[st
     return out
 
 
-def _accessory_information_name(acc: Any) -> Optional[str]:
+def _accessory_information_name_choice(acc: Any) -> tuple[Optional[str], bool]:
+    """Return ``(display name, configured)`` from Accessory Information.
+
+    Configured Name (``000000E3``) is used only when it is set and different
+    from Name (``00000023``). The model string stays Name.
+    """
+    manufacturer: Optional[str] = None
+    configured: Optional[str] = None
     for svc in getattr(acc, 'services', None) or []:
         if _ACCESSORY_INFO_SERVICE_UUID and _service_uuid(svc) != _ACCESSORY_INFO_SERVICE_UUID:
             continue
         for ch in getattr(svc, 'characteristics', None) or []:
             nu = normalize_hap_uuid(getattr(ch, 'type', ''))
             label = (_char_name_for_type(getattr(ch, 'type', '')) or '').upper()
-            if _NAME_CHAR_UUID and nu == _NAME_CHAR_UUID:
-                val = getattr(ch, 'value', None)
-                if isinstance(val, str) and val.strip():
-                    return val.strip()
-            if label == 'NAME':
-                val = getattr(ch, 'value', None)
-                if isinstance(val, str) and val.strip():
-                    return val.strip()
-    return None
+            val = getattr(ch, 'value', None)
+            if not isinstance(val, str) or not val.strip():
+                continue
+            text = val.strip()
+            if (_CONFIGURED_NAME_CHAR_UUID and nu == _CONFIGURED_NAME_CHAR_UUID) or label in (
+                'CONFIGURED_NAME',
+                'CONFIGURED NAME',
+            ):
+                configured = text
+                continue
+            if (_NAME_CHAR_UUID and nu == _NAME_CHAR_UUID) or label == 'NAME':
+                if manufacturer is None:
+                    manufacturer = text
+    return choose_accessory_display_name(manufacturer, configured)
+
+
+def _accessory_information_name(acc: Any) -> Optional[str]:
+    name, _configured = _accessory_information_name_choice(acc)
+    return name
 
 
 def _accessory_has_thermostat_service(acc: Any) -> bool:
@@ -400,7 +425,7 @@ def classify_sensor_aids(
         if aid <= 0:
             continue
         bindings = _bind_accessory_chars(aid, acc, _CHAR_BINDINGS_SENSOR)
-        acc_name = _accessory_information_name(acc)
+        acc_name, acc_configured = _accessory_information_name_choice(acc)
         if aid in control_aids:
             # Motion child only on thermostat control aid (not fan/light/switch aids).
             if ctrl is not None and aid == ctrl:
@@ -420,6 +445,7 @@ def classify_sensor_aids(
                             'service_iid': 0,
                             'char_bindings': motion_bindings,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                             'vendor': None,
                         }
                     )
@@ -434,6 +460,7 @@ def classify_sensor_aids(
                     'service_iid': 0,
                     'char_bindings': bindings,
                     'accessory_name': acc_name,
+                    'accessory_name_configured': acc_configured,
                     'vendor': None,
                 }
             )
@@ -479,7 +506,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
     pairing_ecobee = _pairing_has_ecobee_fingerprint(accessories)
     for acc in accessories:
         aid = int(getattr(acc, 'aid', 0) or 0)
-        acc_name = _accessory_information_name(acc)
+        acc_name, acc_configured = _accessory_information_name_choice(acc)
         ecobee = pairing_ecobee or _accessory_has_ecobee_fingerprint(acc)
         for svc in getattr(acc, 'services', None) or []:
             su = _service_uuid(svc)
@@ -498,6 +525,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'char_bindings': bindings,
                             'vendor': 'ecobee' if ecobee else None,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                         }
                     )
                 continue
@@ -513,6 +541,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'char_bindings': bindings,
                             'vendor': None,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                         }
                     )
                 continue
@@ -533,6 +562,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'char_bindings': bindings,
                             'vendor': None,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                         }
                     )
                 continue
@@ -548,6 +578,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'char_bindings': bindings,
                             'vendor': None,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                         }
                     )
                 continue
@@ -563,6 +594,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'char_bindings': bindings,
                             'vendor': None,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                         }
                     )
             if su in _FAN_SERVICE_UUIDS:
@@ -577,6 +609,7 @@ def classify_accessories(accessories: Any) -> List[Dict[str, Any]]:
                             'char_bindings': bindings,
                             'vendor': None,
                             'accessory_name': acc_name,
+                            'accessory_name_configured': acc_configured,
                         }
                     )
                 continue

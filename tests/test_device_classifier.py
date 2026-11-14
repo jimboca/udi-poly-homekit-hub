@@ -369,6 +369,44 @@ def test_classify_hunter_simpleconnect_fan_light():
     assert classify_sensor_aids(accessories) == []
 
 
+def _t9_thermostat(name: str, configured: str | None = None, *, motion: bool = False):
+    chars = [_Char(2, CharacteristicsTypes.NAME, name)]
+    if configured is not None:
+        chars.append(_Char(3, '000000E3-0000-1000-8000-0026BB765291', configured))
+    services = [
+        _Svc(1, ServicesTypes.ACCESSORY_INFORMATION, chars),
+        _Svc(
+            10,
+            ServicesTypes.THERMOSTAT,
+            [
+                _Char(11, CharacteristicsTypes.TEMPERATURE_CURRENT, 21.0),
+                *([_Char(14, CharacteristicsTypes.MOTION_DETECTED, False)] if motion else []),
+            ],
+        ),
+    ]
+    return [_Acc(2, services)]
+
+
+def test_configured_name_wins_over_manufacturer_name():
+    rows = classify_accessories(_t9_thermostat('T9 Thermostat', 'Upstairs', motion=True))
+    assert rows[0]['role'] == 'thermostat'
+    assert rows[0]['accessory_name'] == 'Upstairs'
+    assert rows[0]['accessory_name_configured'] is True
+    sensors = classify_sensor_aids(_t9_thermostat('T9 Thermostat', 'Upstairs', motion=True))
+    motion = next(row for row in sensors if row['role'] == 'motion_sensor')
+    assert motion['accessory_name'] == 'Upstairs'
+    assert motion['accessory_name_configured'] is True
+
+
+def test_manufacturer_name_stays_when_configured_name_matches():
+    rows = classify_accessories(_t9_thermostat('T9 Plus Thermostat', 'T9 Plus Thermostat'))
+    assert rows[0]['accessory_name'] == 'T9 Plus Thermostat'
+    assert rows[0]['accessory_name_configured'] is False
+    rows = classify_accessories(_t9_thermostat('T9 Thermostat'))
+    assert rows[0]['accessory_name'] == 'T9 Thermostat'
+    assert rows[0]['accessory_name_configured'] is False
+
+
 def test_classify_color_light_uses_color_nodedef_and_name():
     accessories = [
         _Acc(

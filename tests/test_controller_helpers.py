@@ -134,6 +134,18 @@ def test_refresh_change_node_names_custom_param_false():
     assert c.change_node_names is False
 
 
+def test_rename_generic_node_skips_when_change_node_names_false():
+    c = _bare_controller()
+    c.change_node_names = False
+    c.poly = MagicMock()
+    node = MagicMock()
+    node.address = 'hkg_t9'
+    node.name = 'Upstairs'
+    c._rename_generic_node(node, 'T9 Thermostat')
+    c.poly.renameNode.assert_not_called()
+    node.rename.assert_not_called()
+
+
 def test_ensure_default_custom_params_seeds_missing_keys():
     c = _bare_controller()
     c.Params = FakeParams({"ws_host": "127.0.0.1"})

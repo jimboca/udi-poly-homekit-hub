@@ -394,6 +394,12 @@ def thermostat_control_aid_from_snapshot_values(values: Any) -> Optional[int]:
 
 
 def accessory_display_name_from_snapshot_rows(rows: Any) -> Optional[str]:
+    """Best-effort accessory label from hub ``snapshot`` / ``get`` rows for one ``aid``."""
+    name, _configured = accessory_name_choice_from_snapshot_rows(rows)
+    return name
+
+
+def accessory_name_choice_from_snapshot_rows(rows: Any) -> tuple[Optional[str], bool]:
     """
     Best-effort accessory label from hub ``snapshot`` / ``get`` rows for one ``aid``.
 
@@ -402,11 +408,13 @@ def accessory_display_name_from_snapshot_rows(rows: Any) -> Optional[str]:
     missed those, so remote sensors fell back to ``Ecobee - Sensor aid <aid>``.
 
     Accessories may expose multiple **Name** characteristics (Accessory Information vs service
-    labels). Prefer **Configured Name** when present; otherwise use the **Name** row with the
-    lowest ``iid`` (matches Accessory Information primary ``NAME``, e.g. snapshot ``…/2``).
+    labels). Use **Configured Name** only when it is set and different from **Name**; otherwise
+    use the **Name** row with the lowest ``iid`` (Accessory Information primary ``NAME``).
+
+    The bool is true only when Configured Name is the name returned.
     """
     if not isinstance(rows, list) or not rows:
-        return None
+        return None, False
     configured: Optional[str] = None
     name_pairs: list[tuple[int, str]] = []
     for r in rows:
@@ -444,9 +452,8 @@ def accessory_display_name_from_snapshot_rows(rows: Any) -> Optional[str]:
         except (TypeError, ValueError):
             iid = 10**9
         name_pairs.append((iid, s))
-    if configured:
-        return configured
     name_pairs.sort(key=lambda x: x[0])
-    if name_pairs:
-        return name_pairs[0][1]
-    return None
+    manufacturer = name_pairs[0][1] if name_pairs else None
+    from node_funcs import choose_accessory_display_name
+
+    return choose_accessory_display_name(manufacturer, configured)
